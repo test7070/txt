@@ -1,0 +1,168 @@
+z_pay:--z_pay
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_bxnoa nvarchar(20)
+	declare @t_exnoa nvarchar(20)
+	set @pageCount = 9
+	set @t_bxnoa = case when '#non'=[1] then '' else [1] end
+	set @t_exnoa = case when '#non'=[2] then CHAR(255) else [2] end
+	declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(30),
+		noq nvarchar(20),
+		datea nvarchar(10),
+		mon nvarchar(6),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		unpay float,
+		acc2 nvarchar(14),
+		[money] float,
+		chgs float,
+		paysale float,
+		checkno nvarchar(20),
+		account nvarchar(20),
+		bankno nvarchar(20),
+		bank nvarchar(40),
+		indate nvarchar(10),
+		accno nvarchar(31),
+		recno int,
+		currecno int,
+		curpage int,
+		totpage int
+	)
+	set @cmd =	"select a.*,ROW_NUMBER()over(order by gno),0,0,0"+
+				" from("+
+				" select '0' gno,a.noa,b.noq,a.datea,a.mon,a.custno,a.comp,a.unpay,b.acc2,b.money,b.chgs,"+
+				"b.paysale,b.checkno,b.account,b.bankno,b.bank,b.indate,a.accno"+
+				" from pay a "+
+				" left join pays b on a.noa = b.noa " + 
+				" where "+
+				" a.noa between @t_bxnoa and @t_exnoa"+
+				" ) a"
+	insert into @tmp
+	execute sp_executesql @cmd,N'@t_bxnoa nvarchar(20),@t_exnoa nvarchar(20)',
+							@t_bxnoa=@t_bxnoa,@t_exnoa=@t_exnoa
+
+declare @noa nvarchar(30)
+	declare @count int
+	declare @t_count int
+	declare @recno int
+	declare @currecno int
+	declare @curpage int
+	declare @totpage int
+	
+	declare cursor_table cursor for
+	select noa,min(recno) from @tmp group by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@recno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set currecno = recno - @recno +1 where noa=@noa
+		fetch next from cursor_table
+		into @noa,@recno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select noa,max(currecno) from @tmp group by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@currecno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set totpage = (@currecno-@currecno%@pagecount)/@pagecount+1 where noa=@noa
+		fetch next from cursor_table
+		into @noa,@currecno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select noa,recno,currecno from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@recno,@currecno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set curpage = FLOOR((@currecno-1)/@pagecount)+1 where noa=@noa and recno=@recno
+		fetch next from cursor_table
+		into @noa,@recno,@currecno
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	declare cursor_table cursor for
+	select noa,curpage,@pagecount-[count]%@pagecount,([count]-[count]%@pagecount)/@pagecount+1
+	from(select noa,COUNT(1) [count], max(curpage) curpage from @tmp group by noa) a
+	where not[count]%@pagecount=0
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@curpage,@count,@totpage
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @t_count = @count
+		while(@t_count>0)
+		begin
+			insert into @tmp(gno,noa,noq,curpage,totpage)values('0',@noa,CHAR(255),@curpage,@totpage)
+			set @t_count = @t_count - 1
+		end
+		fetch next from cursor_table
+		into @noa,@curpage,@count,@totpage
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	select gno,noa,noq,datea,mon,custno,comp,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay,
+	acc2,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgs),1)),4,12)) chgs,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paysale),1)),4,12)) paysale,checkno,account,bankno,bank,indate,accno,CONVERT(nvarchar(5),curpage)+'/'+CONVERT(nvarchar(5),totpage) page from @tmp order by noa,noq;
+
+--**************************************************************************************************************************************************************************************************************************************
+z_pay4:--z_pay4
+	declare @t_bxnoa nvarchar(20)
+	declare @t_exnoa nvarchar(20)
+	set @t_bxnoa = case when '#non'=[1] then '' else [1] end
+	set @t_exnoa = case when '#non'=[2] then CHAR(255) else [2] end
+declare @cmb table(
+		noa nvarchar(20),
+		checkno nvarchar(20),
+		[money] float,
+		bank nvarchar(20),
+		account nvarchar(20),
+		iyears nvarchar(3),
+		imon nvarchar(2),
+		idatea nvarchar(2)
+)
+insert into @cmb
+select noa,checkno,SUM(money),bank,account,LEFT(indate,3),right(LEFT(indate,6),2),RIGHT(indate,2)
+from pays
+group by noa,checkno,bank,account,LEFT(indate,3),right(LEFT(indate,6),2),RIGHT(indate,2)
+
+declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(20),
+		years nvarchar(3),
+		mon nvarchar(2),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		bank nvarchar(20),
+		checkno nvarchar(20),
+		account nvarchar(20),
+		iyears nvarchar(3),
+		imon nvarchar(2),
+		idatea nvarchar(2),
+		mney float						
+)
+insert into @tmp
+select '0' gno,a.noa,LEFT(a.mon,3),RIGHT(a.mon,2),a.custno,a.comp,b.bank,b.checkno,
+b.account,b.iyears,b.imon,b.idatea,b.money
+from pay a
+left join @cmb b on b.noa = a.noa
+where a.noa between @t_bxnoa and @t_exnoa
+
+select gno,noa,years,mon,custno,comp,bank,checkno,account,iyears,imon,idatea,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mney),1)),4,12)) mney
+from @tmp;
+
+--**************************************************************************************************************************************************************************
