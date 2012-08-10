@@ -4456,7 +4456,13 @@ z_trana3:--z_trana3
 	-------------------------------------------------------------------------------------------------------------
 	declare @n int
 	declare @noa nvarchar(10)
+	declare @carno nvarchar(20)
+	declare @mount2 float
+	declare @total2 float
 	declare @team nvarchar(20)
+	declare @x_key nvarchar(max)
+	declare @x_mount2 float
+	declare @x_total2 float
 	-------------------------------------------------------------------------------------------------------------
 	--解析要計算的種類
 	declare @string nvarchar(max)
@@ -4555,25 +4561,71 @@ z_trana3:--z_trana3
 		" (len(@t_po)=0  or  a.po=@t_po) and "+
 		" (len(@t_addr)=0  or  a.straddrno=@t_addr) and "+
 		" (b.noa  is  not  null) and (c.noa  is  not  null)"
+	if @t_sort3='carno'  or @t_sort3='noa' 
+		set  @cmd  =  @cmd+" order  by  a.carno,a.noa"
+	else
+		set  @cmd  =  @cmd+" order  by  a.carno,a.["+@t_sort3+"],a.noa"
 	insert into #z_trana3
 	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20),@t_bdriverno  nvarchar(20),@t_edriverno  nvarchar(20),@t_carno  nvarchar(20),@t_po  nvarchar(20),@t_addr  nvarchar(20)',
 		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_carno=@t_carno,@t_po=@t_po,@t_addr=@t_addr
-	
-	declare @mount2 float
-	declare @total2 float
+		
 	select @mount2=SUM(ISNULL(mount2,0)),@total2=SUM(ISNULL(total2,0)) from #z_trana3
-	insert into #z_trana3 (gno,mount2,total2)values('1',@mount2,@total2)
+	insert into #z_trana3 (gno,carno,mount2,total2)values('1',CHAR(255),@mount2,@total2)
 	
-	if @t_sort3='noa'
+	
+	if @t_sort3='carno'  or @t_sort3='noa' 
+	begin 
+		declare cursor_table cursor for
+		select carno,max(noa),sum(isnull(mount2,0)),sum(isnull(total2,0)) from #z_trana3 where gno='0' group  by  carno
+		open cursor_table
+		fetch next from cursor_table
+		into @carno,@noa,@mount2,@total2
+		while(@@FETCH_STATUS <> -1)
+		begin
+			insert  into  #z_trana3(gno,carno,noa,mount2,total2)values('0',@carno,@noa+CHAR(255),@mount2,@total2)		
+			fetch next from cursor_table
+			into @carno,@noa,@mount2,@total2
+		end
+		close cursor_table
+		deallocate cursor_table
+	end
+	else
 	begin
-		insert into #z_trana3
-		select '0','','','','','','',carno,'','',SUM(mount),null,SUM(total),SUM(mount2),null,null,null,SUM(total2),'','','','',MAX(noa)+CHAR(255) from #z_trana3 where gno='0' group by carno
+		declare cursor_table cursor for
+		select carno from #z_trana3 where gno='0'  group  by  carno
+		open cursor_table
+		fetch next from cursor_table
+		into @carno
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @x_key=''
+			set @cmd="select @x_key=cast(max("+@t_sort3+") as  nvarchar) from  #z_trana3 where carno=@carno"
+			execute sp_executesql @cmd,N'@carno  nvarchar(20),@x_key nvarchar(max) output',@carno=@carno,@x_key=@x_key output 
+			
+			set @noa=''
+			set @cmd="select @noa=max(noa) from  #z_trana3 where carno=@carno and "+@t_sort3+"=@x_key"
+			execute sp_executesql @cmd,N'@carno  nvarchar(20),@x_key nvarchar(max),@noa nvarchar(20) output',@carno=@carno,@x_key=@x_key,@noa=@noa output
+			select @mount2=0,@total2=0
+			select @mount2=sum(isnull(mount2,0)),@total2=sum(isnull(total2,0)) from #z_trana3 where carno=@carno
+			
+			set @cmd="insert  into  #z_trana3(gno,carno,"+@t_sort3+",noa,mount2,total2)values('0',@carno,char(255),CHAR(255),@mount2,@total2)"
+			execute sp_executesql @cmd,N'@carno  nvarchar(20),@mount2  float,@total2  float',@carno=@carno,@mount2=@mount2,@total2=@total2	
+			
+			fetch next from cursor_table
+			into @carno
+		end
+		close cursor_table
+		deallocate cursor_table
+	end
+	
+	if @t_sort3='carno'  or @t_sort3='noa' 
+	begin
 		set @cmd = 
 			" select  gno,trandate  aa,custno bb,namea cc,carno dd,addr,product ee,mount2 ff,"+
 			" case when price2=0 then price3 else price2 end gg,discount hh,"+
 			" reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total2),1)),4,12)) ii,"+
 			" caseno jj,case when right(noa,1)=char(255) then '' else noa  end kk "+
-			" from  #z_trana3  order  by gno,noa"
+			" from  #z_trana3  order  by carno,gno,noa"
 	end
 	else
 	begin
@@ -4581,7 +4633,7 @@ z_trana3:--z_trana3
 			" case when price2=0 then price3 else price2 end gg,discount hh,"+
 			" reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total2),1)),4,12)) ii,"+
 			" caseno jj,noa kk "+
-			" from  #z_trana3  order  by  gno,["+@t_sort3+"],noa"
+			" from  #z_trana3  order  by carno,gno,["+@t_sort3+"],noa"
 	end
 	EXECUTE sp_executesql @cmd;
 
