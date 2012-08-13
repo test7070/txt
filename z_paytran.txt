@@ -546,36 +546,128 @@ z_carchg:--z_carchg
 	set @t_rc2no = case when '#non'=[8] then '' else [8] end
 	set  @t_carno  = case when '#non'=[9] then '' else [9] end
 	set  @t_sort1  = case when '#non'=[10] then '' else [10] end
-declare @result table(
-		gno  nvarchar(1),
-		noa nvarchar(20),
-		datea nvarchar(10),
-		carno nvarchar(20),
+	declare @result table(
+			gno  nvarchar(1),
+			noa nvarchar(20),
+			datea nvarchar(10),
+			carno nvarchar(20),
+			driverno nvarchar(20),
+			driver nvarchar(50),
+			item nvarchar(50),
+			plus float,
+			minus float,
+			memo nvarchar(20)
+	)
+	insert into @result
+	select '0' gno,noa,datea,carno,driverno,driver,plusitem+minusitem,plusmoney,minusmoney,left(ltrim(rtrim(memo)),20)
+	from carchg
+	where (datea between @t_bdate and @t_edate) and
+	(driverno between @t_bdriverno and @t_edriverno)
+	
+	insert into @result
+	select  '1' gno,'','','',driverno,'','',SUM(plus),SUM(minus),''
+	from @result
+	group by driverno
+	
+	insert into @result
+	select  '2' gno,'','','',MAX(driverno),'','',SUM(plus),SUM(minus),''
+	from @result where  gno='0'
+	
+	select gno,noa,datea,carno,driverno,driver,item,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plus),1)),4,12)) plus,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minus),1)),4,12)) minus,
+	memo
+	from @result
+	order by driverno,gno,datea;
+
+z_paytran3:--z_paytran3
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_rc2no nvarchar(30)
+	
+	set @t_accy = [1]
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end	
+	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
+	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_rc2no = case when '#non'=[8] then '' else [8] end
+	----------------------------------------------------------------------------------------------------------------------------
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(20)
+	declare @money float
+	declare @plusmoney float
+	declare @minusmoney float
+	----------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_paytran3')is not null
+	BEGIN
+		set @cmd = 'drop table #z_paytran3'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_paytran3(
+		gno nvarchar(1),
 		driverno nvarchar(20),
 		driver nvarchar(50),
-		item nvarchar(50),
-		plus float,
-		minus float,
-		memo nvarchar(20)
-)
-insert into @result
-select '0' gno,noa,datea,carno,driverno,driver,plusitem+minusitem,plusmoney,minusmoney,left(ltrim(rtrim(memo)),20)
-from carchg
-where (datea between @t_bdate and @t_edate) and
-(driverno between @t_bdriverno and @t_edriverno)
+		carno nvarchar(20),
+		[money] float,
+		plusmoney float,
+		minusmoney float,
+		total float
+	)
+	
+	set @cmd=
+	" select '0',isnull(a.driverno,''),isnull(b.namea,''),isnull(a.carno,''),"+
+	" sum(ISNULL(a.total2,0)),0,0,0"+
+	" from trans"+@t_accy+" a"+
+	" left join driver b on a.driverno=b.noa"+ 
+	" left join calctypes d  on a.calctype=d.noa+d.noq"+
+	" where d.isoutside=1"+ 
+	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
+	" and (a.datea between @t_bdate and @t_edate)"+
+	" and (len(@t_rc2no)=0 or a.noa=@t_rc2no)"+
+	" group  by  isnull(a.driverno,''),isnull(b.namea,''),isnull(a.carno,'')"
 
-insert into @result
-select  '1' gno,'','','',driverno,'','',SUM(plus),SUM(minus),''
-from @result
-group by driverno
-
-insert into @result
-select  '2' gno,'','','',MAX(driverno),'','',SUM(plus),SUM(minus),''
-from @result where  gno='0'
-
-select gno,noa,datea,carno,driverno,driver,item,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plus),1)),4,12)) plus,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minus),1)),4,12)) minus,
-memo
-from @result
-order by driverno,gno,datea;
+	insert into #z_paytran3
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
+	
+	declare cursor_table cursor for
+	select driverno,carno,sum(isnull(plusmoney,0)),sum(isnull(minusmoney,0)) from carchg 
+	where (datea between @t_bdate and @t_edate) and (driverno between @t_bdriverno and @t_edriverno)
+	group by driverno,carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno,@plusmoney,@minusmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from #z_paytran3 where driverno=@driverno and carno=@carno)
+		begin
+			set @driver=''
+			select @driver=namea from driver where noa=@driverno
+			insert into #z_paytran3(gno,driverno,driver,carno)values('0',@driverno,@driver,@carno)
+		end
+		update #z_paytran3 set plusmoney=@plusmoney,minusmoney=@minusmoney where driverno=@driverno and carno=@carno
+		fetch next from cursor_table
+		into @driverno,@carno,@plusmoney,@minusmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into #z_paytran3 select '1',driverno,'','',SUM([money]),SUM(plusmoney),SUM(minusmoney),0 from #z_paytran3 group by driverno
+	update #z_paytran3 set total=[money]+plusmoney-minusmoney
+	
+	select gno,driverno aa,driver bb,carno
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) [money]
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plusmoney),1)),4,12)) pm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minusmoney),1)),4,12)) mm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	from #z_paytran3 order by driverno,gno,carno;
