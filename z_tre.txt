@@ -9,7 +9,9 @@ z_tre1:--z_tre1
 	declare @t_edriverno nvarchar(20)
 	declare @t_carno  nvarchar(20)
 	declare @t_sort1 nvarchar(max)
-	set @pagecount = 20
+	declare @t_noa nvarchar(max)
+
+	set @pagecount = 22
 	set  @t_accy  =  [1]
 	set  @t_bdate  = case when '#non'=[2] then '' else [2] end
 	set  @t_edate  =  case when '#non'=[3] then char(255) else [3] end
@@ -17,7 +19,8 @@ z_tre1:--z_tre1
 	set  @t_edriverno  =  case when '#non'=[5] then char(255) else [5] end
 	set  @t_carno  = case when '#non'=[6] then '' else [6] end
 	set  @t_sort1  = case when '#non'=[7] then '' else [7] end
-
+	set @t_noa = case when '#non'=[8] then '' else [8] end
+	-------------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#z_tre1')is not null
 	BEGIN
 		set @cmd = 'drop table #z_tre1'
@@ -27,7 +30,15 @@ z_tre1:--z_tre1
 		noa  nvarchar(20),
 		carno  nvarchar(20),
 		driverno nvarchar(20),
-		[money]  float
+		driver  nvarchar(20),
+		checkno  nvarchar(30),
+		paydate  nvarchar(10),
+		bdate  nvarchar(10),
+		edate  nvarchar(10),
+		[money]  float,
+		plus  float,
+		minus  float,
+		total float
 	)
 	declare  @tmp2  table(
 		noa  nvarchar(20),
@@ -47,6 +58,7 @@ z_tre1:--z_tre1
 
 	declare @tmp3 table(
 		noa  nvarchar(20),
+		treno  nvarchar(20),
 		carno  nvarchar(20),
 		driverno nvarchar(20),
 		[date]  nvarchar(10),
@@ -58,11 +70,14 @@ z_tre1:--z_tre1
 	)
 	---------------------------------------------------------------------------------------------------
 	set @cmd = 
-		" select noa,isnull(carno,''),isnull(driverno,''),[money] from tre"+@t_accy+  
-		" where (isnull(datea,'') between @t_bdate and @t_edate) and (len(@t_carno)=0 or @t_carno=carno) and (isnull(driverno,'') between @t_bdriverno and @t_edriverno)"
+		" select noa,isnull(carno,''),isnull(driverno,''),isnull(driver,''),isnull(checkno,''),paydate,bdate,edate,[money],0 plus,0 minus,0 total from tre"+@t_accy+  
+		" where (isnull(datea,'') between @t_bdate and @t_edate) "+
+		" and (len(@t_noa)=0 or @t_noa=noa) "+
+		" and (len(@t_carno)=0 or @t_carno=carno) "+
+		" and (isnull(driverno,'') between @t_bdriverno and @t_edriverno)"
 	insert  into  #z_tre1
-	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_carno nvarchar(20),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20)',
-		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_carno=@t_carno,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
+	execute sp_executesql @cmd,N'@t_noa nvarchar(20),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_carno nvarchar(20),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20)',
+		@t_noa=@t_noa,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_carno=@t_carno,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
 
 	set  @cmd=
 		"  select a.noa,a.carno,a.driverno,c.trandate,c.custno,b.driver,ltrim(b.straddr),c.product,b.mount,b.price,b.discount,b.[money],isnull(c.caseno,'')"+
@@ -74,21 +89,11 @@ z_tre1:--z_tre1
 	execute sp_executesql @cmd
 	
 	insert  into  @tmp3
-	select  noa,carno,driverno,datea,left(plusitem,20),plusmoney,left(minusitem,20),minusmoney,left(ltrim(rtrim(memo)),20)  from  carchg
-	where (isnull(datea,'') between @t_bdate and @t_edate) and (len(@t_carno)=0 or @t_carno=carno) and (isnull(driverno,'') between @t_bdriverno and @t_edriverno)
-	---------------------------------------------------------------------------------------------------------
-	declare @tmp4 table(
-		noa nvarchar(20),
-		carno nvarchar(20),
-		driverno nvarchar(20),
-		[money] float,
-		plus float,
-		minus float,
-		total float,
-		checkno nvarchar(20),
-		paydate nvarchar(10)
-	)
+	select b.noa,a.noa,b.carno,b.driverno,b.datea,left(b.plusitem,20),b.plusmoney,left(b.minusitem,20),b.minusmoney,left(ltrim(rtrim(b.memo)),20) from #z_tre1 a
+	left join carchg b on b.driverno=a.driverno and b.carno=a.carno and (b.datea between a.bdate and a.edate)
+	where b.noa is not null
 
+	--------------------------------------------------------------------------------------------------------
 	declare @carno nvarchar(20)
 	declare @driverno nvarchar(20)
 	declare @money float
@@ -99,56 +104,21 @@ z_tre1:--z_tre1
 	declare @checkno nvarchar(20)
 	declare @paydate nvarchar(10)
 	declare @noa nvarchar(20)
-	
+
 	declare cursor_table cursor for
-	select noa,carno,driverno,sum(isnull([money],0)) from #z_tre1 group by noa,carno,driverno
+	select treno,sum(isnull(plus,0)),sum(isnull(minus,0)) from @tmp3 group by treno
 	open cursor_table
 	fetch next from cursor_table
-	into @noa,@carno,@driverno,@money
+	into @noa,@plus,@minus
 	while(@@FETCH_STATUS <> -1)
 	begin
-		insert  into  @tmp4(noa,carno,driverno,[money],plus,minus)values(@noa,@carno,@driverno,@money,0,0)
+		update  #z_tre1  set  plus=@plus,minus=@minus  where  noa=@noa
 		fetch next from cursor_table
-		into @noa,@carno,@driverno,@money
+		into @noa,@plus,@minus
 	end
 	close cursor_table
 	deallocate cursor_table
-
-	declare cursor_table cursor for
-	select carno,driverno,sum(isnull(plus,0)),sum(isnull(minus,0)) from @tmp3 group by carno,driverno
-	open cursor_table
-	fetch next from cursor_table
-	into @carno,@driverno,@plus,@minus
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if exists(select * from @tmp4 where carno=@carno)
-		begin
-			update @tmp4 set plus=@plus,minus=@minus where carno=@carno and driverno=@driverno
-		end
-		else
-		begin
-			insert  into  @tmp4(carno,driverno,[money],plus,minus)values(@carno,@driverno,0,@plus,@minus)
-		end
-		fetch next from cursor_table
-		into @carno,@driverno,@plus,@minus
-	end
-	close cursor_table
-	deallocate cursor_table
-
-	declare cursor_table cursor for
-	select carno,driverno,[money],plus,minus from @tmp4
-	open cursor_table
-	fetch next from cursor_table
-	into @carno,@driverno,@money,@plus,@minus
-	while(@@FETCH_STATUS <> -1)
-	begin
-		update @tmp4 set total=ISNULL(@money,0)+ISNULL(@plus,0)-ISNULL(@minus,0) where carno=@carno and driverno=@driverno
-
-		fetch next from cursor_table
-		into @carno,@driverno,@money,@plus,@minus
-	end
-	close cursor_table
-	deallocate cursor_table
+	update  #z_tre1  set total=isnull([money],0)+isnull(plus,0)-isnull(minus,0)
 
 	---------------------------------------------------------------------------------------------------------
 	declare  @h1 nvarchar(max)
@@ -197,10 +167,10 @@ z_tre1:--z_tre1
 	declare @t_total float
 	declare @t_page int
 	declare cursor_table cursor for
-	select noa,carno,driverno,[money],plus,minus,total,checkno,paydate from @tmp4
+	select noa,checkno,carno,driverno,driver,[money],plus,minus,total,checkno,paydate from #z_tre1
 	open cursor_table
 	fetch next from cursor_table
-	into @noa,@carno,@driverno,@money,@plus,@minus,@total,@checkno,@paydate
+	into @noa,@checkno,@carno,@driverno,@driver,@money,@plus,@minus,@total,@checkno,@paydate
 	while(@@FETCH_STATUS <> -1)
 	begin
 		set @t_page=1
@@ -210,16 +180,16 @@ z_tre1:--z_tre1
 		set @t_minus = @minus
 		set @t_total = @total
 		set @curcount = 0
-		insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h1,@t_page)
+		insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h1,@t_page)
 		set @curcount=@curcount+1
-		insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h3,@t_page)
+		insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
 		set @curcount=@curcount+1
 		
 		declare cursor_table2 cursor for
-		select [date],custno,driverno,addr,product,mount,price,discount,[money],[memo] from @tmp2 where carno=@carno and driverno=@driverno
+		select [date],noa,custno,addr,product,mount,price,discount,[money],[memo] from @tmp2 where noa=@noa
 		open cursor_table2
 		fetch next from cursor_table2
-		into @date,@custno,@driverno,@addr,@product,@mount,@price,@discount,@money,@memo
+		into @date,@noa,@custno,@addr,@product,@mount,@price,@discount,@money,@memo
 		while(@@FETCH_STATUS <> -1)
 		begin
 			set @t_mount = @t_mount + @mount
@@ -227,43 +197,38 @@ z_tre1:--z_tre1
 			if @curcount>=@pagecount
 			begin
 				set @curcount = 0
-				insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h1,@t_page)
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h1,@t_page)
 				set @curcount=@curcount+1
-				insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h3,@t_page)
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
 				set @curcount=@curcount+1
 			end
 			
-			insert into @tmp(gno,carno,driverno,curpage,memo)
-			values( '0',@carno,@driverno,@t_page,
+			insert into @tmp(gno,noa,curpage,memo)
+			values( '0',@noa,@t_page,
 				convert(char(9),@date)+SPACE(1)+convert(char(4),@custno)+SPACE(1)+
 				convert(char(20),@addr)+SPACE(1)+convert(char(10),@product)+SPACE(1)+
 				right(SPACE(10)+rtrim(convert(char(10),@mount)),10)+SPACE(1)+
-				--right(space(10)+rtrim(convert(char(10),convert(decimal(10,3),@mount,2))),10)+SPACE(1)+
 				convert(char(8),CONVERT(money,@price),1)+SPACE(1)+
-				--right(space(10)+rtrim(convert(char(8),CONVERT(decimal(8,2),@price,1))),8)+SPACE(1)+
 				right(space(10)+rtrim(convert(char(6),convert(decimal(6,3),@discount))),6)+SPACE(1)+
 				reverse(substring(reverse(convert(char(11),CONVERT(money,@money),1)),4,8))+SPACE(1)+
-				--right(space(10)+rtrim(convert(char(8),convert(decimal(8,0),@money))),8)+SPACE(1)+
 				left(@memo,20))
 			set @curcount=@curcount+1
 			if(@curcount=@pagecount)
 				set @t_page  =  @t_page + 1
 			fetch next from cursor_table2
-			into @date,@custno,@driverno,@addr,@product,@mount,@price,@discount,@money,@memo
+			into @date,@noa,@custno,@addr,@product,@mount,@price,@discount,@money,@memo
 		end
 		close cursor_table2
 		deallocate cursor_table2
 		
 		if @curcount=@pagecount  or  @pagecount-@curcount>=2 
 		begin
-			insert into @tmp (gno,carno,driverno,curpage,memo)values('0',@carno,@driverno,@t_page,@h4)
-			insert into @tmp (gno,carno,driverno,curpage,memo)
-			values('0',@carno,@driverno,@t_page,
+			insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page,@h4)
+			insert into @tmp (gno,noa,curpage,memo)
+			values('0',@noa,@t_page,
 				SPACE(36)+'合'+SPACE(2)+'計：'+SPACE(3)+
 				right(SPACE(10)+rtrim(convert(char(10),@t_mount)),10)++SPACE(17)+
-				--right(space(10)+rtrim(convert(char(10),convert(decimal(10,3),@t_mount,2))),10)+SPACE(17)+
 				reverse(substring(reverse(convert(char(11),CONVERT(money,@t_money),1)),4,8)))
-				--right(space(10)+rtrim(convert(char(8),convert(decimal(8,0),@t_money))),8))
 			set @curcount=@curcount+2
 			if(@curcount=@pagecount)
 				set @t_page  =  @t_page + 1
@@ -272,35 +237,33 @@ z_tre1:--z_tre1
 		begin
 			if @pagecount-@curcount=1
 			begin
-				insert into @tmp (gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h4,@t_page)
+				insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h4,@t_page)
 				set @t_page  =  @t_page + 1
-				insert into @tmp (gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h1,@t_page)
-				insert into @tmp (gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h3,@t_page)
-				insert into @tmp (gno,carno,driverno,curpage,memo)
-				values('0',@carno,@driverno,@t_page,
+				insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h1,@t_page)
+				insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
+				insert into @tmp (gno,noa,curpage,memo)
+				values('0',@noa,@t_page,
 				SPACE(36)+'合'+SPACE(2)+'計：'+SPACE(3)+
 				right(SPACE(10)+rtrim(convert(char(10),@t_mount)),10)++SPACE(17)+
-				--right(space(10)+rtrim(convert(char(10),convert(decimal(10,3),@t_mount,2))),10)+SPACE(17)+
 				reverse(substring(reverse(convert(char(11),CONVERT(money,@t_money),1)),4,8)))
-				--right(space(10)+rtrim(convert(char(8),convert(decimal(8,0),@t_money))),8))
 				set @curcount=3
 			end
 		end
 		----------------------------------------------------
-		if exists(select * from @tmp3 where carno=@carno and driverno=@driverno)
+		if exists(select * from @tmp3 where treno=@noa)
 		begin
 			if @pagecount-@curcount>=3
 			begin
-				insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h2,@t_page)
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h2,@t_page)
 				set @curcount=@curcount+1
-				insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h5,@t_page)
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h5,@t_page)
 				set @curcount=@curcount+1
 			end
 			else
 			begin
 				while (@pagecount!=@curcount and @pagecount>@curcount)
 				begin
-					insert into @tmp(gno,carno,driverno,curpage,memo)values('0',@carno,@driverno,@t_page,'')
+					insert into @tmp(gno,noa,curpage,memo)values('0',@noa,@t_page,'')
 					set @curcount=@curcount+1
 				end
 				set @t_page  =  @t_page + 1
@@ -308,7 +271,7 @@ z_tre1:--z_tre1
 		end
 		
 		declare cursor_table2 cursor for
-		select [date],plusitem,plus,minusitem,minus,memo from @tmp3 where carno=@carno and driverno=@driverno
+		select [date],plusitem,plus,minusitem,minus,memo from @tmp3 where  treno=@noa
 		open cursor_table2
 		fetch next from cursor_table2
 		into @date,@plusitem,@plus,@minusitem,@minus,@memo
@@ -317,14 +280,14 @@ z_tre1:--z_tre1
 			if @curcount>=@pagecount
 			begin
 				set @curcount = 0
-				insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h2,@t_page)
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h2,@t_page)
 				set @curcount=@curcount+1
-				insert into @tmp(gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h3,@t_page)
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
 				set @curcount=@curcount+1
 			end
 			
-			insert into @tmp(gno,carno,driverno,curpage,memo)
-			values('0',@carno,@driverno,@t_page,
+			insert into @tmp(gno,noa,curpage,memo)
+			values('0',@noa,@t_page,
 				convert(char(9),@date)+SPACE(1)+
 				convert(char(18),@plusitem)+
 				reverse(substring(reverse(convert(char(11),CONVERT(money,@plus),1)),4,8))+SPACE(2)+
@@ -340,14 +303,14 @@ z_tre1:--z_tre1
 		close cursor_table2
 		deallocate cursor_table2
 		
-		if exists(select * from @tmp3 where carno=@carno and driverno=@driverno) and @pagecount-@curcount>=1
+		if exists(select * from @tmp3 where noa=@noa) and @pagecount-@curcount>=1
 		begin
-			insert into @tmp (gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,@h4,@t_page)
+			insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h4,@t_page)
 			set @curcount=case when  @curcount+1=@pagecount  then  0  else  @curcount+1  end
 		end
 		if @curcount!=0
 		begin
-			insert into @tmp (gno,carno,driverno,memo,curpage)values('0',@carno,@driverno,'',@t_page)
+			insert into @tmp (gno,noa,memo,curpage)values('0',@noa,'',@t_page)
 			set @curcount=case when  @curcount+1=@pagecount  then  0  else  @curcount+1  end
 		end
 		set @curcount=@curcount%@pagecount
@@ -355,66 +318,47 @@ z_tre1:--z_tre1
 			set @t_page  =  @t_page + 1
 		while(@curcount<@pagecount-2)
 		begin
-			insert into @tmp (gno,carno,driverno,curpage,memo)values('0',@carno,@driverno,@t_page ,'')
+			insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page ,'')
 			set @curcount  =  @curcount+1		
 		end
 		if(@curcount>@pagecount-2)
 		begin
-			insert into @tmp (gno,carno,driverno,curpage,memo)values('0',@carno,@driverno,@t_page ,'')
+			insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page ,'')
 			set @curcount  =  0
 			while(@curcount<@pagecount-2)
 			begin
-				insert into @tmp (gno,carno,driverno,curpage,memo)values('0',@carno,@driverno,@t_page ,'')
+				insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page ,'')
 				set @curcount  =  @curcount+1		
 			end
 		end
 
-		insert into @tmp (gno,carno,driverno,curpage,memo)
-		values('0',@carno,@driverno,@t_page ,
+		insert into @tmp (gno,noa,curpage,memo)
+		values('0',@noa,@t_page ,
 			'運'+SPACE(4)+'費：'+SPACE(1)+
 			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_money),1)),4,10))+SPACE(1)+
-			--right(space(10)+rtrim(convert(char(10),convert(decimal(10,0),@t_money))),10)+SPACE(1)+
 			'其他加項：'+SPACE(1)+
 			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_plus),1)),4,10))+SPACE(1)+
-			--right(space(10)+rtrim(convert(char(10),convert(decimal(10,0),@t_plus))),10)+SPACE(1)+
 			'其他減項：'+SPACE(1)+
 			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_minus),1)),4,10))+SPACE(1)+
-			--right(space(10)+rtrim(convert(char(10),convert(decimal(10,0),@t_minus))),10)+SPACE(1)+
 			'實領金額：'+SPACE(1)+
 			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_total),1)),4,10))+SPACE(1))
-			--right(space(10)+rtrim(convert(char(10),convert(decimal(10,0),@t_total))),10)+SPACE(1))
-		insert  into  @tmp(gno,carno,driverno,curpage,memo)
-		values('1',@carno,@driverno,@t_page,
+		insert  into  @tmp(gno,noa,curpage,memo)
+		values('1',@noa,@t_page,
 			'審'+SPACE(4)+'核：'+SPACE(1)+
 			SPACE(11)+
 			'支票號碼：'+SPACE(1)+
-			SPACE(11)+
+			convert(char(11),@checkno)+
 			'兌票日期：'+SPACE(1)+
 			SPACE(11)+
 			'製'+SPACE(4)+'表：'+SPACE(1)+
 			SPACE(11)+
 			'簽'+SPACE(4)+'收：')
-		update  @tmp  set  noa=@noa,totpage=@t_page,page=CONVERT(nvarchar,curpage)+'/'+CONVERT(nvarchar,@t_page) where carno=@carno and driverno=@driverno
+		update  @tmp  set carno=@carno,driverno=@driverno,driver=@driver,totpage=@t_page,
+		page=CONVERT(nvarchar,curpage)+'/'+CONVERT(nvarchar,@t_page) where noa=@noa
 		fetch next from cursor_table
-		into @noa,@carno,@driverno,@money,@plus,@minus,@total,@checkno,@paydate
+		into @noa,@checkno,@carno,@driverno,@driver,@money,@plus,@minus,@total,@checkno,@paydate
 	end
 	close cursor_table
 	deallocate cursor_table
 	
-	declare cursor_table cursor for
-	select driverno from @tmp group by driverno
-	open cursor_table
-	fetch next from cursor_table
-	into @driverno
-	while(@@FETCH_STATUS <> -1)
-	begin
-		set @driver=''
-		select @driver=namea from driver where noa=@driverno
-		update @tmp set driver=@driver where driverno=@driverno
-		fetch next from cursor_table
-		into @driverno
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	select  (driverno+carno) x,driver namea,*,REPLACE(memo,SPACE(1),'&nbsp'+char(59))xmemo  from  @tmp order by driverno,carno;
+	select  (driverno+carno) x,driver namea,*,REPLACE(memo,SPACE(1),'&nbsp'+char(59))xmemo  from  @tmp order by noa;
