@@ -1,4 +1,4 @@
-z_chgcasha:--z_chgcasha
+﻿z_chgcasha:--z_chgcasha
 	declare @t_bmon nvarchar(10)
 	declare @t_emon nvarchar(10)
 	declare @t_bpartno nvarchar(20)
@@ -239,3 +239,329 @@ z_chgcashc:--z_chgcashc
 			end
 
 	select *	from @result order by pno,gno;
+--**********************************************************************************************************************************
+z_chgcashd:--z_chgcashd
+	
+	declare @t_bdate nvarchar(20)
+	declare @t_edate nvarchar(20)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_bpartno nvarchar(20)
+	declare @t_epartno nvarchar(20)
+	declare @t_baccno nvarchar(20)
+	declare @t_eaccno nvarchar(20)
+	declare @t_po nvarchar(20)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then char(255) else [2] end
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_bpartno = case when '#non'=[5] then '' else [5] end
+	set @t_epartno = case when '#non'=[6] then char(255) else [6] end
+	set @t_baccno = case when '#non'=[9] then '' else [9] end
+	set @t_eaccno = case when '#non'=[10]then char(255) else [10] end
+	set @t_po = case when '#non'=[11] then '' else [11] end
+	set @t_bcustno = case when '#non'=[12] then '' else [12] end
+	set @t_ecustno = case when '#non'=[13] then char(255) else [13] end
+	--*****************************************************************************************	
+		
+	declare @result table(
+		gno nvarchar(1),
+		custno nvarchar(20),
+		comp nvarchar(40),
+		po nvarchar(20),
+		datea nvarchar(10),
+		chgitem nvarchar(40),
+		dc nvarchar(20),
+		preorg decimal (18,3),
+		money decimal (18,3),
+		total decimal (18,3)
+	)
+	
+	--插入零用金資料
+	insert into @result
+	select '0' gno,custno,comp,po,datea,chgitem,dc,null,money,null
+	from chgcash
+	where (LEN(@t_po)=0 or @t_po = po)and(datea between @t_bdate and @t_edate) and
+	(custno between @t_bcustno  and @t_ecustno)
+	order by partno,datea
+	
+	
+	declare @org table(
+		custno nvarchar(20),
+		org decimal (18,3)
+	)
+
+	insert into @org
+	select custno,SUM( case when dc='1' then -1* money else money end) from chgcash where datea < @t_bmon+'/01' 
+	group by custno
+	
+		
+--*****************************************************************************************	
+	declare @gno nvarchar(1)
+	declare @custno nvarchar(20)
+	declare @tt_custno nvarchar(20)
+	declare @comp nvarchar(40)
+	declare	@datea nvarchar(10)
+	declare	@chgitem nvarchar(40)
+	declare	@dc nvarchar(20)
+	declare @preorg decimal (18,3)
+	declare	@money decimal (11,3)
+	declare	@tt_money decimal (11,3)
+	declare	@total decimal (18,3)
+	declare @t_custno nvarchar(20)
+	declare @t_custno2 nvarchar(20)
+	declare @t_total0 decimal(18,3)
+	declare @t_total1 decimal(18,3)
+	declare @t_total2 decimal(18,3)
+	set @t_custno = '#zzzz#zzzz'
+	set @t_custno2 = '#xxxx#xxxx'
+	set @t_total0 = 0	--期初
+	set @t_total1 = 0	--剩餘
+	set @t_total2 = 0	--期末
+--***********************************************************************
+	declare chgcash_table cursor for
+	select gno,custno,comp,datea,chgitem,dc,preorg,money,total from @result
+	open chgcash_table
+	fetch next from chgcash_table
+	into @gno,@custno,@comp,@datea,@chgitem,@dc,@preorg,@money,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+	
+		if @custno != @t_custno
+			begin
+				--期初
+					declare chgcashorg_table cursor for
+					select custno,org from @org
+					open chgcashorg_table
+					fetch next from chgcashorg_table
+					into @tt_custno,@tt_money
+					while(@@FETCH_STATUS <> -1)
+						begin
+							if(@tt_custno =@custno)
+								begin
+									set @t_total0=@tt_money
+								end
+							fetch next from chgcashorg_table
+							into @tt_custno,@tt_money
+						end
+					close chgcashorg_table
+					deallocate chgcashorg_table
+
+				set @t_total1=@t_total0
+			end
+	
+		--更新剩餘與期初
+			if @datea != ''
+			begin
+				update @result set total=@t_total1+( case when dc='1' then -1* money else money end),preorg=@t_total0
+				where current of chgcash_table
+				--紀錄上次剩餘零用金
+				set @t_total1 = @t_total1 +( case when @dc='1' then -1* @money else @money end)
+			end
+
+		if @custno != @t_custno and @t_custno != '#zzzz#zzzz'--公司不同且不是第一筆，計算總計與期末
+			begin
+				insert into @result
+				select '1' gno,'#xxxx#xxxx',@t_custno,'','','','',null,SUM( case when dc='1' then -1* money else money end),@t_total2
+				from @result
+				where custno=@t_custno
+			end
+			
+		if(@custno='#xxxx#xxxx')
+			begin
+				update @result set custno=@comp,comp='',preorg=null
+				where current of chgcash_table
+			end
+			
+		set @t_custno = @custno
+		set @t_total2 = @t_total1
+		
+		fetch next from chgcash_table
+		into @gno,@custno,@comp,@datea,@chgitem,@dc,@preorg,@money,@total
+	end
+	close chgcash_table
+	deallocate chgcash_table
+
+		if @t_custno != '#zzzz#zzzz' and @datea != ''
+			begin
+				insert into @result
+				select '1' gno,@t_custno,'','','','','',null,SUM( case when dc='1' then -1* money else money end),@t_total2
+				from @result
+				where custno=@t_custno
+			end
+
+	select *	from @result order by custno,gno;
+--*****************************************************************************
+z_chgcashe:--z_chgcashe
+	declare @t_bdate nvarchar(20)
+	declare @t_edate nvarchar(20)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_bpartno nvarchar(20)
+	declare @t_epartno nvarchar(20)
+	declare @t_baccno nvarchar(20)
+	declare @t_eaccno nvarchar(20)
+	declare @t_po nvarchar(20)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then char(255) else [2] end
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_bpartno = case when '#non'=[5] then '' else [5] end
+	set @t_epartno = case when '#non'=[6] then char(255) else [6] end
+	set @t_baccno = case when '#non'=[9] then '' else [9] end
+	set @t_eaccno = case when '#non'=[10]then char(255) else [10] end
+	set @t_po = case when '#non'=[11] then '' else [11] end
+	set @t_bcustno = case when '#non'=[12] then '' else [12] end
+	set @t_ecustno = case when '#non'=[13] then char(255) else [13] end
+	--*****************************************************************************************	
+		
+	declare @result table(
+		gno nvarchar(1),
+		custno nvarchar(20),
+		comp nvarchar(40),
+		po nvarchar(20),
+		chgitemno nvarchar(20),
+		chgitem nvarchar(40),
+		dc nvarchar(20),
+		preorg decimal (18,3),
+		money decimal (18,3),
+		total decimal (18,3)
+	)
+	
+	--插入零用金資料
+	insert into @result
+	select '0' gno,custno,comp,po,chgitemno,chgitem,dc,null,money,null
+	from chgcash
+	where (LEN(@t_po)=0 or @t_po = po)and(datea between @t_bdate and @t_edate) and
+	(custno between @t_bcustno  and @t_ecustno)
+	order by partno,datea
+	
+		
+	declare @tmp table(
+		gno nvarchar(1),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		chgitemno nvarchar(20),
+		dc nvarchar(10),
+		chgitem nvarchar(40),
+		preorg decimal (18,3),
+		[money] decimal (18,3),
+		total decimal (18,3)
+		primary key(custno,chgitemno,gno)
+)
+insert into @tmp
+select '0' gno,custno,MAX(comp),chgitemno,dc,MAX(chgitem),SUM(preorg),SUM(money),SUM(total)
+from @result
+group by custno,chgitemno,dc
+
+	
+	declare @org table(
+		custno nvarchar(20),
+		chgitemno nvarchar(20),
+		org decimal (18,3)
+	)
+
+	insert into @org
+	select custno,chgitemno,SUM( case when dc='1' then -1* money else money end) from chgcash 
+	where datea < @t_bmon+'/01' 
+	group by custno,chgitemno
+
+
+--*****************************************************************************************	
+	declare @gno nvarchar(1)
+	declare @custno nvarchar(20)
+	declare @tt_custno nvarchar(20)
+	declare @comp nvarchar(40)
+	declare	@chgitem nvarchar(40)
+	declare	@chgitemno nvarchar(20)
+	declare	@dc nvarchar(20)
+	declare @preorg decimal (18,3)
+	declare	@money decimal (11,3)
+	declare	@tt_money decimal (11,3)
+	declare	@total decimal (18,3)
+	declare @t_custno nvarchar(20)
+	declare @t_custno2 nvarchar(20)
+	declare @t_total0 decimal(18,3)
+	declare @t_total1 decimal(18,3)
+	declare @t_total2 decimal(18,3)
+	set @t_custno = '#zzzz#zzzz'
+	set @t_custno2 = '#xxxx#xxxx'
+	set @t_total0 = 0	--期初
+	set @t_total1 = 0	--剩餘
+	set @t_total2 = 0	--期末
+--***********************************************************************
+	declare chgcash_table cursor for
+	select gno,custno,comp,chgitemno,chgitem,dc,preorg,money,total from @tmp
+	open chgcash_table
+	fetch next from chgcash_table
+	into @gno,@custno,@comp,@chgitemno,@chgitem,@dc,@preorg,@money,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @custno != @t_custno
+			begin
+			--	期初
+					declare chgcashorg_table cursor for
+					select custno,org from @org
+					open chgcashorg_table
+					fetch next from chgcashorg_table
+					into @tt_custno,@tt_money
+					while(@@FETCH_STATUS <> -1)
+						begin
+							if(@tt_custno =@custno)
+								begin
+									set @t_total0=@tt_money
+								end
+							fetch next from chgcashorg_table
+							into @tt_custno,@tt_money
+						end
+					close chgcashorg_table
+					deallocate chgcashorg_table
+
+				set @t_total1=@t_total0
+			end
+	
+	--	更新剩餘與期初
+			if @chgitemno != ''
+			begin
+				update @tmp set total=@t_total1+( case when dc='1' then -1* money else money end),preorg=@t_total0
+				where current of chgcash_table
+			--	紀錄上次剩餘零用金
+				set @t_total1 = @t_total1 +( case when @dc='1' then -1* @money else @money end)
+			end
+			if @custno != @t_custno and @t_custno != '#zzzz#zzzz'--部門不同且不是第一筆，計算總計與期末
+			begin
+				insert into @tmp
+				select '1' gno,@t_custno,'','','','',null,SUM( case when dc='1' then -1* money else money end),@t_total2
+				from @result
+				where custno=@t_custno
+			end
+			
+		if(@custno='#xxxx#xxxx')
+			begin
+				update @result set custno=@comp,comp='',preorg=null
+				where current of chgcash_table
+			end
+			
+		set @t_custno = @custno
+		set @t_total2 = @t_total1
+		
+		fetch next from chgcash_table
+		into @gno,@custno,@comp,@chgitemno,@chgitem,@dc,@preorg,@money,@total
+	end
+	close chgcash_table
+	deallocate chgcash_table
+
+		if @t_custno != '#zzzz#zzzz' and @chgitemno != ''
+			begin
+				insert into @tmp
+				select '1' gno,@t_custno,'','','','',null,SUM( case when dc='1' then -1* money else money end),@t_total2
+				from @result
+				where custno=@t_custno
+			end
+select *
+from @tmp
+order by custno,gno,chgitemno;
