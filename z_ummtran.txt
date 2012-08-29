@@ -18,10 +18,10 @@ z_ummtran1:--z_ummtran1
 	set @t_vccno = case when '#non'=[8] then '' else [8] end
 
 	declare @tmp table(
-		gno nvarchar(1),
+		gno nvarchar(3),
 		tranno nvarchar(30),
-		datea nvarchar(10),
-		trandate nvarchar(10),
+		datea nvarchar(20),
+		trandate nvarchar(20),
 		custno nvarchar(20),
 		comp nvarchar(40),
 		driver nvarchar(20),
@@ -48,7 +48,9 @@ z_ummtran1:--z_ummtran1
 		where gno='1'
 		group by gno
 		
-	select custno g,* from @tmp order by custno,gno,trandate,tranno;
+	select gno,custno g,tranno,datea,trandate,custno,comp,driver,carno,straddr
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	,memo from @tmp order by custno,gno,trandate,tranno;
 
 z_ummtran2:--z_ummtran2
 	SET QUOTED_IDENTIFIER OFF
@@ -112,6 +114,8 @@ z_ummtran2:--z_ummtran2
 	from #z_ummtran2 order  by  gno,vccno;
 
 z_ummtran3:--z_ummtran3
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
 	declare @t_accy nvarchar(10)
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -130,10 +134,17 @@ z_ummtran3:--z_ummtran3
 	set @t_ecustno = case when '#non'=[7] then CHAR(255) else [7] end
 	set @t_vccno = case when '#non'=[8] then '' else [8] end
 
+	--------------------------------------------------------------------------------------------
+	declare @count int
+	declare @vccno nvarchar(20)
+	declare @money float
+	declare @chgs float
+	declare @paysale float
 	declare @tmp table(
 		gno nvarchar(1),
 		vccno nvarchar(30),
 		datea nvarchar(10),
+		cust nvarchar(40),
 		total int,
 		ummno nvarchar(30),
 		ummnoq nvarchar(3),
@@ -142,39 +153,46 @@ z_ummtran3:--z_ummtran3
 		chgs int,
 		paysale int
 	)
-
-	insert into @tmp
-		select '0',trd[1].noa,trd[1].datea,trd[1].total,umms.noa,umms.noq,umms.mon,isnull(umms.money,0),isnull(umms.chgs,0),isnull(umms.paysale,0) 
-		from trd[1] 
-		left join umms on umms.vccno=trd[1].noa
-		where (len(@t_vccno)=0 or trd[1].noa=@t_vccno) and
-			  (trd[1].custno between @t_bcustno and @t_ecustno)and
-			  (trd[1].datea between @t_btrandate and @t_etrandate)
-			  --(trd[1].datea between @t_bdate and @t_edate)
-
-	insert into @tmp
-		select '0',vcc[1].noa,vcc[1].datea,vcc[1].total,umms.noa,umms.noq,umms.mon,isnull(umms.money,0),isnull(umms.chgs,0),isnull(umms.paysale,0)
-		from vcc[1]
-		left join umms on umms.vccno=vcc[1].noa
-		where (len(@t_vccno)=0 or vcc[1].noa=@t_vccno) and
-			  (vcc101.custno between @t_bcustno and @t_ecustno)and
-			  (vcc[1].datea between @t_btrandate and @t_etrandate)
-			  --(vcc101.datea between @t_bdate and @t_edate)
-	--*********************************************************************************************************	
-	insert into @tmp
-		select '1',vccno,'',0,'','','',SUM(money),SUM(chgs),SUM(paysale)
-		from @tmp
-		group by vccno
 	
-	insert into @tmp
-		select '2',char(255)+char(255),'',0,'','','',SUM(money),SUM(chgs),SUM(paysale)
-		from @tmp
-		where gno='1'
-		group by gno
+	set @cmd=
+	" select '0',a.noa,a.datea,case when len(ISNULL(c.nick,''))>0 then c.nick else a.comp end,"+
+	" ISNULL(a.total,0),b.noa,b.noq,b.mon,isnull(b.money,0),isnull(b.chgs,0),isnull(b.paysale,0)"+
+	" from trd"+@t_accy+" a "+
+	" left join umms b on b.vccno=a.noa"+
+	" left join cust c on a.custno=c.noa"+
+	" where (len(@t_vccno)=0 or a.noa=@t_vccno)"+
+	" and (a.custno between @t_bcustno and @t_ecustno)"+
+	" and (a.datea between @t_bdate and @t_edate)"
+	
+	insert  into  @tmp
+	execute sp_executesql @cmd,N'@t_vccno  nvarchar(20),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20)',
+	@t_vccno=@t_vccno,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno,@t_bdate=@t_bdate,@t_edate=@t_edate
+	
+	declare cursor_table cursor for
+	select vccno,count(1),SUM(isnull([money],0)),SUM(isnull(chgs,0)),SUM(isnull(paysale,0)) from @tmp where gno='0' group by vccno
+	open cursor_table
+	fetch next from cursor_table
+	into @vccno,@count,@money,@chgs,@paysale
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@count>1)
+		begin
+			insert into @tmp(gno,vccno,datea,ummmon,[money],chgs,paysale)values('1',@vccno,char(254)+char(254),'小計:',@money,@chgs,@paysale)
+		end
+		insert into @tmp(gno,vccno,datea)values('2',@vccno,char(255)+char(255))
+		fetch next from cursor_table
+		into @vccno,@count,@money,@chgs,@paysale
+	end
+	close cursor_table
+	deallocate cursor_table
 		
-	select gno,vccno g,vccno,datea,total,ummno no,ummnoq noq,ummmon mon,money,chgs,paysale from @tmp 
+	select gno,vccno g,vccno,datea,cust
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	,ummno no,ummnoq noq,ummmon mon
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) [money]
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgs),1)),4,12)) chgs
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paysale),1)),4,12)) paysale from @tmp 
 	order by vccno,gno,ummno,ummnoq;
-
 
 z_ummtran4:--z_ummtran4
 	SET QUOTED_IDENTIFIER OFF
@@ -188,14 +206,14 @@ z_ummtran4:--z_ummtran4
 	declare @t_ecustno nvarchar(20)
 	declare @t_vccno nvarchar(30)
 
-	set @t_accy = 101
-	set @t_bdate = case when '#non'='#non' then '' else '#non' end
-	set @t_edate = case when '#non'='#non' then CHAR(255) else '#non' end
-	set @t_btrandate = case when '#non'='#non' then '' else '#non' end
-	set @t_etrandate = case when '#non'='#non' then CHAR(255) else '#non' end	
-	set @t_bcustno = case when '#non'='#non' then '' else '#non' end
-	set @t_ecustno = case when '#non'='#non' then CHAR(255) else '#non' end
-	set @t_vccno = case when '#non'='#non' then '' else '#non' end
+	set @t_accy = [1]
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_btrandate = case when '#non'=[4] then '' else [4] end
+	set @t_etrandate = case when '#non'=[5] then CHAR(255) else [5] end	
+	set @t_bcustno = case when '#non'=[6] then '' else [6] end
+	set @t_ecustno = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_vccno = case when '#non'=[8] then '' else [8] end
 	--------------------------------------------------------------------------------------------------
 	
 	--------------------------------------------------------------------------------------------------
