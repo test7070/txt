@@ -32,7 +32,7 @@ z_carsal1:--z_carsal1
 	insert into @tmp
 	select '0',noa,driverno,driver,[day],tranmoney,drivermoney,bonus,plus,[money],ticket,labor,health,minus,carborr,total,memo from carsals where noa=@t_mon
 	insert into @tmp
-	select '1',noa,'','',0,tranmoney,drivermoney,bonus,plus,[money],ticket,labor,health,minus,carborr,total,memo from carsal
+	select '1',noa,'','',0,tranmoney,drivermoney,bonus,plus,[money],ticket,labor,health,minus,carborr,total,memo from carsal where noa=@t_mon
 
 	select gno,mon,driverno,driver,[day],
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tranmoney),1)),4,12)) aa,
@@ -117,45 +117,154 @@ z_carsal3:--z_carsal3
 	set @t_mon = case when '#non'=[2] then '' else [2] end
 	set @t_bdriverno = case when '#non'=[3] then '' else [3] end
 	set @t_edriverno = case when '#non'=[4] then char(255) else [4] end
-	------------------------------------------------------------------------------------------------------------------
-	declare @tmp table(
+	------------------------------------------------------------------------------------------
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @h0 nvarchar(max)
+	declare @h1 nvarchar(max)
+	declare @h2 nvarchar(max)
+	declare @h3 nvarchar(max)
+	declare @h4 nvarchar(max)
+	declare @h5 nvarchar(max)
+	
+	set @h0 = REPLICATE('=',102)
+	set @h1 = '日'+SPACE(5)+'期'+SPACE(1)+'客戶'+SPACE(1)+'起迄地點'+SPACE(13)+'品名'+SPACE(11)
+		+'數'+SPACE(6)+'量'+SPACE(1)+'單'+SPACE(6)+'價'+SPACE(1)+'金'+SPACE(4)+'額'+SPACE(1)+'備註'
+	set @h2 = REPLICATE('-',9)+SPACE(1)+REPLICATE('-',4)+SPACE(1)+REPLICATE('-',20)+SPACE(1)+REPLICATE('-',14)+SPACE(1)	
+		+REPLICATE('-',10)+SPACE(1)+REPLICATE('-',10)+SPACE(1)+REPLICATE('-',8)+SPACE(1)+REPLICATE('-',20)
+	set @h3 = '日'+SPACE(5)+'期'+SPACE(1)+'加項'+SPACE(18)+'加項金額'+SPACE(2)+'減項'+SPACE(18)+'減項金額'+SPACE(2)+'備註'
+	set @h4 = REPLICATE('-',9)+SPACE(1)+REPLICATE('-',20)+SPACE(1)+REPLICATE('-',10)+SPACE(1)+REPLICATE('-',20)+SPACE(1)+REPLICATE('-',10)+SPACE(1)+REPLICATE('-',28)
+	set @h5 = REPLICATE('-',102)
+	------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_carsal3_list')is not null
+	BEGIN
+		set @cmd = 'drop table #z_carsal3_list'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_carsal3_list(
+		mon nvarchar(10),
+		driverno nvarchar(20)
+	)
+	insert into #z_carsal3_list
+	select noa,driverno from carsals where noa=@t_mon and (driverno between @t_bdriverno and @t_edriverno)
+	
+	declare @trans table(
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		trandate nvarchar(10),
+		custno nvarchar(20),
+		addr nvarchar(50),
+		product nvarchar(50),
+		mount float,
+		price float,
+		[money] float,
+		total float
+	)
+	set @cmd=
+	" select a.driverno,a.driver,a.trandate,a.custno,a.straddr,a.product,a.mount2,a.price2,ROUND(a.mount2*a.price2,0) [money],a.total2"+ 
+	" from trans"+@t_accy+" a"+
+	" left join #z_carsal3_list b on LEFT(a.datea,6)=b.mon and a.driverno=b.driverno"+
+	" where not(b.driverno is null)"
+	insert into @trans
+	execute sp_executesql @cmd
+	-------------------------------------------------------------------------------------------------------------------------
+	declare @carchg table(
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		datea nvarchar(10),
+		minusitemno nvarchar(10),
+		minusitem nvarchar(40),
+		minusmoney float,
+		plusitemno nvarchar(10),
+		plusitem nvarchar(40),
+		plusmoney float,
+		memo  nvarchar(max)
+	)
+	--  01 通行費,02 寄櫃費   已在營運報表中計算  
+	insert into @carchg
+	select a.driverno,a.driver,a.datea
+	,case when (a.minusitemno!='01' and a.minusitemno!='02') then a.minusitemno else '' end
+	,case when (a.minusitemno!='01' and a.minusitemno!='02') then a.minusitem else '' end
+	,case when (a.minusitemno!='01' and a.minusitemno!='02') then a.minusmoney else 0 end
+	,case when (a.plusitemno!='01' and a.plusitemno!='02') then a.plusitemno else '' end
+	,case when (a.plusitemno!='01' and a.plusitemno!='02') then a.plusitem else '' end
+	,case when (a.plusitemno!='01' and a.plusitemno!='02') then a.plusmoney else 0 end
+	,a.memo
+	from carchg a
+	left join #z_carsal3_list b on LEFT(a.datea,6)=b.mon and a.driverno=b.driverno
+	where not(b.driverno is null) 
+	
+	delete @carchg where minusmoney=0 and plusmoney=0
+	---------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_carsal3')is not null
+	BEGIN
+		set @cmd = 'drop table #z_carsal3'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_carsal3(
 		gno nvarchar(3),
+		p nvarchar(10),
 		mon nvarchar(10),
 		driverno nvarchar(20),
 		driver nvarchar(20),
-		custno nvarchar(20),
-		noa  nvarchar(20),
-		datea  nvarchar(10),
-		trandate  nvarchar(10),
-		addr  nvarchar(20),
-		product  nvarchar(20),
-		mount2 float,
-		price2 float,
-		[money] float,
-		total2 float,
-		memo nvarchar(40)
+		carno nvarchar(20),
+		linea nvarchar(max),
+		lineb nvarchar(max),
+		linec nvarchar(max),
+		title nvarchar(max),
+		memo nvarchar(max),
+		tmemo nvarchar(max)
 	)
+	------------------------------------------------------------------------------------------
+	insert into #z_carsal3
+	select '0','1',@t_mon,driverno,driver,'',@h0,@h2,@h5,@h1
+	,CAST(trandate as CHAR(9))+SPACE(1)+CAST(custno as  CHAR(4))+SPACE(1)+CAST(addr as CHAR(20))+SPACE(1)+CAST(product as char(14))+SPACE(1)
+	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull(mount,0)),1)),4,6))+right(rtrim(cast(cast(round(mount,3) as decimal(18,3))as char(18))),4)+SPACE(1)
+	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull(price,0)),1)),4,6))+right(rtrim(cast(cast(round(price,3) as decimal(18,3))as char(18))),4)+SPACE(1)
+	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull([money],0)),1)),4,8))
+	,''
+	from   @trans
 	
-	set @cmd =
-		" select '0',@t_mon,a.driverno,c.namea,a.custno,a.noa,a.datea,a.trandate,a.straddr,a.product,"+
-		" isnull(a.mount2,0),isnull(a.price2,0),round(isnull(a.mount2,0)*isnull(a.price2,0),0),isnull(a.total2,0),''"+ 
-		" from trans"+@t_accy+" a"+
-		" left join calctypes b on a.calctype=b.noa+b.noq"+
-		" left join driver c on a.driverno=c.noa"+ 
-		" where LEFT(a.datea,6)=@t_mon and (a.driverno between @t_bdriverno and @t_edriverno) and b.isoutside=0"
-
-	insert into @tmp
-	execute sp_executesql @cmd,N'@t_mon nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20)',
-		@t_mon=@t_mon,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
+	insert into #z_carsal3
+	select '1','1',@t_mon,driverno,'','',@h0,@h2,@h5,@h1,''
+	, '業績：'+reverse(substring(reverse(convert(char(18),CONVERT(money,SUM(isnull(total,0))),1)),4,10)) 
+	+SPACE(45)+'收入小計：'+reverse(substring(reverse(convert(char(18),CONVERT(money,SUM(isnull([money],0))),1)),4,10)) 
+	from   @trans  group  by  driverno
+	------------------------------------------------------------------------------------------
+	insert into #z_carsal3
+	select '0','2',@t_mon,driverno,driver,'',@h0,@h4,@h5,@h3
+	,CAST(datea as CHAR(9))+SPACE(1)
+	+CAST(plusitem as CHAR(20))+SPACE(1)+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull(plusmoney,0)),1)),4,10))+SPACE(1)
+	+CAST(minusitem as CHAR(20))+SPACE(1)+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull(minusmoney,0)),1)),4,10))+SPACE(1)
+	+CAST(memo as CHAR(28))
+	,''
+	from  @carchg
 	
-	insert into @tmp
-	select '1',@t_mon,driverno,driver,'','','','','','',SUM(mount2),0,SUM([money]),SUM(total2),''
-	from @tmp where gno='0' group by mon,driverno,driver 
+	insert into #z_carsal3
+	select '1','2',@t_mon,driverno,'','',@h0,@h4,@h5,@h3,''
+	,SPACE(25)+ '小計：'+reverse(substring(reverse(convert(char(18),CONVERT(money,SUM(isnull(plusmoney,0))),1)),4,10)) 
+	+SPACE(22)+reverse(substring(reverse(convert(char(18),CONVERT(money,SUM(isnull(minusmoney,0))),1)),4,10)) 
+	from   @carchg  group  by  driverno
+	------------------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select driverno from #z_carsal3  group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @carno=''
+		select top 1 @carno=noa from  car2 where driverno=@driverno
+		update #z_carsal3 set carno=@carno where driverno=@driverno
+		fetch next from cursor_table
+		into @driverno
+	end
+	close cursor_table
+	deallocate cursor_table
 	
-	select gno,mon,driverno,driver,custno,noa,datea,trandate,addr,product,
-		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount2),1)),4,12)) mount2,
-		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price2),1)),4,12)) price2,
-		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) [money],
-		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total2),1)),4,12)) total2,
-		memo
-	from @tmp order by driverno,gno,trandate,noa;
+	update #z_carsal3  set linea=REPLACE(linea,SPACE(1),'&nbsp'+char(59)),lineb=REPLACE(lineb,SPACE(1),'&nbsp'+char(59)),
+	title=REPLACE(title,SPACE(1),'&nbsp'+char(59)),memo=REPLACE(memo,SPACE(1),'&nbsp'+char(59)),tmemo=REPLACE(tmemo,SPACE(1),'&nbsp'+char(59))
+	select *  from  #z_carsal3 order by driverno,p,gno
+	------------------------------------------------------------------------------------------
+	drop table #z_carsal3
+	drop table #z_carsal3_list;
