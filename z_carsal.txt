@@ -155,6 +155,7 @@ z_carsal3:--z_carsal3
 	declare @trans table(
 		driverno nvarchar(20),
 		driver nvarchar(20),
+		carno nvarchar(20),
 		trandate nvarchar(10),
 		custno nvarchar(20),
 		addr nvarchar(50),
@@ -166,7 +167,7 @@ z_carsal3:--z_carsal3
 		memo nvarchar(max)
 	)
 	set @cmd=
-	" select a.driverno,a.driver,a.trandate,a.custno,a.straddr,a.product,a.mount2,a.price2,ROUND(a.mount2*a.price2,0) [money],a.total2,a.caseno"+ 
+	" select a.driverno,a.driver,a.carno,a.trandate,a.custno,a.straddr,a.product,a.mount2,a.price2,ROUND(a.mount2*a.price2,0) [money],a.total2,a.caseno"+ 
 	" from trans"+@t_accy+" a"+
 	" left join #z_carsal3_list b on LEFT(a.datea,6)=b.mon and a.driverno=b.driverno"+
 	" where not(b.driverno is null)"
@@ -176,6 +177,7 @@ z_carsal3:--z_carsal3
 	declare @carchg table(
 		driverno nvarchar(20),
 		driver nvarchar(20),
+		carno nvarchar(20),
 		datea nvarchar(10),
 		minusitemno nvarchar(10),
 		minusitem nvarchar(40),
@@ -187,7 +189,7 @@ z_carsal3:--z_carsal3
 	)
 	--  01 通行費,02 寄櫃費   已在營運報表中計算  
 	insert into @carchg
-	select a.driverno,a.driver,a.datea
+	select a.driverno,a.driver,a.carno,a.datea
 	,case when (a.minusitemno!='01' and a.minusitemno!='02') then a.minusitemno else '' end
 	,case when (a.minusitemno!='01' and a.minusitemno!='02') then a.minusitem else '' end
 	,case when (a.minusitemno!='01' and a.minusitemno!='02') then a.minusmoney else 0 end
@@ -212,7 +214,7 @@ z_carsal3:--z_carsal3
 		mon nvarchar(10),
 		driverno nvarchar(20),
 		driver nvarchar(20),
-		carno nvarchar(20),
+		carno nvarchar(max),
 		linea nvarchar(max),
 		lineb nvarchar(max),
 		linec nvarchar(max),
@@ -226,9 +228,9 @@ z_carsal3:--z_carsal3
 	,CAST(trandate as CHAR(9))+SPACE(1)+CAST(custno as  CHAR(4))+SPACE(1)+CAST(addr as CHAR(20))+SPACE(1)+CAST(product as char(14))+SPACE(1)
 	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull(mount,0)),1)),4,6))+right(rtrim(cast(cast(round(mount,3) as decimal(18,3))as char(18))),4)+SPACE(1)
 	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull(price,0)),1)),4,6))+right(rtrim(cast(cast(round(price,3) as decimal(18,3))as char(18))),4)+SPACE(1)
-	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull([money],0)),1)),4,8))+space(1)+CAST(memo as CHAR(20))
+	+reverse(substring(reverse(convert(char(18),CONVERT(money,isnull([money],0)),1)),4,8))+space(1)+CAST(isnull(memo,'') as CHAR(20))
 	,''
-	from   @trans
+	from  @trans
 	
 	insert into #z_carsal3
 	select '1','1',@t_mon,driverno,'','',@h0,@h2,@h5,@h1,''
@@ -251,18 +253,40 @@ z_carsal3:--z_carsal3
 	+SPACE(22)+reverse(substring(reverse(convert(char(18),CONVERT(money,SUM(isnull(minusmoney,0))),1)),4,10)) 
 	from   @carchg  group  by  driverno
 	------------------------------------------------------------------------------------------
+	declare @list_driver table(
+		driverno nvarchar(20),
+		carno nvarchar(max)
+	)
+
 	declare cursor_table cursor for
-	select driverno from #z_carsal3  group  by  driverno
+	select driverno,carno from @trans where len(isnull(carno,''))>0	group by driverno,carno
+	union
+	select driverno,carno from @carchg where len(isnull(carno,''))>0 group by driverno,carno
 	open cursor_table
 	fetch next from cursor_table
-	into @driverno
+	into @driverno,@carno
 	while(@@FETCH_STATUS <> -1)
 	begin
-		select @carno=''
-		select top 1 @carno=noa from  car2 where driverno=@driverno
+		if  not exists(select  *  from  @list_driver  where  driverno=@driverno)
+			insert into @list_driver (driverno)values(@driverno) 
+		update @list_driver set carno=isnull(carno,'')+case when len(carno)>0  then ',' else '' end+isnull(@carno,'') where driverno=@driverno
+		
+		fetch next from cursor_table
+		into @driverno,@carno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select driverno,carno from @list_driver
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno
+	while(@@FETCH_STATUS <> -1)
+	begin
 		update #z_carsal3 set carno=@carno where driverno=@driverno
 		fetch next from cursor_table
-		into @driverno
+		into @driverno,@carno
 	end
 	close cursor_table
 	deallocate cursor_table
