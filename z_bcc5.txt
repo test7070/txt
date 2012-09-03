@@ -8,26 +8,155 @@ z_bcc5:--z_bcc5
 	--*****************************************************************************************	
 declare @result table(
 		gno nvarchar(1),
-		type nvarchar(10),
+		type nvarchar(20),
 		bccno nvarchar(20),
 		bccname nvarchar(50),
+		mon nvarchar(20),
 		stkmount decimal (10,2),
-		price decimal (14,2),
-		stkmoney decimal (18,2),
-		tgg nvarchar (200)
+		tgg nvarchar (200),
+		memo nvarchar (200)
 )
-	insert into @result
-	select '0' gno,bcc.type,bccno,bccname,bcc.stkmount,bcc.price,bcc.stkmoney,LEFT(tgg,len(tgg)-1) tgg
-	from(select bccno,bccname,(SELECT tgg +'/' from (select b.bccno,b.bccname,a.tggno,a.tgg from bccin a,bccins b where a.noa=b.noa group by b.bccno,b.bccname,a.tggno,a.tgg)T2 where T1.bccno=T2.bccno  FOR XML PATH('') )as tgg
-	from(select b.bccno,b.bccname,a.tggno,a.tgg from bccin a,bccins b where a.noa=b.noa)T1
-	group by bccno,bccname)T3 left join bcc 
-	on T3.bccno=bcc.noa
-	where (bcc.datea < @t_date or bcc.datea is null ) and bccno between @t_bbccno and @t_ebccno
-	--bcc.datea is null 是庫存
-	
-	insert into @result
-	select '1' gno,'','','',null,null,sum(stkmoney),''
-	from @result
-	
+--盤點的資料
+declare @t_result table(
+		type nvarchar(20),
+		bccno nvarchar(20),
+		bccname nvarchar(50),
+		mon nvarchar(20),
+		datea nvarchar(10),
+		mount decimal (14,2),
+		memo nvarchar (200)
+)
 
-	select * from @result order by gno,type,bccno;
+declare @type nvarchar(20)
+declare	@bccno nvarchar(20)
+declare	@bccname nvarchar(50)
+declare	@datea nvarchar(10)
+declare	@mount decimal (14,2)
+declare @mon nvarchar(20)
+declare @memo nvarchar (200)
+
+
+--計算有盤存的庫存
+--取最後一筆有盤存的資料
+
+declare bcc_table cursor for
+select b.bccno from bcce a left join bcces b on a.noa=b.noa where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_date group by b.bccno
+open bcc_table
+fetch next from bcc_table
+into @bccno
+while(@@FETCH_STATUS <> -1)
+begin
+	insert into @t_result
+	select top 1 c.type,b.bccno,b.bccname,c.mon,a.datea,b.mount,c.memo
+	from bcce a left join bcces b on a.noa=b.noa right join bcc c on b.bccno=c.noa
+	where b.bccno =@bccno and a.datea < @t_date
+	order by a.datea desc
+	fetch next from bcc_table
+	into @bccno
+
+end
+close bcc_table
+deallocate bcc_table
+
+
+--計算盤存到資料之前的入領料
+declare bcc_table cursor for
+select bccno,bccname,datea,mount,type,mon,memo from @t_result
+open bcc_table
+fetch next from bcc_table
+into @bccno,@bccname,@datea,@mount,@type,@mon,@memo
+while(@@FETCH_STATUS <> -1)
+begin
+
+	set @mount=@mount
+		--入料
+		+isnull((select sum(b.mount) mount
+		from bccin a left join bccins b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea between @datea and @t_date
+		group by b.bccno),0)
+		--領料&耗用
+		-isnull((select sum(b.bkbcc) mount1
+		from bccout a left join bccouts b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea between @datea and @t_date
+		group by b.bccno),0)
+	--存入有盤存的庫存
+	insert into @result
+	select '0',@type,@bccno,@bccname,@mon,@mount,'',@memo
+	fetch next from bcc_table
+	into @bccno,@bccname,@datea,@mount,@type,@mon,@memo
+
+end
+close bcc_table
+deallocate bcc_table
+
+
+--計算沒有盤存的庫存
+
+declare bcc_table cursor for
+select noa,product,datea,beginmount,type,mon,memo from bcc where noa not in (select c.noa bccno from bcce a left join bcces b on a.noa=b.noa right join bcc c on c.noa=b.bccno where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_date)
+open bcc_table
+fetch next from bcc_table
+into @bccno,@bccname,@datea,@mount,@type,@mon,@memo
+while(@@FETCH_STATUS <> -1)
+begin
+
+	set @mount=@mount
+		--入料
+		+isnull((select sum(b.mount) mount
+		from bccin a left join bccins b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea < @t_date
+		group by b.bccno),0)
+		--領料&耗用
+		-isnull((select sum(b.bkbcc) mount1
+		from bccout a left join bccouts b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea < @t_date
+		group by b.bccno),0)
+	--存入沒有盤存的庫存
+	insert into @result
+	select '0',@type,@bccno,@bccname,@mon,@mount,'',@memo
+
+	fetch next from bcc_table
+	into @bccno,@bccname,@datea,@mount,@type,@mon,@memo
+
+end
+close bcc_table
+deallocate bcc_table
+
+--插入供應商
+
+declare @t_tgg nvarchar (200)
+
+	declare bcc_table cursor for
+	select bccno from @result
+	open bcc_table
+	fetch next from bcc_table
+	into @bccno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		
+	set @t_tgg=
+		(select LEFT(tgg,len(tgg)-1)tgg
+		from(
+			select bccno,(select tgg+'/' from bccin left join bccins on bccin.noa=bccins.noa where bccins.bccno=T1.bccno group by tgg FOR XML PATH(''))tgg
+			from(select a.noa bccno
+				from bcc a left join bccins b on a.noa=b.bccno left join bccin c on b.noa=c.noa
+				group by a.noa)T1
+			)T
+		where bccno=@bccno
+		)
+		
+		update @result
+		set tgg=@t_tgg
+		where current of bcc_table	
+		
+		
+		fetch next from bcc_table
+		into @bccno
+	end
+	close bcc_table
+	deallocate bcc_table
+	
+	
+		
+
+	select * from @result order by type,bccno;
