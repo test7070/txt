@@ -8,8 +8,15 @@ z_bcc2:--z_bcc2
 	set @t_bbccno = case when '#non'=[3] then '' else [3] end
 	set @t_ebccno = case when '#non'=[4] then char(255) else [4] end
 	--*****************************************************************************************	
---全部資料
+--盤存的資料
 declare @t_result table(
+		bccno nvarchar(20),
+		bccname nvarchar(50),
+		datea nvarchar(10),
+		mount decimal (14,2)
+)
+--暫存輸出資料
+declare @t_result2 table(
 		gno nvarchar(1),
 		bccno nvarchar(20),
 		bccname nvarchar(50),
@@ -20,85 +27,10 @@ declare @t_result table(
 		price decimal (18,2),
 		stkmount decimal (18,2),
 		memo nvarchar (200),
-		datea nvarchar(10)	
+		datea nvarchar(10)
 )
-insert into @t_result
-select *
-from(
-select '0' gno, noa bccno,product bccname,'初始' type ,'' noa,'' mech,beginmount mount,price,beginmount stkmount,''memo,datea
-from bcc
-union
-select '1' gno,bccins.bccno,bccins.bccname,'入料' type,bccin.noa,''mech,bccins.mount,bccins.price,null stkmount,bccins.memo,datea
-from bccin ,bccins
-where bccin.noa=bccins.noa
-union
-select '1' gno,bccouts.bccno,bccouts.bccname,'領料' type,bccout.noa,mech.mech,bccouts.mount,null price,null stkmount,bccouts.memo,datea
-from bccout ,bccouts,mech
-where bccout.noa=bccouts.noa and bccouts.mechno=mech.noa 
-)T1
-order by bccno,datea
 
-declare	@gno nvarchar(1)
-declare	@bccno nvarchar(20)
-declare	@bccname nvarchar(50)
-declare	@type nvarchar(20)
-declare	@noa nvarchar(30)	
-declare	@mech nvarchar(20)
-declare	@mount decimal (14,2)
-declare	@price decimal (18,2)
-declare	@stkmount decimal (18,2)
-declare	@memo nvarchar (200)
-declare	@datea nvarchar(20)
-declare	@t_bccno nvarchar(20)
-declare	@t_bccname nvarchar(50)
-declare	@t_gno nvarchar(1)
-declare	@total decimal (18,2)
-declare	@t_total decimal (18,2)
-declare	@t_price decimal (18,2)
-
-set @t_gno='0'
-set @total=0
-set @t_total=0
-set @t_price=0
-
---更新全部資料
-declare bcc_table cursor for
-select gno,bccno,bccname,type,noa,mech,mount,price,stkmount,memo from @t_result
-open bcc_table
-fetch next from bcc_table
-into @gno,@bccno,@bccname,@type,@noa,@mech,@mount,@price,@stkmount,@memo
-while(@@FETCH_STATUS <> -1)
-begin
-	if(@gno='0')
-	begin
-		set @total=@stkmount
-		set @t_price=@price
-	end
-	if(@gno='1')
-	begin
-		if(@type='入料')
-		begin
-			set @t_price = @price
-		end
-		update @t_result 
-		set stkmount=@total+( case when @type='領料' then -1* @mount else @mount end),price =@t_price
-		where current of bcc_table
-		set @total=@total+( case when @type='領料' then -1* @mount else @mount end)
-		set @t_total=@total
-		
-	end
-	set @t_gno=@gno
-	set @t_bccno=@bccno
-	set @t_bccname=@bccname
-	
-	fetch next from bcc_table
-	into @gno,@bccno,@bccname,@type,@noa,@mech,@mount,@price,@stkmount,@memo
-
-end
-close bcc_table
-deallocate bcc_table
-
-
+--輸出資料
 declare @result table(
 		gno nvarchar(1),
 		bccno nvarchar(20),
@@ -112,81 +44,180 @@ declare @result table(
 		memo nvarchar (200),
 		datea nvarchar(10)
 )
-declare @t_datea nvarchar(10)
-declare @t_stkmount nvarchar(10)
-set @t_bccno='#zzzz#zzzz'
 
---插入上期存貨到結果表單
+declare @gno nvarchar(1)
+declare	@bccno nvarchar(20)
+declare	@bccname nvarchar(50)
+declare	@datea nvarchar(10)
+declare	@mount decimal (14,2)
+declare	@stkmount decimal (18,2)
+declare	@total decimal (14,2)
+declare	@type nvarchar(20)
+declare	@t_bccno nvarchar(20)
+declare	@t_bccname nvarchar(50)
+
+
+--計算有盤存的上期餘額
+--取最後一筆有盤存的資料
+
 declare bcc_table cursor for
-select gno,bccno,bccname,type,noa,mech,mount,price,stkmount,memo,datea 
-from @t_result where bccno between @t_bbccno and @t_ebccno and datea < @t_bdate order by bccno,gno
+select b.bccno from bcce a left join bcces b on a.noa=b.noa where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate group by b.bccno
 open bcc_table
 fetch next from bcc_table
-into @gno,@bccno,@bccname,@type,@noa,@mech,@mount,@price,@stkmount,@memo,@datea
+into @bccno
 while(@@FETCH_STATUS <> -1)
 begin
-	if(@bccno!=@t_bccno and @t_bccno!='#zzzz#zzzz')
-	begin
-		insert into @result
-		select '0' gno,@t_bccno,@t_bccname,'上期存貨','','',null,@t_price,@t_stkmount,'',@t_datea
-	end
-	
-	set @t_bccno=@bccno
-	set @t_bccname=@bccname
-	set @t_price=@price
-	set @t_stkmount=@stkmount
-	set @t_datea=@datea
-
+	insert into @t_result
+	select top 1 b.bccno,b.bccname,a.datea,b.mount
+	from bcce a left join bcces b on a.noa=b.noa
+	where b.bccno =@bccno and a.datea < @t_bdate
+	order by a.datea desc
 	fetch next from bcc_table
-	into @gno,@bccno,@bccname,@type,@noa,@mech,@mount,@price,@stkmount,@memo,@datea
-
-end
-	if (@@CURSOR_ROWS=0)
-		begin
-			insert into @result
-			select '0' gno,@bccno,@bccname,'上期存貨','','',null,@t_price,@t_stkmount,'',@t_datea
-		end
-	else
-		begin
-			insert into @result
-			select '0' gno,@t_bccno,@t_bccname,'上期存貨','','',null,@t_price,@t_stkmount,'',@t_datea
-		end
-close bcc_table
-deallocate bcc_table
-
-set @t_bccno='#zzzz#zzzz'
-
-----之後插入追蹤結果
-declare bcc_table cursor for
-select gno,bccno,bccname,type,noa,mech,mount,price,stkmount,memo,datea from @result
-open bcc_table
-fetch next from bcc_table
-into @gno,@bccno,@bccname,@type,@noa,@mech,@mount,@price,@stkmount,@memo,@datea
-while(@@FETCH_STATUS <> -1)
-begin
-	if(@bccno!=@t_bccno and @t_bccno!='#zzzz#zzzz' and @t_gno=0)
-	begin
-		insert into @result
-		select '1' gno,bccno,bccname,type,noa,mech,mount,price,stkmount,memo,datea 
-		from @t_result
-		where bccno =@t_bccno and datea between @t_bdate and @t_edate
-	end
-	
-	if(@t_gno=1 and @t_bccno!=@bccno and @t_bccno!='#zzzz#zzzz')
-	begin
-		insert into @result
-		select '2' gno,@t_bccno,@t_bccname,'','','',null,null,@t_stkmount,null,null 
-	end
-	set @t_stkmount=@stkmount
-	set @t_bccname=@bccname
-	set @t_bccno=@bccno
-	set @t_gno=@gno
-	fetch next from bcc_table
-	into @gno,@bccno,@bccname,@type,@noa,@mech,@mount,@price,@stkmount,@memo,@datea
+	into @bccno
 
 end
 close bcc_table
 deallocate bcc_table
 
-select *
-from @result order by bccno,gno;
+--計算盤存到資料之前的入領料
+declare bcc_table cursor for
+select bccno,bccname,datea,mount from @t_result
+open bcc_table
+fetch next from bcc_table
+into @bccno,@bccname,@datea,@mount
+while(@@FETCH_STATUS <> -1)
+begin
+
+	set @mount=@mount
+		--入料
+		+isnull((select sum(b.mount) mount
+		from bccin a left join bccins b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea between @datea and @t_bdate
+		group by b.bccno),0)
+		--領料&耗用
+		-isnull((select sum(b.bkbcc) mount1
+		from bccout a left join bccouts b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea between @datea and @t_bdate
+		group by b.bccno),0)
+	--存入有盤存的期初
+	insert into @t_result2
+	select '0',@bccno,@bccname,'上期存貨','','',null,null,@mount,'',''
+	fetch next from bcc_table
+	into @bccno,@bccname,@datea,@mount
+
+end
+close bcc_table
+deallocate bcc_table
+
+
+--計算沒有盤存的上期餘額
+
+declare bcc_table cursor for
+select noa,product,datea,beginmount from bcc where noa not in (select c.noa bccno from bcce a left join bcces b on a.noa=b.noa right join bcc c on c.noa=b.bccno where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate)
+open bcc_table
+fetch next from bcc_table
+into @bccno,@bccname,@datea,@mount
+while(@@FETCH_STATUS <> -1)
+begin
+
+	set @mount=@mount
+		--入料
+		+isnull((select sum(b.mount) mount
+		from bccin a left join bccins b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea < @t_bdate
+		group by b.bccno),0)
+		--領料&耗用
+		-isnull((select sum(b.bkbcc) mount1
+		from bccout a left join bccouts b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea < @t_bdate
+		group by b.bccno),0)
+	--存入沒有盤存的期初
+	insert into @t_result2
+	select '0',@bccno,@bccname,'上期存貨','','',null,null,@mount,'',''
+
+	fetch next from bcc_table
+	into @bccno,@bccname,@datea,@mount
+
+end
+close bcc_table
+deallocate bcc_table
+
+--插入存耗追蹤
+
+declare bcc_table cursor for
+select gno,bccno from @t_result2
+open bcc_table
+fetch next from bcc_table
+into @gno,@bccno
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@gno=0)
+	begin
+		--入庫
+		insert into @t_result2
+		select '1',b.bccno,b.bccname,'入料' type,b.noa,'' mech,b.mount,b.price,0 stkmount,b.memo,a.datea
+		from bccin a left join bccins b on a.noa=b.noa
+		where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate
+		
+		--領料
+		insert into @t_result2
+		select '1',b.bccno,b.bccname,'領料' type,b.noa,c.mech,b.bkbcc,null price,0 stkmount,b.memo,a.datea
+		from bccout a left join bccouts b on a.noa=b.noa left join mech c on b.mechno=c.noa
+		where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate
+	end
+	fetch next from bcc_table
+	into @gno,@bccno
+
+end
+close bcc_table
+deallocate bcc_table
+
+
+insert into @result
+select * from @t_result2
+order by bccno,gno,noa
+
+set @t_bccno='#zzzz#zzzz'
+declare bcc_table cursor for
+select gno,bccno,bccname,type,mount,stkmount from @result
+open bcc_table
+fetch next from bcc_table
+into @gno,@bccno,@bccname,@type,@mount,@stkmount
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@gno=0)
+	begin
+		if(@t_bccno!='#zzzz#zzzz')
+		begin
+			insert into @result
+			select '2',@t_bccno,@t_bccname,'','','',null,null,@total,'',''
+		end
+		set @total=@stkmount
+		set @t_bccname=@bccname
+		set @t_bccno=@bccno
+	end
+	if(@gno=1)
+	begin
+		if(@type='領料')
+		begin
+			set @total=@total-@mount
+		end
+		else
+		begin
+			set @total=@total+@mount
+		end
+		
+		update @result 
+		set stkmount=@total
+		where current of bcc_table
+	end
+	
+	fetch next from bcc_table
+	into @gno,@bccno,@bccname,@type,@mount,@stkmount
+end
+	insert into @result
+	select '2',@t_bccno,@t_bccname,'','','',null,null,@total,'',''
+close bcc_table
+deallocate bcc_table
+
+select * from @result order by bccno,gno,noa;
