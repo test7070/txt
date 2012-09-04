@@ -1,0 +1,169 @@
+z_bcc4:--z_bcc4
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bbccno nvarchar(20)
+	declare @t_ebccno nvarchar(20)
+	declare @t_bmechno nvarchar(20)
+	declare @t_emechno nvarchar(20)
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then char(255) else [2] end
+	set @t_bbccno = case when '#non'=[3] then '' else [3] end
+	set @t_ebccno = case when '#non'=[4] then char(255) else [4] end
+	set @t_bmechno = case when '#non'=[5] then '' else [5] end
+	set @t_emechno = case when '#non'=[6] then char(255) else [6] end
+	--*****************************************************************************************	
+declare @listmech table(
+	n int,
+	[mechno] nvarchar(10),
+	[mech] nvarchar(20)
+)
+insert into @listmech
+select ROW_NUMBER()over(order by mech) ,noa,mech from mech
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+       drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+       drop table #result
+END
+create table #tmp(
+	gno nvarchar(1),
+	bccno nvarchar(20),
+	bccname nvarchar(50),
+	stkmount decimal (10,2),
+	price decimal (14,2),
+	datea nvarchar(10)
+)
+
+declare @cmd nvarchar(max)
+declare @n int
+declare @mech nvarchar(20)
+
+declare cursor_table cursor for
+select n,mech from  @listmech
+open cursor_table
+fetch next from cursor_table
+into @n,@mech
+while(@@FETCH_STATUS <> -1)
+begin
+	set @cmd = 'alter table #tmp add mount'+CONVERT(nvarchar(3),@n)+' decimal (10,2)'
+	EXECUTE sp_executesql @cmd
+fetch next from cursor_table
+into @n,@mech
+end
+close cursor_table
+deallocate cursor_table
+
+declare @gno nvarchar(1)
+declare @bccno nvarchar(20)
+declare @bccname nvarchar(50)
+declare @stkmount decimal (14,2)
+declare @price decimal (14,2)
+declare @datea nvarchar(10)
+declare @bkbcc decimal (14,2)
+declare @t_bccno nvarchar(20)
+set @t_bccno='#zzzz#zzzz'
+declare @field_mount nvarchar(200)
+
+declare cursor_table cursor for 
+select b.bccno,b.bccname,0 stkmount,0 price,a.datea,b.bkbcc,b.mechno
+from bccout a left join bccouts b on a.noa=b.noa order by b.bccno
+open cursor_table
+fetch next from cursor_table
+into @bccno,@bccname,@stkmount,@price,@datea,@bkbcc,@mech
+while(@@FETCH_STATUS <> -1)
+begin
+	set @n = 0
+	select  @n=n from @listmech where [mechno]=@mech
+	if not(@n=0)
+	begin
+		set @field_mount =  'mount'+CONVERT(nvarchar(3),@n)
+		
+		if not exists(select * from #tmp where bccno=@bccno and datea=@datea)
+		begin
+			insert into #tmp (gno,bccno,bccname,stkmount,price,datea)
+			values('0',@bccno,@bccname,@stkmount,@price,@datea)
+		end
+		if(@t_bccno!=@bccno)
+		begin 
+			insert into #tmp (gno,bccno,bccname,stkmount,price)
+			values('1',@bccno,@bccname,@stkmount,@price)
+		end
+		
+		set @t_bccno=@bccno
+		set @cmd = 'update #tmp set '+@field_mount+'=@bkbcc where bccno=@bccno and datea=@datea'
+		EXECUTE sp_executesql @cmd,@params=N'@bkbcc int,@bccno nvarchar(20),@datea nvarchar(10)',@bkbcc=@bkbcc,@bccno=@bccno,@datea=@datea
+	end
+fetch next from cursor_table
+into @bccno,@bccname,@stkmount,@price,@datea,@bkbcc,@mech
+end
+
+close cursor_table
+deallocate cursor_table
+
+declare @column nvarchar(max)
+declare @columns nvarchar(max)
+declare @columns2 nvarchar(max)
+
+
+set @columns = (select 'mount'+CONVERT(nvarchar(3),n)+'=(select sum(mount'+CONVERT(nvarchar(3),n)+') from #tmp where gno=0 and bccno=@bccno),' from @listmech FOR XML PATH(''))
+declare bcc_table cursor for
+select gno,bccno from #tmp
+open bcc_table
+fetch next from bcc_table
+into @gno,@bccno
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@gno=1)
+	Begin
+		set @cmd = 'update #tmp set '+left(@columns,len(@columns)-1)+' where current of bcc_table'
+		EXECUTE sp_executesql @cmd,@params=N'@bccno nvarchar(20)',@bccno=@bccno
+	End
+	
+	fetch next from bcc_table
+	into @gno,@bccno
+
+end
+close bcc_table
+deallocate bcc_table
+
+
+
+
+
+
+
+
+
+
+
+
+
+--select b.bccno,b.bccname,0 stkmount,0 price,a.datea,b.bkbcc,b.mechno
+--from bccout a left join bccouts b on a.noa=b.noa
+
+
+set @columns = (select 'CONVERT(nvarchar(20),isnull(mount'+CONVERT(nvarchar(3),n)+',0))+' from @listmech FOR XML PATH(''))
+set @columns2 = (select 'isnull(mount'+CONVERT(nvarchar(3),n)+',0)+' from @listmech FOR XML PATH(''))
+
+create table #result(
+	gno nvarchar(1),
+	bccno nvarchar(20),
+	bccname nvarchar(50),
+	stkmount decimal (10,2),
+	price decimal (14,2),
+	datea nvarchar(10),
+	mount nvarchar(max),
+	total decimal (14,2)
+)
+
+set @cmd='insert into #result select gno,bccno,bccname,stkmount,price,datea,'+left(@columns,len(@columns)-1)+','+left(@columns2,len(@columns2)-1)+' from #tmp order by bccno,gno,datea'
+EXECUTE sp_executesql @cmd
+
+
+set @column =(select mech+'' from @listmech FOR XML PATH(''))
+
+select *
+from #result;
