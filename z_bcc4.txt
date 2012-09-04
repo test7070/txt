@@ -12,14 +12,17 @@ z_bcc4:--z_bcc4
 	set @t_bmechno = case when '#non'=[5] then '' else [5] end
 	set @t_emechno = case when '#non'=[6] then char(255) else [6] end
 	--*****************************************************************************************	
+--存放機台資料的表格，後面來判斷要增加幾個存放機台的欄位
 declare @listmech table(
 	n int,
 	[mechno] nvarchar(10),
 	[mech] nvarchar(20)
 )
+--將機台資料存入
 insert into @listmech
-select ROW_NUMBER()over(order by mech) ,noa,mech from mech
+select ROW_NUMBER()over(order by mech) ,noa,mech from mech order by noa
 
+--判斷暫存使用的資料表是否存在，存在則刪除
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
        drop table #tmp
@@ -28,19 +31,22 @@ IF OBJECT_ID('tempdb..#result')is not null
 BEGIN
        drop table #result
 END
+--建立暫存的表格(固定機台所使用的表格)
 create table #tmp(
 	gno nvarchar(1),
 	bccno nvarchar(20),
 	bccname nvarchar(50),
 	stkmount decimal (10,2),
 	price decimal (14,2),
-	datea nvarchar(10)
+	datea nvarchar(10),
+	total decimal (14,2)
 )
 
 declare @cmd nvarchar(max)
 declare @n int
 declare @mech nvarchar(20)
 
+--根據機台來增加固定機台表格的欄位
 declare cursor_table cursor for
 select n,mech from  @listmech
 open cursor_table
@@ -67,14 +73,18 @@ declare @t_bccno nvarchar(20)
 set @t_bccno='#zzzz#zzzz'
 declare @field_mount nvarchar(200)
 
+--插入領料的資料
 declare cursor_table cursor for 
-select b.bccno,b.bccname,0 stkmount,0 price,a.datea,b.bkbcc,b.mechno
-from bccout a left join bccouts b on a.noa=b.noa order by b.bccno
+select b.bccno,b.bccname,c.stkmount,c.price,a.datea,b.bkbcc,b.mechno
+from bccout a left join bccouts b on a.noa=b.noa left join bcc c on b.bccno=c.noa
+where a.datea between @t_bdate and @t_edate and b.bccno between @t_bbccno and @t_ebccno and b.mechno between @t_bmechno and @t_emechno
+order by b.bccno
 open cursor_table
 fetch next from cursor_table
 into @bccno,@bccname,@stkmount,@price,@datea,@bkbcc,@mech
 while(@@FETCH_STATUS <> -1)
 begin
+	--根據領料的機台判斷要寫入哪一個欄位(mount1,mount2,.....)資料
 	set @n = 0
 	select  @n=n from @listmech where [mechno]=@mech
 	if not(@n=0)
@@ -83,11 +93,13 @@ begin
 		
 		if not exists(select * from #tmp where bccno=@bccno and datea=@datea)
 		begin
+			--增加領料紀錄
 			insert into #tmp (gno,bccno,bccname,stkmount,price,datea)
 			values('0',@bccno,@bccname,@stkmount,@price,@datea)
 		end
 		if(@t_bccno!=@bccno)
 		begin 
+			--增加小計的欄位
 			insert into #tmp (gno,bccno,bccname,stkmount,price)
 			values('1',@bccno,@bccname,@stkmount,@price)
 		end
@@ -107,8 +119,9 @@ declare @column nvarchar(max)
 declare @columns nvarchar(max)
 declare @columns2 nvarchar(max)
 
-
+--更新小計與合計內容
 set @columns = (select 'mount'+CONVERT(nvarchar(3),n)+'=(select sum(mount'+CONVERT(nvarchar(3),n)+') from #tmp where gno=0 and bccno=@bccno),' from @listmech FOR XML PATH(''))
+set @columns2 = (select 'isnull(mount'+CONVERT(nvarchar(3),n)+',0)+' from @listmech FOR XML PATH(''))
 declare bcc_table cursor for
 select gno,bccno from #tmp
 open bcc_table
@@ -122,6 +135,9 @@ begin
 		EXECUTE sp_executesql @cmd,@params=N'@bccno nvarchar(20)',@bccno=@bccno
 	End
 	
+	set @cmd = 'update #tmp set total='+left(@columns2,len(@columns2)-1)+' where current of bcc_table'
+	EXECUTE sp_executesql @cmd
+	
 	fetch next from bcc_table
 	into @gno,@bccno
 
@@ -130,24 +146,9 @@ close bcc_table
 deallocate bcc_table
 
 
-
-
-
-
-
-
-
-
-
-
-
---select b.bccno,b.bccname,0 stkmount,0 price,a.datea,b.bkbcc,b.mechno
---from bccout a left join bccouts b on a.noa=b.noa
-
-
-set @columns = (select 'CONVERT(nvarchar(20),isnull(mount'+CONVERT(nvarchar(3),n)+',0))+' from @listmech FOR XML PATH(''))
+--將全部的機台資料寫入到一個欄位(mount)中
+set @columns = (select 'CONVERT(nvarchar(20),isnull(mount'+CONVERT(nvarchar(3),n)+',0))+'+'''      '''+'+' from @listmech FOR XML PATH(''))
 set @columns2 = (select 'isnull(mount'+CONVERT(nvarchar(3),n)+',0)+' from @listmech FOR XML PATH(''))
-
 create table #result(
 	gno nvarchar(1),
 	bccno nvarchar(20),
@@ -156,14 +157,22 @@ create table #result(
 	price decimal (14,2),
 	datea nvarchar(10),
 	mount nvarchar(max),
-	total decimal (14,2)
+	total decimal (14,2),
+	columns nvarchar(max)
 )
+set @column =(select mech+'<span></span>' from @listmech FOR XML PATH(''))
+set @cmd='insert into #result select gno,bccno,bccname,stkmount,price,datea,'+left(@columns,len(@columns)-1)+','+left(@columns2,len(@columns2)-1)+','''+@column+''''
+set @cmd=@cmd+' from #tmp order by bccno,gno,datea'
 
-set @cmd='insert into #result select gno,bccno,bccname,stkmount,price,datea,'+left(@columns,len(@columns)-1)+','+left(@columns2,len(@columns2)-1)+' from #tmp order by bccno,gno,datea'
 EXECUTE sp_executesql @cmd
 
 
-set @column =(select mech+'' from @listmech FOR XML PATH(''))
+--**************************************************************************************----
 
-select *
-from #result;
+--固定機台用這一個，每增加一個欄位會多一個mount(mount1,mount2,mount3,.......)
+--固定機台是指EXCEL是固定的
+select * from #tmp order by bccno,gno,datea;
+
+--要變動機台使用這一個，機台欄位用mount即可
+--變動機台是指EXCEL是用一個欄位來放入所有變動機台的資料
+--select * from #result;
