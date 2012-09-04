@@ -560,6 +560,8 @@ z_paytran3:--z_paytran3
 	declare @minusmoney float
 	declare @string nvarchar(max)
 	declare @n int
+	declare @checkno  nvarchar(20)
+	declare @pno nvarchar(1)
 	------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#carteam')is not null
 	BEGIN
@@ -594,18 +596,20 @@ z_paytran3:--z_paytran3
 	END
 	create table #z_paytran3(
 		gno nvarchar(1),
+		pno nvarchar(1),
 		driverno nvarchar(20),
 		driver nvarchar(50),
 		carno nvarchar(20),
 		[money] float,
 		plusmoney float,
 		minusmoney float,
-		total float
+		total float,
+		checkno nvarchar(20),
 	)
 	
 	set @cmd=
-	" select '0',isnull(a.driverno,''),isnull(b.namea,''),isnull(a.carno,''),"+
-	" sum(ISNULL(a.total2,0)),0,0,0"+
+	" select '0','1',isnull(a.driverno,''),isnull(b.namea,''),isnull(a.carno,''),"+
+	" sum(ISNULL(a.total2,0)),0,0,0,''"+
 	" from trans"+@t_accy+" a"+
 	" left join driver b on a.driverno=b.noa"+ 
 	" left join calctypes d  on a.calctype=d.noa+d.noq"+
@@ -638,7 +642,7 @@ z_paytran3:--z_paytran3
 		begin
 			set @driver=''
 			select @driver=namea from driver where noa=@driverno
-			insert into #z_paytran3(gno,driverno,driver,carno)values('0',@driverno,@driver,@carno)
+			insert into #z_paytran3(gno,pno,driverno,driver,carno)values('0','1',@driverno,@driver,@carno)
 		end
 		update #z_paytran3 set plusmoney=@plusmoney,minusmoney=@minusmoney where driverno=@driverno and carno=@carno
 		fetch next from cursor_table
@@ -648,14 +652,46 @@ z_paytran3:--z_paytran3
 	deallocate cursor_table
 	--------------------------------------------------------------------
 	drop table #carteam
+	
+	declare cursor_table cursor for
+	select driverno,carno from #z_paytran3 group  by  driverno,carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @checkno=''
+		select top 1 @checkno=checkno from tre101 where driverno=@driverno and carno=@carno and (datea between @t_bdate and @t_edate) and len(isnull(checkno,''))>0 
+		update #z_paytran3 set checkno=@checkno where driverno=@driverno and carno=@carno
+		if len(@checkno)>0
+			update #z_paytran3 set pno='0' where driverno=@driverno
+		fetch next from cursor_table
+		into @driverno,@carno
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	declare cursor_table cursor for
+	select driverno,min(pno),SUM([money]),SUM(plusmoney),SUM(minusmoney) from #z_paytran3 group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@pno,@money,@plusmoney,@minusmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into #z_paytran3 (gno,pno,driverno,[money],plusmoney,minusmoney)values('1',@pno,@driverno,@money,@plusmoney,@minusmoney)	
+		fetch next from cursor_table
+		into @driverno,@pno,@money,@plusmoney,@minusmoney
+	end
+	close cursor_table
+	deallocate cursor_table
 	--------------------------------------------------------------------
-	insert into #z_paytran3 select '1',driverno,'','',SUM([money]),SUM(plusmoney),SUM(minusmoney),0 from #z_paytran3 group by driverno
-	insert into #z_paytran3 select '2',CHAR(255),'','',SUM([money]),SUM(plusmoney),SUM(minusmoney),0 from #z_paytran3 where gno='0'
+	insert into #z_paytran3 select '2','1',CHAR(255),'','',SUM([money]),SUM(plusmoney),SUM(minusmoney),0,'' from #z_paytran3 where gno='0'
 	update #z_paytran3 set total=[money]+plusmoney-minusmoney
 	
-	select gno,driverno aa,driver bb,carno
+	select gno,driverno aa,driver bb,carno,checkno,pno
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) [money]
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plusmoney),1)),4,12)) pm
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minusmoney),1)),4,12)) mm
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
-	from #z_paytran3 order by driverno,gno,carno;
+	from #z_paytran3 order by pno,driverno,gno,carno
+	drop table #z_paytran3;
