@@ -1,36 +1,97 @@
 ﻿z_carborr:--z_carborr
-declare @t_bdate nvarchar(10)
-declare @t_edate nvarchar(10)
-declare @t_bdriverno nvarchar(20)
-declare @t_edriverno nvarchar(20)
-set @t_bdate = case when '#non' = [1] then '' else [1] end
-set @t_edate = case when '#non' = [2] then CHAR(255) else [2] end
-set @t_bdriverno = case when '#non' = [3] then '' else [3] end
-set @t_edriverno = case when '#non' = [4] then CHAR(255) else [4] end
-declare @tmp table(
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then CHAR(255) else [2] end
+	set @t_bdriverno = case when '#non'=[3] then '' else [3] end
+	set @t_edriverno = case when '#non'=[4] then CHAR(255) else [4] end	
+----------------------------------------------------------------------------------------
+	declare @gno nvarchar(3)
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(20)
+	declare @moneys float
+	declare @datea nvarchar(10)
+	declare @mon nvarchar(10)
+	declare @memo nvarchar(200)
+	declare @n int
+----------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#z_carborr')is not null
+	BEGIN
+		set @cmd = 'drop table #z_carborr'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_carborr(
 		gno nvarchar(1),
 		noa nvarchar(20),
-		datea nvarchar(10), 
+		datea nvarchar(10),
+		driverno nvarchar(20),
+		driver nvarchar(50),
+		mon nvarchar(10),
+		memo nvarchar(200),
+		moneys float
+		
+	)
+	
+	set @cmd=
+		" select '0' gno,a.noa noa,a.datea datea,a.driverno driverno,a.driver driver,a.mon mon,a.memo memo,isnull(a.money,0) moneys"+
+		" from carborr a "+
+		" where (a.datea  between @t_bdate and @t_edate)"+
+		" and (a.driverno between @t_bdriverno and @t_edriverno)"
+	insert #z_carborr
+	execute sp_executesql @cmd,N'@t_bdate  nvarchar(10),@t_edate  nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno  nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
+	
+	insert into #z_carborr select '1','','',driverno,'','','',SUM(moneys)
+	from  #z_carborr group  by  driverno
+	
+	insert into #z_carborr select '2','','',CHAR(255),'','','',SUM(moneys)
+	from  #z_carborr  where not(gno = 1)	
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+declare @tmp table(
+		gno nvarchar(3),
+		datea nvarchar(10),
 		driverno nvarchar(20),
 		driver nvarchar(50),
 		moneys float,
-		mon nvarchar(10),
-		memo nvarchar(200)
-)
-insert into @tmp
-select '0' gno,noa,datea,driverno,driver,money,mon,memo
-from carborr
-where (datea between @t_bdate and @t_edate) and
-(driverno between @t_bdriverno and @t_edriverno)
-
-
-insert into @tmp
-select '1' gno,'','',MAX(driverno),'',sum(moneys),'',''
-from @tmp
-
-
-select gno,noa,datea,driverno,driver,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12))  moneys,
-mon,memo
-from @tmp
-order by driverno,gno;
+		mon  nvarchar(10),
+		memo  nvarchar(200)
+	)
+	declare cursor_table cursor for
+	select gno,datea,driverno,driver,moneys,mon,memo
+	from #z_carborr order by driverno,gno
+	open cursor_table
+	fetch next from cursor_table
+	into @gno,@datea,@driverno,@driver,@moneys,@mon,@memo
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @gno='0' or @gno='2'
+		begin
+			insert into @tmp(gno,datea,driverno,driver,mon,memo,moneys)
+			values(@gno,@datea,@driverno,@driver,@mon,@memo,@moneys)
+		end
+		if @gno='1'
+		begin
+			select @n=COUNT(1) from #z_carborr where gno='0' and  driverno=@driverno
+			if @n>1
+			begin
+				insert into @tmp(gno,datea,driverno,driver,mon,memo,moneys)
+				values('0','',@driverno,'','小計：','',@moneys)
+			end
+			insert into @tmp(gno,driverno)values('1',@driverno)
+		end
+		fetch next from cursor_table
+		into @gno,@datea,@driverno,@driver,@moneys,@mon,@memo
+	end
+	close cursor_table
+	deallocate cursor_table
+	drop table #z_carborr
+		
+	select gno,datea,driverno,driver,mon,memo
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) moneys
+	from @tmp order by driverno,gno;
