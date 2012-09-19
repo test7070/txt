@@ -56,16 +56,171 @@ z_tran01:--z_tran01
 	set @z_minusmoney  = case when '#non'=[26] then '' else [26] end
 	----------------------------------------------------------------------------------------------
 	declare @string nvarchar(max)
-	IF OBJECT_ID('tempdb..#z_tran01')is not null
+	declare @n int
+	----------------------------------------------------------------------------------------------
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#carkind')is not null
 	BEGIN
-		set @cmd = 'drop table #z_tran01'
+		set @cmd = 'drop table #carkind'
 		EXECUTE sp_executesql @cmd
 	END
-	create table #z_tran01(
-		noa nvarchar(10)
+	create table #carkind(
+		noa nvarchar(20)
 	)
+	set @string = @t_carkind
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carkind select @string
+			end
+			break
+		end
+		insert into #carkind select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(3),
+		carno nvarchar(20),
+		driverno nvarchar(max),
+		datea nvarchar(10),
+		miles float,
+		tranmoney float,
+		drivermoney float,
+		oilmount float,
+		oilmoney float,
+		tolls float,
+		ticket float,
+		reserve float,
+		profit  float
+	)
+	-----------------------------------------------------------------------------------------------------------
+	--出車單
+	set @cmd  =
+	" select '0',a.carno,a.driverno,a.datea,sum(ISNULL(miles,0))"+
+	" ,sum(case when @t_option1='收金額'  then  round(a.price*a.mount,0) else round(a.price2*a.mount2,0) end)"+
+	" ,sum(round(a.price2*a.mount2*a.discount,0))"+
+	" ,0,0,0,0,sum(isnull(a.reserve,0)),0"+
+	" from trans"+@t_accy+" a"+
+	" left join car2 b on a.carno=b.carno"+
+	" left join #carkind c on b.carkindno=c.noa"+
+	" left  join  calctypes d on d.noa+d.noq=a.calctype "+
+	" where (c.noa is not null)"+
+	" and  isnull(d.isoutside,0)=0"+
+	" and (a.trandate between @t_btrandate and @t_etrandate)"+
+	" group by a.carno,a.driverno,a.datea"
 	
-	insert into #z_tran01
-	select noa from trans101 where (trandate between @t_btrandate and @t_etrandate)
-	select  *  from  #z_tran01
-	drop table #z_tran01;
+	insert into @tmp
+	execute sp_executesql @cmd,N'@t_option1 nvarchar(max),@t_btrandate nvarchar(10),@t_etrandate nvarchar(10)',
+	@t_option1=@t_option1,@t_btrandate=@t_btrandate,@t_etrandate=@t_etrandate
+	-----------------------------------------------------------------------------------------------------------
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @mount  float
+	declare @money  float	
+	-----------------------------------------------------------------------------------------------------------
+	--油費
+	declare cursor_table cursor for
+	select a.carno,a.driverno,a.datea,SUM(isnull(a.mount,0)),SUM(isnull(a.[money],0))
+	from oil a
+	left join (select carno  from  @tmp  group  by  carno) b on a.carno=b.carno
+	where (b.carno is not null)
+	and (a.datea between @t_btrandate and @t_etrandate)
+	group  by  a.carno,a.driverno,a.datea
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@driverno,@datea,@mount,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not  exists(select  *  from  @tmp  where  carno=@carno  and  driverno=@driverno  and  datea=@datea)
+			insert  into  @tmp(gno,carno,driverno,datea)values('0',@carno,@driverno,@datea)
+		update @tmp set  oilmount=@mount,oilmoney=@money where  carno=@carno  and  driverno=@driverno  and  datea=@datea
+		
+		fetch next from cursor_table
+		into @carno,@driverno,@datea,@mount,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	-----------------------------------------------------------------------------------------------------------
+	--ETC
+	declare cursor_table cursor for
+	select a.carno,a.driverno,a.datea,SUM(isnull(a.[money],0))
+	from etc a
+	where (a.typea='ETC' or a.typea='CASH')
+	and (a.datea between @t_btrandate and @t_etrandate)
+	group  by  a.carno,a.driverno,a.datea
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@driverno,@datea,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not  exists(select  *  from  @tmp  where  carno=@carno  and  driverno=@driverno  and  datea=@datea)
+			insert  into  @tmp(gno,carno,driverno,datea)values('0',@carno,@driverno,@datea)
+		update @tmp set  tolls=@money where  carno=@carno  and  driverno=@driverno  and  datea=@datea
+		
+		fetch next from cursor_table
+		into @carno,@driverno,@datea,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	-----------------------------------------------------------------------------------------------------------
+	--罰單
+	declare cursor_table cursor for
+	select a.carno,a.driverno,a.datea,SUM(isnull(a.comppay,0))
+	from carborr a
+	where comppay!=0
+	and (a.datea between @t_btrandate and @t_etrandate)
+	group  by  a.carno,a.driverno,a.datea
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@driverno,@datea,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not  exists(select  *  from  @tmp  where  carno=@carno  and  driverno=@driverno  and  datea=@datea)
+			insert  into  @tmp(gno,carno,driverno,datea)values('0',@carno,@driverno,@datea)
+		update @tmp set  ticket=@money where  carno=@carno  and  driverno=@driverno  and  datea=@datea
+		
+		fetch next from cursor_table
+		into @carno,@driverno,@datea,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	-----------------------------------------------------------------------------------------------------------
+	update  @tmp set profit=ISNULL(tranmoney,0)-ISNULL(drivermoney,0)-ISNULL(oilmoney,0)-ISNULL(tolls,0)-ISNULL(ticket,0)-ISNULL(reserve,0)
+	if @t_btrandate=@t_etrandate
+	begin
+		insert into  @tmp
+		select '1','','','',SUM(isnull(miles,0)),SUM(isnull(tranmoney,0)),SUM(isnull(drivermoney,0))
+		,SUM(isnull(oilmount,0)),SUM(isnull(oilmoney,0)),SUM(isnull(tolls,0)),SUM(isnull(ticket,0)),SUM(isnull(reserve,0)),SUM(isnull(profit,0))
+		from @tmp where gno='0'
+	end
+	else
+	begin
+		insert into  @tmp
+		select '1',carno,driverno,'',SUM(isnull(miles,0)),SUM(isnull(tranmoney,0)),SUM(isnull(drivermoney,0))
+		,SUM(isnull(oilmount,0)),SUM(isnull(oilmoney,0)),SUM(isnull(tolls,0)),SUM(isnull(ticket,0)),SUM(isnull(reserve,0)),SUM(isnull(profit,0))
+		from @tmp where gno='0'
+		group  by  carno,driverno
+	end
+	
+	select a.*,d.namea 司機,c.kind 類別,b.caryear 年份,b.cylinder 汽缸
+	,cast(case when isnull(tranmoney,0)=0 then 0 else round(isnull(oilmoney,0)*100/isnull(tranmoney,0),0) end as nvarchar)+'%' 耗油比
+	,cast(case when isnull(oilmount,0)=0 then 0 else round(isnull(miles,0)/isnull(oilmount,0),2) end as nvarchar) 公里升
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(tranmoney,0)),1)),4,12)) 收入
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(drivermoney,0)),1)),4,12)) 薪資
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(oilmoney,0)),1)),4,12)) 油費
+	,CONVERT(money,isnull(oilmount,0),1) 油量
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(tolls,0)),1)),4,12)) 通行費
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(ticket,0)),1)),4,12)) 罰款
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.reserve,0)),1)),4,12)) 寄櫃費
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.profit,0)),1)),4,12)) 淨利
+	from  @tmp a
+	left join car2 b on a.carno=b.carno
+	left join carKind c on b.carkindno=c.noa
+	left join driver d on a.driverno=d.noa
+	order  by  a.carno,a.driverno,gno;
