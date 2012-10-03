@@ -1,6 +1,7 @@
 z_paytran1:--z_paytran1
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
+	declare @pagecount int
 	declare @t_accy nvarchar(10)
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -9,7 +10,12 @@ z_paytran1:--z_paytran1
 	declare @t_bdriverno nvarchar(20)
 	declare @t_edriverno nvarchar(20)
 	declare @t_rc2no nvarchar(30)
+	declare @t_carno  nvarchar(20)
+	declare @t_sort1 nvarchar(max)
+	declare @t_noa nvarchar(max)
+	declare @t_carteamno nvarchar(max)
 	
+	set @pagecount = 34
 	set @t_accy = [1]
 	set @t_bdate = case when '#non'=[2] then '' else [2] end
 	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
@@ -18,12 +24,42 @@ z_paytran1:--z_paytran1
 	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
 	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
 	set @t_rc2no = case when '#non'=[8] then '' else [8] end
+	set @t_carno  = case when '#non'=[9] then '' else [9] end
+	set @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set @t_noa = case when '#non'=[11] then '' else [11] end
+	set @t_carteamno = case when '#non'=[12] then '' else [12] end
 	----------------------------------------------------------------------------------------------------------------------------
 	declare @driverno nvarchar(20)
 	declare @driver nvarchar(20)
 	declare @money float
 	declare @plusmoney float
 	declare @minusmoney float
+	declare @string nvarchar(max)
+	declare @n int
+	----------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#carteam')is not null
+	BEGIN
+		set @cmd = 'drop table #carteam'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carteam(
+		noa nvarchar(10)
+	)
+	set @string = @t_carteamno
+	while(1=1 and LEN(@string)>0)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carteam select @string
+			end
+			break
+		end
+		insert into #carteam select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
 	----------------------------------------------------------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#z_paytran1')is not null
 	BEGIN
@@ -44,14 +80,17 @@ z_paytran1:--z_paytran1
 	
 	set @cmd=
 	" select '0',isnull(a.driverno,''),isnull(b.namea,''),"+
-	" sum(ISNULL(a.total2,0)),SUM(ISNULL(c.[money],0)),0,0,0,0"+
+	" sum(ISNULL(a.total2,0)),SUM(ISNULL(g.[money],0)),0,0,0,0"+
 	" from trans"+@t_accy+" a"+
 	" left join driver b on a.driverno=b.noa"+ 
-	" left join tres"+@t_accy+" c on a.noa=c.tranno and a.noq=c.trannoq"+
 	" left join calctypes d  on a.calctype=d.noa+d.noq"+
+	" left join #carteam f on f.noa=a.carteamno "+
+	" left join tres"+@t_accy+" g on a.noa=g.tranno"+
+	" left join tre"+@t_accy+" h on g.noa=h.noa"+
 	" where d.isoutside=1"+ 
+	" and (f.noa is not null)"+
 	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
-	" and (a.datea between @t_bdate and @t_edate)"+
+	" and (h.datea between @t_bdate and @t_edate)"+
 	" and (len(@t_rc2no)=0 or a.noa=@t_rc2no)"+
 	" group  by  isnull(a.driverno,''),isnull(b.namea,'')"
 
@@ -59,10 +98,34 @@ z_paytran1:--z_paytran1
 	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
 		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
 	
+	declare  @listTre  table(
+		noa nvarchar(20)
+	)
+	set @cmd=
+	" select h.noa"+
+	" from trans"+@t_accy+" a"+
+	" left join driver b on a.driverno=b.noa"+ 
+	" left join calctypes d  on a.calctype=d.noa+d.noq"+
+	" left join #carteam f on f.noa=a.carteamno "+
+	" left join tres"+@t_accy+" g on a.noa=g.tranno"+
+	" left join tre"+@t_accy+" h on g.noa=h.noa"+
+	" where d.isoutside=1"+ 
+	" and (f.noa is not null)"+
+	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
+	" and (h.datea between @t_bdate and @t_edate)"+
+	" and (len(@t_rc2no)=0 or a.noa=@t_rc2no)"+
+	" group  by h.noa" 
+	
+	insert into @listTre
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
+	
 	declare cursor_table cursor for
-	select driverno,sum(isnull(plusmoney,0)),sum(isnull(minusmoney,0)) from carchg 
-	where (datea between @t_bdate and @t_edate) and (driverno between @t_bdriverno and @t_edriverno)
-	group by driverno
+	select a.driverno,sum(isnull(a.plusmoney,0)),sum(isnull(a.minusmoney,0))
+	from carchg a
+	left join @listTre b on a.treno=b.noa
+	where b.noa  is  not  null
+	group by a.driverno
 	open cursor_table
 	fetch next from cursor_table
 	into @driverno,@plusmoney,@minusmoney
@@ -92,7 +155,6 @@ z_paytran1:--z_paytran1
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minusmoney),1)),4,12)) mm
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
 	from #z_paytran1 order by gno,driverno;
-	
 	
 z_paytran2:--ref:z_tre1
 	SET QUOTED_IDENTIFIER OFF
@@ -466,6 +528,9 @@ z_paytran2:--ref:z_tre1
 	select  (driverno+carno) x,driver namea,*,REPLACE(memo,SPACE(1),'&nbsp'+char(59))xmemo  from  @tmp order by noa;
 	
 z_carchg:--z_carchg
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
 	declare @t_accy nvarchar(10)
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -476,7 +541,10 @@ z_carchg:--z_carchg
 	declare @t_rc2no nvarchar(30)
 	declare @t_carno  nvarchar(20)
 	declare @t_sort1 nvarchar(max)
-
+	declare @t_noa nvarchar(max)
+	declare @t_carteamno nvarchar(max)
+	
+	set @pagecount = 34
 	set @t_accy = [1]
 	set @t_bdate = case when '#non'=[2] then '' else [2] end
 	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
@@ -485,8 +553,65 @@ z_carchg:--z_carchg
 	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
 	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
 	set @t_rc2no = case when '#non'=[8] then '' else [8] end
-	set  @t_carno  = case when '#non'=[9] then '' else [9] end
-	set  @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set @t_carno  = case when '#non'=[9] then '' else [9] end
+	set @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set @t_noa = case when '#non'=[11] then '' else [11] end
+	set @t_carteamno = case when '#non'=[12] then '' else [12] end
+	----------------------------------------------------------------------------------------------------------------------------
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(20)
+	declare @money float
+	declare @plusmoney float
+	declare @minusmoney float
+	declare @string nvarchar(max)
+	declare @n int
+	----------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#carteam')is not null
+	BEGIN
+		set @cmd = 'drop table #carteam'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carteam(
+		noa nvarchar(10)
+	)
+	set @string = @t_carteamno
+	while(1=1 and LEN(@string)>0)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carteam select @string
+			end
+			break
+		end
+		insert into #carteam select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	---------------------------------------------------------------------
+	declare  @listTre  table(
+		noa nvarchar(20)
+	)
+	set @cmd=
+	" select h.noa"+
+	" from trans"+@t_accy+" a"+
+	" left join driver b on a.driverno=b.noa"+ 
+	" left join calctypes d  on a.calctype=d.noa+d.noq"+
+	" left join #carteam f on f.noa=a.carteamno "+
+	" left join tres"+@t_accy+" g on a.noa=g.tranno"+
+	" left join tre"+@t_accy+" h on g.noa=h.noa"+
+	" where d.isoutside=1"+ 
+	" and (f.noa is not null)"+
+	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
+	" and (h.datea between @t_bdate and @t_edate)"+
+	" and (len(@t_rc2no)=0 or a.noa=@t_rc2no)"+
+	" group  by h.noa" 
+	
+	insert into @listTre
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
+
 	declare @result table(
 			gno  nvarchar(1),
 			noa nvarchar(20),
@@ -500,10 +625,10 @@ z_carchg:--z_carchg
 			memo nvarchar(20)
 	)
 	insert into @result
-	select '0' gno,noa,datea,carno,driverno,driver,plusitem+minusitem,plusmoney,minusmoney,left(ltrim(rtrim(memo)),20)
-	from carchg
-	where (datea between @t_bdate and @t_edate) and
-	(driverno between @t_bdriverno and @t_edriverno)
+	select '0' gno,a.noa,datea,carno,driverno,driver,plusitem+minusitem,plusmoney,minusmoney,left(ltrim(rtrim(memo)),20)
+	from carchg a
+	left join @listTre b on a.treno=b.noa
+	where b.noa  is  not  null
 	
 	insert into @result
 	select  '1' gno,'','','',driverno,'','',SUM(plus),SUM(minus),''
