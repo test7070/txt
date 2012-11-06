@@ -10,12 +10,14 @@
 	set @t_bdriverno = case when '#non'=[3] then '' else [3] end
 	set @t_edriverno = case when '#non'=[4] then CHAR(255) else [4] end	
 	----------------------------------------------------------------------------------------
-	--carsal.txt
-	declare  @currentDate  nvarchar(10)
-
-	set  @currentDate  =  convert(nvarchar,Year(Current_Timestamp)-1911)+'/'+
-	right('00'+convert(nvarchar,Month(Current_Timestamp)),2)+'/'+
-	right('00'+convert(nvarchar,Day(Current_Timestamp)),2)
+	declare @driverno nvarchar(20)
+	declare @money float
+	declare @carborr float
+	declare @memo nvarchar(max)
+	declare @unpay float
+	declare @tranmoney float
+	declare @rate float
+	----------------------------------------------------------------------------------------
 	--暫存資料
 	declare @tmps  table(
 		noa nvarchar(10),
@@ -28,6 +30,7 @@
 		bonus float,--達成獎金
 		plus  float,--加項
 		[money] float,--應支金額
+		eo float,--執行命令
 		ticket  float,--罰款
 		labor float,--勞保
 		health float,--健保
@@ -38,105 +41,65 @@
 		memo nvarchar(max)
 	)
 	insert into @tmps
-	select * from carsals where noa=@t_mon and len(isnull(driverno,''))>0 order by driverno
-
-	-------------------------------------------------------------------------------------------------------------------
-	declare @driverno  nvarchar(20)
-	declare @mon  nvarchar(10)
-	declare @tranmoney  float
-	declare @drivermoney  float
-	declare @driver nvarchar(20)
-	declare @money  float
-	declare @bonusno  nvarchar(20)
-	declare @bonus  float
-	declare @plusmoney  float
-	declare @minusmoney  float
-	declare @driverpay  float
-	declare @carborr float
-	declare @ticket float
-	declare @total float
-	declare @bmon nvarchar(10)
-	declare @emon nvarchar(10)
-	declare @bdate nvarchar(10)
-	declare @edate nvarchar(10)
-	declare @labor float
-	declare @health float
-	declare @t_n  int
-	declare @day  int
-	declare @typea nvarchar(20)
-	-------------------------------------------------------------------------------------------------------------------
-	--借支,其他借支,罰單 ,維修
-	update @tmps set total=isnull(total,0)+ISNULL(carborr,0)+ISNULL(ticket,0)
-	update @tmps set carborr=0,ticket=0
-
-	declare cursor_table cursor for
-	select  b.typea,b.driverno,sum(a.[money])
-	from  carborrs  a
-	left  join  carborr b  on a.noa=b.noa
-	where  a.mon=@t_mon
-	group  by  b.typea,b.driverno
-	open cursor_table
-	fetch next from cursor_table
-	into @typea,@driverno,@money
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if  not exists(select  *  from @tmps where  driverno=@driverno  and  noa=@t_mon )
-		begin
-			set  @t_n  = ''  
-			select  @t_n=MAX(noq)  from @tmps  where noa=@t_mon
-			set @driver = ''
-			select @driver=namea from driver where noa=@driverno
-			insert into @tmps (noa,noq,driverno,driver)
-			values(@t_mon,right(convert(varchar,'000'+convert(varchar,CONVERT(int,@t_n)+1)),3),@driverno,@driver)
-		end
-		if @typea='借支' or  @typea='其他借支' or @typea='維修'
-		begin
-			update @tmps  set  carborr=isnull(carborr,0)+@money,total=total-@money  where  driverno=@driverno  and  noa=@t_mon  
-		end
-		if @typea='罰單'
-		begin
-			update @tmps  set  ticket=isnull(ticket,0)+@money,total=total-@money  where  driverno=@driverno  and  noa=@t_mon  
-		end
-		fetch next from cursor_table
-		into @typea,@driverno,@money
-	end
-	close cursor_table
-	deallocate cursor_table
-	--------------------------------------------------------------------------------------
+	select * from carsals 
+	where noa=@t_mon and len(isnull(driverno,''))>0 
+	and (driverno between @t_bdriverno and @t_edriverno)
+	order by driverno
+	
+	declare @tmp_carborr  table(
+		driverno nvarchar(20),
+		money15 float,--本月15號借支
+		money25 float--本月25號借支
+	)
+	
+	insert into @tmp_carborr
+	select  a.driverno
+	,SUM(case when RIGHT(a.datea,2)<='15' and a.typea='借支' then a.[money] else 0 end)
+	,SUM(case when RIGHT(a.datea,2)>'15' and a.typea='借支' then a.[money] else 0 end)
+	from carborr a
+	where (a.driverno between @t_bdriverno and  @t_edriverno)
+	and left(a.datea,6)=@t_mon
+	group  by  a.driverno
+	
 	declare @z_carborr1  table(
 		gno  nvarchar(3),
 		driverno  nvarchar(20),
-		driver  nvarchar(20),
+		tranmoney float,
 		[money]  float,
+		rate float,
+		money2 float,
 		carborr float,
 		amoney float,--1~15
 		bmoney float,--16~30
 		unpay float,
 		memo nvarchar(max)
 	)
-	
-	declare @amoney  float
-	declare @bmoney  float
-	declare @unpay float
-	declare @memo nvarchar(max)
+	insert into @z_carborr1
+	select '0',driverno,0,0,0,0,money15+money25,money15,money25,0,''
+	from  @tmp_carborr
 	
 	declare cursor_table cursor for
-	select driverno,driver,isnull(total,0),isnull(carborr,0) from @tmps where driverno between @t_bdriverno and @t_edriverno
+	select driverno,carborr from @z_carborr1
 	open cursor_table
 	fetch next from cursor_table
-	into @driverno,@driver,@total,@carborr
+	into @driverno,@carborr
 	while(@@FETCH_STATUS <> -1)
 	begin
-		select  @amoney=0,@bmoney=0,@unpay=0,@memo=''
-		select  @amoney=sum(case  when (a.datea<=@t_mon+'/15')  then  a.[money] else  0  end)
-		,@bmoney=sum(case  when (a.datea>@t_mon+'/15')  then  a.[money] else  0  end)
-		from  carborr a
-		where  a.mon=@t_mon  and  a.driverno=@driverno and typea='借支'
+		if exists(select  *  from  @tmps  where  driverno=@driverno)
+		begin
+			select @money=0,@tranmoney=0,@rate=0
+			select @tranmoney=tranmoney
+			,@money=isnull([money],0)-ISNULL(eo,0)-isnull(ticket,0)-isnull(labor,0)
+			-isnull(health,0)-isnull(minus,0)-isnull(carborr,0)+@carborr from @tmps where driverno=@driverno
+			select @rate=isnull(rate,0) from driver where noa=@driverno
+			update @z_carborr1  set tranmoney=@tranmoney,money=@money,rate=@rate,money2=ROUND(@money*@rate/10,0) where  driverno=@driverno
+		end
 		
 		select @unpay=SUM(ISNULL(a.[money],0)) from carborrs  a
 		left  join  carborr b on  a.noa=b.noa
 		where  a.mon>=@t_mon  and  b.driverno=@driverno
-		
+	
+		select @memo=''
 		declare cursor_table2 cursor for
 		select replace(memo,space(1),'') from carborr a where a.driverno=@driverno and len(memo)>0 and exists(select * from carborrs b where a.noa=b.noa and b.mon>=@t_mon)
 		open cursor_table2
@@ -150,29 +113,29 @@
 		end
 		close cursor_table2
 		deallocate cursor_table2
-		
-		insert  into  @z_carborr1
-		select '0',@driverno,@driver,(@total+@carborr),(@amoney+@bmoney),@amoney,@bmoney,@unpay,@memo
+		update @z_carborr1  set  unpay=@unpay,memo=@memo  where  driverno=@driverno
 		
 		fetch next from cursor_table
-		into @driverno,@driver,@total,@carborr
+		into @driverno,@carborr
 	end
 	close cursor_table
 	deallocate cursor_table
 	
 	insert into  @z_carborr1
-	select  '1','','',SUM(ISNULL([money],0)),SUM(ISNULL(carborr,0)),SUM(ISNULL(amoney,0)),SUM(ISNULL(bmoney,0)),SUM(ISNULL(unpay,0)),''
+	select  '1','',SUM(ISNULL(tranmoney,0)),SUM(ISNULL([money],0)),0,SUM(ISNULL(money2,0)),SUM(ISNULL(carborr,0)),SUM(ISNULL(amoney,0)),SUM(ISNULL(bmoney,0)),SUM(ISNULL(unpay,0)),''
 	from @z_carborr1 where gno='0'
 	
-	select gno,driverno,driver
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull([money],0)),1)),4,12)) aa
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(carborr,0)),1)),4,12)) bb
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(amoney,0)),1)),4,12)) cc
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(bmoney,0)),1)),4,12)) dd
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(unpay,0)),1)),4,12)) ee
-	,memo
-	from @z_carborr1 where carborr!=0 or unpay !=0 order  by  gno,driverno;
-
+	select a.gno,a.driverno,b.namea driver
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.tranmoney,0)),1)),4,12)) aa
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.money2,0)),1)),4,12)) bb
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.amoney,0)),1)),4,12)) cc
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.bmoney,0)),1)),4,12)) dd
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.carborr,0)),1)),4,12)) ee
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(a.unpay,0)),1)),4,12)) ff
+	,a.memo
+	from @z_carborr1 a
+	left join driver b on a.driverno=b.noa
+	where carborr!=0 or unpay !=0 order  by  gno,driverno;
 
 
 z_carborrxx01:--z_carborr01
