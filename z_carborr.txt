@@ -9,15 +9,21 @@
 	set @t_mon = case when '#non'=[2] then '' else [2] end
 	set @t_bdriverno = case when '#non'=[3] then '' else [3] end
 	set @t_edriverno = case when '#non'=[4] then CHAR(255) else [4] end	
-	----------------------------------------------------------------------------------------
-	declare @driverno nvarchar(20)
-	declare @money float
-	declare @carborr float
-	declare @memo nvarchar(max)
-	declare @unpay float
-	declare @tranmoney float
-	declare @rate float
-	----------------------------------------------------------------------------------------
+	---------------------------------------------------------------------------------------- 
+	declare @driverno nvarchar(20) 
+	declare @money float 
+	declare @carborr float 
+	declare @memo nvarchar(max) 
+	declare @unpay float 
+	declare @tranmoney float 
+	declare @rate float 
+	declare @minus float
+
+	declare @ticket float
+	declare @fixa float
+	declare @carborr1 float
+	declare @carborr2 float
+	---------------------------------------------------------------------------------------- 
 	--暫存資料
 	declare @tmps  table(
 		noa nvarchar(10),
@@ -46,6 +52,71 @@
 	and (driverno between @t_bdriverno and @t_edriverno)
 	order by driverno
 	
+	declare @tmp_carborrs  table(
+		driverno nvarchar(20),
+		ticket float,
+		fixa float,
+		carborr1 float,
+		carborr2 float,
+		minus float
+	)
+	insert into @tmp_carborrs
+	select b.driverno
+	,SUM(case when b.typea='罰單' then a.[money] else 0 end)
+	,SUM(case when b.typea='維修' then a.[money] else 0 end)
+	,SUM(case when b.typea='借支' and b.mon!=@t_mon  then a.[money] else 0 end)
+	,SUM(case when b.typea='其他借支' then a.[money] else 0 end)
+	,0
+	from carborrs a 
+	left join carborr b on a.noa=b.noa
+	where (b.driverno between @t_bdriverno and  @t_edriverno)
+	and  a.mon=@t_mon
+	group  by  b.driverno
+	
+	declare cursor_table cursor for
+	select driverno,SUM(minusmoney)
+	from carchg 
+	where LEFT(datea,6)=@t_mon and (driverno between @t_bdriverno and  @t_edriverno)
+	group by driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@minus
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from @tmp_carborrs where driverno=@driverno)
+			insert into @tmp_carborrs 
+			select @driverno,0,0,0,0,@minus
+		else
+			update @tmp_carborrs set minus=minus+@minus where driverno=@driverno
+			
+		fetch next from cursor_table
+		into @driverno,@minus
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select driverno,SUM([money])
+	from etc
+	where mon=@t_mon and (driverno between @t_bdriverno and  @t_edriverno) and typea='DRIVERPAY'
+	group by driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@minus
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from @tmp_carborrs where driverno=@driverno)
+			insert into @tmp_carborrs 
+			select @driverno,0,0,0,0,@minus
+		else
+			update @tmp_carborrs set minus=minus+@minus where driverno=@driverno
+			
+		fetch next from cursor_table
+		into @driverno,@minus
+	end
+	close cursor_table
+	deallocate cursor_table
+	
 	declare @tmp_carborr  table(
 		driverno nvarchar(20),
 		money15 float,--本月15號借支
@@ -58,7 +129,7 @@
 	,SUM(case when RIGHT(a.datea,2)>'15' and a.typea='借支' then a.[money] else 0 end)
 	from carborr a
 	where (a.driverno between @t_bdriverno and  @t_edriverno)
-	and left(a.datea,6)=@t_mon
+	and a.mon=@t_mon
 	group  by  a.driverno
 	
 	declare @z_carborr1  table(
@@ -76,21 +147,25 @@
 	)
 	insert into @z_carborr1
 	select '0',driverno,0,0,0,0,money15+money25,money15,money25,0,''
-	from  @tmp_carborr
+	from  @tmp_carborr 
 	
 	declare cursor_table cursor for
-	select driverno,carborr from @z_carborr1
+	select driverno from @z_carborr1
 	open cursor_table
 	fetch next from cursor_table
-	into @driverno,@carborr
+	into @driverno
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if exists(select  *  from  @tmps  where  driverno=@driverno)
 		begin
+			select @ticket=0,@fixa=0,@carborr1=0,@carborr2=0,@minus=0
+			select @ticket=ticket,@fixa=fixa,@carborr1=carborr1,@carborr2=carborr2,@minus=minus
+			from @tmp_carborrs where driverno=@driverno
+			
 			select @money=0,@tranmoney=0,@rate=0
 			select @tranmoney=tranmoney
-			,@money=isnull([money],0)-ISNULL(eo,0)-isnull(ticket,0)-isnull(labor,0)
-			-isnull(health,0)-isnull(minus,0)-isnull(carborr,0)+@carborr from @tmps where driverno=@driverno
+			,@money=isnull([money],0)-ISNULL(eo,0)-isnull(labor,0)-isnull(health,0)
+			-@ticket-@fixa-@carborr1-@carborr2-@minus from @tmps where driverno=@driverno
 			select @rate=isnull(rate,0) from driver where noa=@driverno
 			update @z_carborr1  set tranmoney=@tranmoney,money=@money,rate=@rate,money2=ROUND(@money*@rate/10,0) where  driverno=@driverno
 		end
@@ -116,7 +191,7 @@
 		update @z_carborr1  set  unpay=@unpay,memo=@memo  where  driverno=@driverno
 		
 		fetch next from cursor_table
-		into @driverno,@carborr
+		into @driverno
 	end
 	close cursor_table
 	deallocate cursor_table
