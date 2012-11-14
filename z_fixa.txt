@@ -912,6 +912,8 @@ z_fixa4:--z_fixa4
 	declare @t_money nvarchar(20)
 	declare @t_btggno nvarchar(20)
 	declare @t_etggno nvarchar(20)
+	declare @t_bproductno nvarchar(20)
+	declare @t_eproductno nvarchar(20)
 	
 	set @t_accy = [1]
 	set @t_name = '[2]'
@@ -924,15 +926,15 @@ z_fixa4:--z_fixa4
 	set @t_money = case when '#non'=[9] then '' else [9] end 
 	set @t_btggno = case when '#non'=[10] then '' else [10] end
 	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
-	----------------------------------------------------------------------------------------------------------
+	set @t_bproductno = case when '#non'=[12] then '' else [12] end
+	set @t_eproductno = case when '#non'=[13] then char(255) else [13] end	
 	----------------------------------------------------------------------------------------------------------
 	declare @tggno nvarchar(20)
 	declare @comp nvarchar(40)
 	declare @nick nvarchar(20)
 	declare @noa nvarchar(20)
-	declare @money float
-	declare @tax float
-	declare @discount float
+	declare @wmoney float
+	declare @cmoney float
 	declare @total float
 	
 	declare @tmp table(
@@ -946,24 +948,28 @@ z_fixa4:--z_fixa4
 		driverno nvarchar(20),
 		driver nvarchar(20),
 		carplateno nvarchar(20),
-		[money] float,
-		tax float,
-		discount float,
-		total float,
 		fixdate  nvarchar(10),
 		productno  nvarchar(20),
 		product  nvarchar(50),
 		mount  float,
 		price  float,
-		moneys  float
+		wmoney float,
+		cmoney float,
+		total float
 	)
 	insert  into  @tmp
 	select '0',a.noa,b.fixadate, b.tggno,'','',b.carno,b.driverno,b.driver,b.carplateno
-	,b.[money],b.tax,b.discount,b.total,b.fixadate,a.productno,a.product,a.mount,a.price,a.[money]  from  fixas  a
+	,b.fixadate,a.productno,a.product,a.mount,a.price
+	,case when wtype='A' then a.[money] else 0 end
+	,case when wtype='B' then a.[money] else 0 end
+	,0
+	from  fixas  a
 	left  join  fixa  b  on  a.noa=b.noa
 	where  (b.mon between  @t_bmon  and  @t_emon)
 	and  (b.tggno  between  @t_btggno  and  @t_etggno)
+	and  (a.productno  between  @t_bproductno  and  @t_eproductno)
 	order by b.tggno,a.noa,a.noq
+
 	
 	declare cursor_table cursor for
 	select tggno from @tmp where  gno='0' group by tggno
@@ -972,8 +978,6 @@ z_fixa4:--z_fixa4
 	into @tggno
 	while(@@FETCH_STATUS <> -1)
 	begin
-		select @money=0,@tax=0,@discount=0,@total=0 
-
 		declare cursor_table2 cursor for
 		select noa from @tmp where  gno='0' and tggno=@tggno group by noa
 		open cursor_table2
@@ -981,12 +985,8 @@ z_fixa4:--z_fixa4
 		into @noa
 		while(@@FETCH_STATUS <> -1)
 		begin
-			select  top(1) @money=@money+[money]
-			,@tax=@tax+[tax]
-			,@discount=@discount+[discount]
-			,@total=@total+[total]
-			from @tmp where noa=@noa
-
+			select @total=sum(wmoney+cmoney) from @tmp where noa=@noa 
+			update top(1) @tmp set total=@total where tggno=@tggno and noa=@noa
 			insert  into  @tmp(gno,noa,tggno)values('1',@noa,@tggno)
 			
 			fetch next from cursor_table2
@@ -994,8 +994,9 @@ z_fixa4:--z_fixa4
 		end
 		close cursor_table2
 		deallocate cursor_table2
-
-		insert  into  @tmp(gno,noa,tggno,[money],tax,discount,total)values('2',CHAR(255),@tggno,@money,@tax,@discount,@total)
+		
+		select @wmoney=SUM(wmoney),@cmoney=SUM(cmoney),@total=SUM(total) from @tmp where gno='0' and tggno=@tggno
+		insert  into  @tmp(gno,noa,tggno,wmoney,cmoney,total)values('2',CHAR(255),@tggno,@wmoney,@cmoney,@total)
 		
 		select @comp='',@nick=''
 		select @comp=comp,@nick=nick from tgg where noa=@tggno
@@ -1016,10 +1017,7 @@ z_fixa4:--z_fixa4
 	,carno a1
 	,driver a2
 	,carplateno a3
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m1
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) t1
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) d1
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) t2
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total-tax),1)),4,12)) t2
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) m2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) m2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) m3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) t1
 	from @tmp  a order by tggno,noa,gno;
