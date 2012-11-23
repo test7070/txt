@@ -35,13 +35,13 @@ z_ummtran4:--z_ummtran4
 	set @cmd=
 	" select '0',LEFT(a.trandate,6),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"+
 	" ,sum(isnull(a.total,0))"+
-	" ,SUM(case when (c.mon=LEFT(a.trandate,6)) then ISNULL(b.tranmoney,0) else 0 end)"+
+	" ,SUM(case when (c.mon<=LEFT(a.trandate,6)) then ISNULL(b.tranmoney,0) else 0 end)"+
 	" ,0"+
 	" from trans"+@t_accy+" a"+
 	" left join trds"+@t_accy+" b on a.noa=b.tranno"+
 	" left join trd"+@t_accy+" c on b.noa=c.noa"+
 	" left join cust d on a.custno=d.noa"+
-	" where 1=1 "+
+	" where 1=1"+
 	" and (a.custno between @t_bcustno and @t_ecustno)"+
 	" and (LEFT(a.trandate,6) between @t_bmon and @t_emon)"+
 	" group by LEFT(a.trandate,6),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"+
@@ -266,6 +266,9 @@ z_ummtran5:--#z_ummtran5
 	declare @mon nvarchar(10)
 	declare @curmoney float
 	declare @befmoney float
+	declare @tranmon nvarchar(10)
+	declare @money float
+	declare @string nvarchar(max)
 	-------------------------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#z_ummtran5')is not null
 	BEGIN
@@ -282,10 +285,11 @@ z_ummtran5:--#z_ummtran5
 		tax float,
 		discount float,
 		plus float,
-		plusmoney  float,
-		minusmoney  float,
+		plusmoney float,
+		minusmoney float,
 		total float,
-		unpay float
+		unpay float,
+		memo nvarchar(max)
 	)
 	set @cmd=
 	" select '0',a.custno,a.mon,0,0"+
@@ -297,6 +301,7 @@ z_ummtran5:--#z_ummtran5
 	" ,SUM(ISNULL(a.minusmoney,0))"+
 	" ,SUM(ISNULL(a.total,0))"+
 	" ,SUM(ISNULL(a.unpay,0))"+
+	" ,''"+
 	" from trd101 a"+
 	" where (a.custno between @t_bcustno and @t_ecustno)"+
 	" and (a.mon between @t_bummmon and @t_eummmon)"+
@@ -305,28 +310,37 @@ z_ummtran5:--#z_ummtran5
 	execute sp_executesql  @cmd,N'@t_bummmon nvarchar(10),@t_eummmon nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20)'
 	,@t_bummmon=@t_bummmon,@t_eummmon=@t_eummmon,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno
 	
+	
 	declare @tmp table(
 		custno nvarchar(20),
-		mon  nvarchar(10),
-		curmoney float,
-		befmoney float
+		mon  nvarchar(10),--請款月份
+		tranmon nvarchar(10),--交運月份
+		[money] float
 	)
 	set @cmd=
-	" select a.custno,c.mon"+
-	" ,SUM(case when left(a.trandate,6)=c.mon then ISNULL(a.total,0)  else 0  end) 當月帳款"+
-	" ,SUM(case when left(a.trandate,6)!=c.mon then ISNULL(a.total,0)  else 0  end) 上月帳款"+
+	" select a.custno,c.mon,left(a.trandate,6),sum(ISNULL(a.total,0))"+
 	" from trans"+@t_accy+" a"+
 	" left join trds"+@t_accy+" b on a.noa=b.tranno"+
 	" left join trd"+@t_accy+" c on b.noa=c.noa"+
 	" where (a.custno between @t_bcustno and @t_ecustno)"+ 
 	" and (c.mon between @t_bummmon and @t_eummmon)"+
-	" group  by  a.custno,c.mon"
+	" group by a.custno,c.mon,left(a.trandate,6)"+
+	" order by a.custno,c.mon,left(a.trandate,6)"
 	insert into @tmp
 	execute sp_executesql  @cmd,N'@t_bummmon nvarchar(10),@t_eummmon nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20)'
 	,@t_bummmon=@t_bummmon,@t_eummmon=@t_eummmon,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno
 	
+	declare @tmp2 table(
+		custno nvarchar(20),
+		mon  nvarchar(10),--請款月份
+		curmoney float,--當月請款		
+		befmoney float--次月請款
+	)
+	insert into @tmp2
+	select custno,mon,SUM(case when mon=tranmon then [money] else 0 end),SUM(case when mon!=tranmon then [money] else 0 end) from @tmp group by custno,mon
+
 	declare cursor_table cursor for
-	select custno,mon,curmoney,befmoney from @tmp
+	select custno,mon,curmoney,befmoney from @tmp2
 	open cursor_table
 	fetch next from cursor_table
 	into @custno,@mon,@curmoney,@befmoney
@@ -336,16 +350,68 @@ z_ummtran5:--#z_ummtran5
 			insert into #z_ummtran5(gno,custno,mon,curmoney,befmoney)values('0',@custno,@mon,@curmoney,@befmoney)
 		else
 			update #z_ummtran5 set curmoney=@curmoney,befmoney=@befmoney where custno=@custno and mon=@mon
+		if exists(select * from @tmp where custno=@custno and mon=@mon and mon!=tranmon)
+		begin
+			set @cmd = ''
+			declare cursor_table2 cursor for
+			select tranmon,[money] from @tmp where custno=@custno and mon=@mon
+			open cursor_table2
+			fetch next from cursor_table2
+			into @tranmon,@money
+			while(@@FETCH_STATUS <> -1)
+			begin
+				set @cmd = @cmd+case when LEN(@cmd)=0 then '' else ' , ' end 
+				+@tranmon+'：'+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12))							
+				fetch next from cursor_table2
+				into @tranmon,@money
+			end
+			close cursor_table2
+			deallocate cursor_table2
+		
+			update #z_ummtran5 set memo=@cmd where custno=@custno and mon=@mon	
+		end
+		
 		fetch next from cursor_table
 		into @custno,@mon,@curmoney,@befmoney
 	end
 	close cursor_table
 	deallocate cursor_table
-
-	insert  into #z_ummtran5
-	select  '1' ,'','',SUM(curmoney),SUM(befmoney),SUM([money]),SUM(tax),SUM(discount),SUM(plus),SUM(plusmoney),SUM(minusmoney),SUM(total),SUM(unpay)  
-	from  #z_ummtran5 where gno='0'
 	
+	set @string = ''
+	declare cursor_table cursor for
+	select mon from @tmp group by mon
+	open cursor_table
+	fetch next from cursor_table
+	into @mon
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd = ''
+		declare cursor_table2 cursor for
+		select tranmon,sum([money]) from @tmp where mon=@mon group by tranmon
+		open cursor_table2
+		fetch next from cursor_table2
+		into @tranmon,@money
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @cmd = @cmd+case when LEN(@cmd)=0 then '' else ' , ' end 
+			+@tranmon+'：'+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12))							
+			fetch next from cursor_table2
+			into @tranmon,@money
+		end
+		close cursor_table2
+		deallocate cursor_table2							
+		set @string = @string + case when LEN(@string)=0 then '' else ' # ' end +'【'+@mon+'】 '+@cmd
+		
+		fetch next from cursor_table
+		into @mon
+	end
+	close cursor_table
+	deallocate cursor_table
+		
+	insert  into #z_ummtran5
+	select  '1' ,'','',SUM(curmoney),SUM(befmoney),SUM([money]),SUM(tax),SUM(discount),SUM(plus),SUM(plusmoney),SUM(minusmoney),SUM(total),SUM(unpay),@string  
+	from  #z_ummtran5 where gno='0'
+
 	select gno,a.custno cc,a.mon
 	,(case when len(b.nick)>0 then b.nick else b.comp end) cp
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.curmoney),1)),4,12)) curm
@@ -358,6 +424,7 @@ z_ummtran5:--#z_ummtran5
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.minusmoney),1)),4,12)) mm
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.total),1)),4,12)) total
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.unpay),1)),4,12)) unpay
+	,a.memo
 	from #z_ummtran5 a
 	left join cust b on a.custno=b.noa
 	order by a.gno,a.custno,a.mon
