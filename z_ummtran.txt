@@ -17,6 +17,9 @@ z_ummtran4:--z_ummtran4
 	set @t_bcustno = case when '#non'=[6] then '' else [6] end
 	set @t_ecustno = case when '#non'=[7] then CHAR(255) else [7] end
 	--------------------------------------------------------------------------------------------------
+	declare @ummmon nvarchar(10)
+	declare @pay float
+	
 	IF OBJECT_ID('tempdb..#z_ummtran4')is not null
 	BEGIN
 		set @cmd = 'drop table #z_ummtran4'
@@ -25,18 +28,20 @@ z_ummtran4:--z_ummtran4
 	create table #z_ummtran4(
 		gno nvarchar(1),
 		mon nvarchar(10),
+		ummmon nvarchar(10),
 		custno nvarchar(20),
 		comp nvarchar(40),
 		nick nvarchar(20),
 		total float,
 		pay float,
-		unpay float
+		unpay float,
+		memo nvarchar(max)
 	)
 	set @cmd=
-	" select '0',LEFT(a.trandate,6),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"+
+	" select 'z',LEFT(a.trandate,6),isnull(c.mon,''),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"+
 	" ,sum(isnull(a.total,0))"+
 	" ,SUM(case when (c.mon<=LEFT(a.trandate,6)) then ISNULL(b.tranmoney,0) else 0 end)"+
-	" ,0"+
+	" ,0,''"+
 	" from trans"+@t_accy+" a"+
 	" left join trds"+@t_accy+" b on a.noa=b.tranno"+
 	" left join trd"+@t_accy+" c on b.noa=c.noa"+
@@ -44,19 +49,45 @@ z_ummtran4:--z_ummtran4
 	" where 1=1"+
 	" and (a.custno between @t_bcustno and @t_ecustno)"+
 	" and (LEFT(a.trandate,6) between @t_bmon and @t_emon)"+
-	" group by LEFT(a.trandate,6),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"+
-	" order by LEFT(a.trandate,6),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"
+	" group by LEFT(a.trandate,6),isnull(c.mon,''),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"+
+	" order by LEFT(a.trandate,6),isnull(c.mon,''),a.custno,ISNULL(d.comp,''),ISNULL(d.nick,'')"
 	insert into #z_ummtran4
 	execute sp_executesql  @cmd,N'@t_bmon nvarchar(10),@t_emon nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20)'
 	,@t_bmon=@t_bmon,@t_emon=@t_emon,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno
-
-	insert into #z_ummtran4 select '1','','','','',sum(total),sum(pay),0 from  #z_ummtran4
+	-------------------------------------------------------------------------------------------
+	--計算當月請款金額-依請款月份
+	set @cmd = ''
+	declare cursor_table cursor for
+	select ummmon,sum(pay) from #z_ummtran4
+	where gno='z' and (pay!=0)
+	group by ummmon
+	open cursor_table
+	fetch next from cursor_table
+	into @ummmon,@pay
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd = @cmd + case when len(@cmd)>0 then ', ' else '' end 
+			+ @ummmon + '：' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@pay),1)),4,12))
+		fetch next from cursor_table
+		into @ummmon,@pay
+	end
+	close cursor_table
+	deallocate cursor_table
+	--忽略請款月份
+	insert into #z_ummtran4
+	select '0',mon,'',custno,comp,nick,SUM(total),SUM(pay),0,''
+	from #z_ummtran4
+	group by mon,custno,comp,nick
+	delete #z_ummtran4 where gno='z'
+	-------------------------------------------------------------------------------------------
+	insert into #z_ummtran4 select '1','','','','','',sum(total),sum(pay),0,@cmd from  #z_ummtran4
 	update #z_ummtran4 set unpay=total-pay
 
 	select  gno,mon,custno,case  when  len(nick)>0  then  nick  else  comp end  comp,
 		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
 		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pay),1)),4,12)) pay,
-		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay,
+		memo
 	from  #z_ummtran4
 	order  by gno,custno,mon
 	drop table #z_ummtran4; 
