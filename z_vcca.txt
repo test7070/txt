@@ -1,4 +1,4 @@
-z_vcca4:--z_vcca4
+﻿z_vcca4:--z_vcca4
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
 	declare @t_bmon nvarchar(7)
@@ -563,14 +563,13 @@ declare @csor table(
 		[comp] nvarchar(90),
 		[money] decimal(10,0),
 		[tax] decimal(10,0),
-		[taxrate] decimal(8,3)
+		[t] decimal(8,3)
 )
 insert into @csor
 select CHAR(255) noa,custno,left(comp,4),sum(case when left(noa,2) = ' 退' then -1 else 1 end*money),sum(case when left(noa,2) = ' 退' then -1 else 1 end*tax),AVG(taxrate)
 from vcca
 where custno != '' and
 (isnull(left(datea,6),'') between @t_bmon and @t_emon) 
-
 group by custno,left(comp,4)
 
 
@@ -578,24 +577,26 @@ declare @result table(
 		[gno] nvarchar(1),
 		[custno] nvarchar(20),
 		[comp] nvarchar(90),
-		[taxratea] nvarchar(10),
+		[t] nvarchar(10),
 		[money] decimal(12,0),
-		[tax] decimal(12,0)
+		[tax] decimal(12,0),
+		memo nvarchar(max)
 )
 insert into @result
-select  '0' gno,custno,comp,left(taxrate,3)+'%',money,tax
-from @csor 
+select  '0' gno,custno,comp,left(t,3)+'%',money,tax,(select memo + '' from vcca where vcca.custno=a.custno and memo!='' group by memo FOR XML PATH('')) memo
+from @csor a
 insert into @result
-select '1' gno,MAX(custno),'','',sum(money),sum(tax)
+select '1' gno,MAX(custno),'','',sum(money),sum(tax),''
 from @result
 
-select gno,custno,comp,taxratea,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax
+select gno,custno,comp,t,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,left(memo,31) memo
 from @result
 order by gno,custno;
 --*****************************************************************************************************************************
 z_vcca6:--z_vcca6
 SET QUOTED_IDENTIFIER OFF
+
 
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -634,104 +635,49 @@ declare @result table(
 		memo nvarchar(247) 
 )
 insert into @result
-select '0' gno,a.noa,a.custno,case when LEN(b.nick)>0 then b.nick else LEFT(a.comp,4) end,a.mon,LEFT(a.mon,3),a.money,a.tax,(case when a.money>0 then a.tax/a.money else 0 end)*100 taxrate,a.memo
+select  '0' gno,a.noa,a.custno,case when LEN(b.nick)>0 then b.nick else LEFT(a.comp,4) end,a.mon,LEFT(a.mon,3),a.money,a.tax,
+(case when a.money>0 then a.tax/a.money else 0 end)*100 taxrate,a.memo
 from vcca a
 left join cust b on b.noa = a.custno
 where (isnull(right(a.mon,2),'') between @t_bxmon and @t_exmon) and
 (ISNULL(LEFT(a.mon,3),'') between @t_byear and @t_eyear) and a.money != 0 and a.tax != 0 
 
 insert into @result
-select '1' gno,'',custno,comp,'',years,SUM(case when LEFT(noa,1)= '退' then '-1' else '1' end * moneys) moneys,SUM(case when LEFT(noa,1)= '退' then '-1' else '1' end * tax) tax,MAX(taxrate),''
+select '1'gno,'',custno,max(comp),'',years,SUM(case when LEFT(noa,1)= '退' then '-1' else '1' end * moneys) moneys,SUM(case when LEFT(noa,1)= '退' then '-1' else '1' end * tax) tax,MAX(taxrate),''
 from @result 
-group by custno,comp,years, gno 
+group by custno,years
 
---****************************************************************************
-declare @listYear table(
-	n int,
-	[year] nvarchar(10)
-)
-insert into @listYear
-select ROW_NUMBER()over(order by years) ,a.years from(select years from @result where gno='1' group by years)as a order by years
 
-IF OBJECT_ID('tempdb..#tmp')is not null
-BEGIN
-       drop table #tmp
-END
-create table #tmp(
-	custno nvarchar(20),
-	comp nvarchar(40),
-	taxrate float
-)
 
-declare @cmd nvarchar(max)
-declare @n int
-
-declare cursor_table cursor for
-select n from  @listYear
-open cursor_table
-fetch next from cursor_table
-into @n
-while(@@FETCH_STATUS <> -1)
-begin
-	set @cmd = 'alter table #tmp add money'+CONVERT(nvarchar(3),@n)+' int '
-	set @cmd = @cmd+'alter table #tmp add tax'+CONVERT(nvarchar(3),@n)+' int '
-	set @cmd = @cmd+'alter table #tmp add year'+CONVERT(nvarchar(3),@n)+' nvarchar(10) '
-	EXECUTE sp_executesql @cmd
-fetch next from cursor_table
-into @n
-end
-close cursor_table
-deallocate cursor_table
-
---select * from #tmp
-
-declare @custno nvarchar(20)
-declare @comp nvarchar(40)
-declare @year nvarchar(10)
-declare @money int
-declare @tax int
-declare @taxrate float
-
-declare @field_money nvarchar(20)
-declare @field_tax nvarchar(20)
-declare @field_year nvarchar(20)
-
-declare cursor_table cursor for 
-select custno,comp,taxrate,years,moneys,tax from @result where gno='1'
-open cursor_table
-fetch next from cursor_table
-into @custno,@comp,@taxrate,@year,@money,@tax
-while(@@FETCH_STATUS <> -1)
-begin
-	set @n = 0
-	select @n=n from @listYear where [year]=@year
-	if not(@n=0)
-	begin
-		set @field_money = 'money'+CONVERT(nvarchar(3),@n)
-		set @field_tax = 'tax'+CONVERT(nvarchar(3),@n)
-		set @field_year = 'year'+CONVERT(nvarchar(3),@n)
+declare @tmp table(
+		gno nvarchar(1),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		years1 nvarchar(3),
+		moneys1 decimal(10,0),
+		tax1 decimal(10,0),
+		years2 nvarchar(3),
+		moneys2 decimal(10,0),
+		tax2 decimal(10,0),
+		t decimal(4,1),
+		money3 decimal(10,0)
 		
-		if not exists(select * from #tmp where custno=@custno)
-		begin
-			insert into #tmp
-			select @custno,@comp,left(@taxrate,3),0,0,'',0,0,''
-		end
-		set @cmd = 'update #tmp set '+@field_money+'=@money,'+@field_tax+'=@tax,'+@field_year+'=@year where custno=@custno'
-		EXECUTE sp_executesql @cmd,@params=N'@money int,@tax int,@year nvarchar(10),@custno nvarchar(20)', @money=@money,@tax=@tax,@year=@year,@custno=@custno
-	end
-fetch next from cursor_table
-into @custno,@comp,@taxrate,@year,@money,@tax
-end
-close cursor_table
-deallocate cursor_table
+)
+insert into @tmp
+select '0' gno,custno,comp,max(case when years = @t_byear then years else '' end),sum(case when years = @t_byear then moneys else 0 end),
+sum(case when years = @t_byear then tax else 0 end),max(case when years = @t_eyear then years else '' end),sum(case when years = @t_eyear then moneys else 0 end),
+sum(case when years = @t_eyear then tax else 0 end),avg(ROUND(taxrate,2)),SUM(case when years = @t_eyear then moneys else 0 end-case when years = @t_byear then moneys else 0 end)
+from @result
+where gno = 1 
+group by custno,comp
 
 
-select '0' gno,custno,comp,taxrate t,money1,tax1,year1,money2,tax2,year2,money2-money1  money3
-from #tmp
-union
-select '1' gno,max(custno) custno,'' comp,0 t,SUM(money1) money1,sum(tax1) tax1,'' year1,sum(money2) money2,sum(tax2) tax2,'' year2,sum(money2-money1)  money3
-from #tmp
+insert into @tmp
+select '1' gno,MAX(custno),'',MAX(years1),SUM(moneys1),SUM(tax1),MAX(years2),SUM(moneys2),SUM(tax2),0,SUM(money3)
+from @tmp
 
+select *
+from @tmp
 order by custno,gno;
 --**********************************************************************************************************************************
 z_vcca10:--z_vcca10
@@ -773,7 +719,7 @@ declare @result table(
 		dime int,
 		custno nvarchar(20),
 		comp nvarchar(50),
-		taxrate float,
+		taxtype nvarchar(20),
 		mney int,
 		tax int,
 		memo nvarchar(200),
@@ -781,7 +727,7 @@ declare @result table(
 )
 insert into @result
 select '0' gno,a.noa,b.noq,b.storeno,case when len(c.nick)>0 then c.nick else b.store end,
-b.dime,a.custno,a.comp,a.taxrate,b.total,(b.total*a.taxrate)/100,a.memo,a.mon
+b.dime,a.custno,a.comp,a.taxtype,b.total,(b.total*0.05)/100,a.memo,a.mon
 from vcc101 a
 left join vccs101 b on b.noa = a.noa
 left join acomp c on c.noa = b.storeno
@@ -797,7 +743,7 @@ insert into @result
 select '2' gno,'','',max(storeno),'',0,'','',0,sum(mney),sum(tax),'',''
 from @result
 
-select gno,noa,noq,storeno,store,dime,custno,comp,taxrate,
+select gno,noa,noq,storeno,store,dime,custno,comp,taxtype,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mney),1)),4,12)) mney,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,
 memo,mon
@@ -842,14 +788,14 @@ declare @result table(
 		dime int,
 		custno nvarchar(20),
 		comp nvarchar(50),
-		taxrate float,
+		taxtype nvarchar(20),
 		mney int,
 		tax int,
 		memo nvarchar(200),
 		mon nvarchar(6)
 )
 insert into @result
-select '0' gno,a.noa,b.noq,b.storeno,case when len(c.nick)>0 then c.nick else b.store end ,b.dime,a.custno,a.comp,a.taxrate,a.money,a.tax,a.memo,a.mon
+select '0' gno,a.noa,b.noq,b.storeno,case when len(c.nick)>0 then c.nick else b.store end ,b.dime,a.custno,a.comp,a.taxtype,a.money,a.tax,a.memo,a.mon
 from vcc101 a
 left join vccs101 b on b.noa = a.noa
 left join acomp c on c.noa = b.storeno
@@ -865,7 +811,7 @@ insert into @result
 select '2' gno,'','','','',0,MAX(custno),'',0,sum(mney),sum(tax),'',''
 from @result
 
-select gno,noa,storeno,store,dime,custno,comp,taxrate,
+select gno,noa,storeno,store,dime,custno,comp,taxtype,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mney),1)),4,12)) mney,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,
 memo,mon
