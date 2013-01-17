@@ -630,12 +630,14 @@ declare @result table(
 		caryear nvarchar(10),
 		ton  nvarchar(20),
 		carbrandno nvarchar(20),
-		carbrand nvarchar(20)
+		carbrand nvarchar(20),
+		carmount int,
+		palmount int 
 )
 declare @cmd nvarchar(MAX)
 
 set @cmd='select ''0'' gno,a.noa,a.cardealno,ISNULL(left(c.comp,3),''''),a.carno,a.carownerno,b.namea,a.indate,a.outdate, 
-a.suspdate,a.enddate,a.wastedate,a.carspecno,ISNULL(f.spec,''''),a.caryear,ISNULL(a.ton,'''')+ISNULL(a.cc,''''),a.carbrandno,isnull(d.brand,'''') 
+a.suspdate,a.enddate,a.wastedate,a.carspecno,ISNULL(f.spec,''''),a.caryear,ISNULL(a.ton,'''')+ISNULL(a.cc,''''),a.carbrandno,isnull(d.brand,''''),0,0 
 from car2 a 
 left join carowner b on b.noa = a.carownerno 
 left join cardeal c on c.noa = a.cardealno 
@@ -663,13 +665,33 @@ execute sp_executesql @cmd,N'@t_enddate nvarchar(10),@t_bcardealno nvarchar(20),
 		@t_enddate=@t_enddate,@t_bcardealno=@t_bcardealno,@t_ecardealno=@t_ecardealno,@t_bcarspecno=@t_bcarspecno,@t_ecarspecno=@t_ecarspecno
 
 insert into @result
-select '1' gno,'',cno,'',COUNT(distinct carno),'','','','','','','','','','','','',''
+select '1' gno,'',cno,'',COUNT(distinct carno),'','','','','','','','','','','','','',0,0
 from @result
 group by cno
 
+declare @cno nvarchar(20) 
+declare cursor_table cursor for 
+select cno from @result where gno='1'
+open cursor_table 
+fetch next from cursor_table 
+into @cno
+while(@@FETCH_STATUS <> -1) 
+	begin 
+	
+	update @result
+	set carmount=(select COUNT(*) from @result where gno='0' and PATINDEX('%-%',carno)>0 and len(carno)=6 and cno=@cno),
+	palmount=(select COUNT(*) from @result where gno='0' and PATINDEX('%-%',carno)>0 and len(carno)=5 and cno=@cno)
+	where cno=@cno and gno='1'
+
+	fetch next from cursor_table 
+	into @cno
+	end 
+close cursor_table 
+deallocate cursor_table 
+
 select *
 from @result
-order by cno,gno,noa;
+order by cno,gno,carkindno,noa;
 
 --***************************************************************************************
 z_car28:--z_car28車籍資料列印
@@ -1875,3 +1897,95 @@ select gno,noa,noq,carno,carownerno,carowner,indate,carbrandno,carbrand,caryear,
 from @tmpb order by carownerno,count;
 
 --------------------------------------------------------------------------------------------------
+z_carpack:--z_carpack
+declare @t_bcardealno nvarchar(20) 
+declare @t_ecardealno nvarchar(20) 
+declare @t_enddate nvarchar(10) 
+	
+set @t_bcardealno = case when '#non'=[5] then '' else [5] end
+set @t_ecardealno  = case when '#non'=[6] then char(255) else [6] end	
+set @t_enddate = case when '#non'=[15] then '' else [15] end
+	
+
+------------------取得車頭和板台數---------------------
+declare @tmp table( 
+gno nvarchar(20),
+carno nvarchar(20),
+cardealno nvarchar(20), 
+cardeal nvarchar(50),  
+carownerno nvarchar(20), 
+carowner nvarchar(50), 
+headmount int,
+palmount int 
+) 
+
+insert into @tmp
+select '0',a.noa,a.cardealno,c.comp,a.carownerno,b.namea,0,0
+from car2 a 
+left join carowner b on b.noa = a.carownerno 
+left join cardeal c on c.noa = a.cardealno 
+where a.indate<@t_enddate and (a.cardealno between @t_bcardealno and @t_ecardealno)and a.carownerno!=''
+and (a.outdate='' or outdate is null) and (a.suspdate='' or a.suspdate is null)
+and (a.enddate='' or a.enddate is null) and (a.wastedate='''' or a.wastedate is null)
+
+insert into @tmp 
+select '1' gno,'',cardealno,'','','' ,0,0
+from @tmp 
+group by cardealno 
+
+declare @cardealno nvarchar(20) 
+declare cursor_table cursor for 
+select cardealno from @tmp where gno='1'
+open cursor_table 
+fetch next from cursor_table 
+into @cardealno
+while(@@FETCH_STATUS <> -1) 
+	begin 
+	
+	update @tmp
+	set headmount=(select COUNT(*) from @tmp where gno='0' and PATINDEX('%-%',carno)>0 and len(carno)=6 and cardealno=@cardealno),
+	palmount=(select COUNT(*) from @tmp where gno='0' and PATINDEX('%-%',carno)>0 and len(carno)=5 and cardealno=@cardealno),
+	cardeal=(select comp from cardeal where noa=@cardealno)
+	where cardealno=@cardealno and gno='1'
+
+	fetch next from cursor_table 
+	into @cardealno
+	end 
+close cursor_table 
+deallocate cursor_table 
+
+------------------取得車頭和板台數---------------------
+
+declare @result table( 
+gno nvarchar(20),
+cardealno nvarchar(20), 
+bxdate nvarchar(20), 
+exdate nvarchar(20), 
+mount float,
+carmount float,
+money float, 
+place nvarchar(50),
+hm int,
+pm int 
+) 
+
+insert into @result 
+select '0' gno,cardealno,bdate,edate,mount,carmount,money,place,0,0
+from carpack
+where (cardealno between @t_bcardealno and @t_ecardealno) and edate>@t_enddate
+
+insert into @result 
+select '1' gno,b.cardealno,'','',isnull(sum(a.carmount),0)-(b.headmount+b.palmount),isnull(sum(a.carmount),0),0,'',b.headmount,b.palmount
+from carpack a right join (select * from @tmp where gno='1') b on a.cardealno=b.cardealno
+group by b.cardealno,b.headmount,b.palmount
+
+insert into @result 
+select '2' gno,'ZZZZZ','','',SUM(mount),SUM(carmount),0,'',SUM(hm),SUM(pm)
+from @result
+where gno='1'
+
+select a.*,b.nick cardeal from @result a
+left join cardeal b on a.cardealno=b.noa
+order by cardealno,gno;
+
+----------------------------------------------------
