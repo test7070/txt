@@ -208,51 +208,9 @@ z_chgcash01:--z_chgcash01
 		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
 	end
 	-------------------------------------------------------------------------------------------------------------------------------
-<<<<<<< HEAD
-declare @tmp table( 
-gno nvarchar(3), 
-datea nvarchar(10), 
-noa nvarchar(20), 
-noq nvarchar(20), 
-acc1 nvarchar(20), 
-acc2 nvarchar(50),
-worker nvarchar(20), 
-[money] float, 
-memo nvarchar(max) 
-) 
-
-insert into @tmp 
-select '0',b.datea,a.noa,b.noa,a.acc1,a.acc2,b.worker 
-,case when b.dc='2' or b.dc='3' then -a.[money] else a.[money]end 
-,a.memo 
-from chgcashs a 
-left join chgcash b on a.noa=b.noa 
-left join #carteam c on b.carteamno=c.noa 
-left join #part d on b.partno=d.noa 
-left join #chgpart e on b.chgpartno=e.noa 
-left join #dc f on b.dc=f.noa 
-where 
-(d.noa is not null) and (e.noa is not null) and (f.noa is not null) 
-and (b.datea between @t_bdate and @t_edate) 
-and (b.sssno between @t_bsssno and @t_esssno) 
-and (a.acc1 between @t_baccno and @t_eaccno) 
-and (len(@t_po)=0 or b.po=@t_po) 
-order by b.datea,a.noa,a.noq 
-
-insert into @tmp 
-select '1','','','','','','',SUM([money]),'' from @tmp 
-
-drop table #carteam 
-drop table #part 
-drop table #chgpart 
-drop table #dc 
-
-select * 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) cmoney 
-from @tmp order by gno,datea,noa,noq;
-=======
 	declare @tmp table(
 		gno nvarchar(3),
+		chgpartno nvarchar(20),
 		dc nvarchar(10),
 		datea nvarchar(10),
 		noa nvarchar(20),
@@ -264,61 +222,97 @@ from @tmp order by gno,datea,noa,noq;
 	)
 	
 	insert into @tmp
-	select '0',b.dc,b.datea,a.noa,b.noa,a.acc1,a.acc2
+	select '0',b.chgpartno,b.dc,b.datea,a.noa,a.noq,a.acc1,a.acc2
 	,a.[money]
 	,a.memo
 	from chgcashs a
 	left join chgcash b on a.noa=b.noa
-	left join #carteam c on b.carteamno=c.noa
-	left join #part d on b.partno=d.noa
-	left join #chgpart e on b.chgpartno=e.noa
-	left join #dc f on b.dc=f.noa
-	where 
-	 (d.noa is not null) and (e.noa is not null) and (f.noa is not null) 
+	left join #chgpart c on b.chgpartno=c.noa
+	where (c.noa is not null)
 	and (b.datea between @t_bdate and @t_edate) 
-	and (b.sssno between @t_bsssno and @t_esssno) 
-	and (a.acc1 between @t_baccno and @t_eaccno) 
-	and (len(@t_po)=0 or b.po=@t_po) 
 	order by b.datea,a.noa,a.noq
 	
-	drop table #carteam
-	drop table #part
-	drop table #chgpart
-	drop table #dc
 	
+	
+	declare @tmp1 table(
+		chgpartno nvarchar(20),
+		memo nvarchar(max),
+		bmoney float,--前期結餘
+		[money] float--本期結餘
+	)
+	
+	declare @chgpartno nvarchar(20)
 	declare @dc nvarchar(20)
 	declare @money float
-	set @cmd = ''
+	declare @bmoney float
+	declare @money1 float
+	
+	
 	declare cursor_table cursor for
-	select dc,sum([money]) from @tmp group by dc
+	select chgpartno,dc,sum([money]) from @tmp group by chgpartno,dc order by chgpartno,dc
 	open cursor_table
 	fetch next from cursor_table
-	into @dc,@money
+	into @chgpartno,@dc,@money
 	while(@@FETCH_STATUS <> -1)
 	begin
+		if not exists(select * from @tmp1 where chgpartno=@chgpartno)
+		begin
+			select @bmoney = 0,@cmd = ''
+			select @bmoney = sum(case when (dc='1' or dc='4') then -(a.[money]) else a.[money] end) 
+			from chgcashs a
+			left join chgcash b on a.noa=b.noa
+			where b.datea<@t_bdate and b.chgpartno=@chgpartno
+			if @bmoney!=0
+			begin
+				set @cmd = @cmd 
+				+'前期結餘：'
+				+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@bmoney),1)),4,12)) 
+			end	
+			set @bmoney = ISNULL(@bmoney,0)
+			insert into @tmp1(chgpartno,bmoney,[money],memo)values(@chgpartno,@bmoney,@bmoney,@cmd)	
+		end
+		select @money1=[money],@cmd=isnull(memo,'') from @tmp1 where chgpartno=@chgpartno
+		set @money1 = @money1 + case when (@dc='1' or @dc='4') then -(@money) else @money end
+		
 		set @cmd = @cmd 
 		+ case when len(@cmd)>0 then '&nbsp'+char(59)+'&nbsp'+char(59) else '' end
 		+ case when @dc='1' then '耗用：'  when @dc='2' then '繳回：' when @dc='3' then '存款增補：' when @dc='4' then '申請：' else '#' end
 		+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12)) 
+		update @tmp1 set [money]=@money1,memo=@cmd where chgpartno=@chgpartno
+		
 		fetch next from cursor_table
-		into @dc,@money
+		into @chgpartno,@dc,@money
 	end
 	close cursor_table
 	deallocate cursor_table
-	
-	select @money = 0
-	select @money = sum(case when (dc='1' or dc='4') then -([money]) else [money] end) from @tmp 
-	set @cmd = @cmd 
-		+ case when len(@cmd)>0 then '&nbsp'+char(59)+'&nbsp'+char(59) else '' end
-		+ '結餘：'+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12)) 
-	insert into @tmp(gno,memo)values('1',@cmd)
+
+	declare cursor_table cursor for
+	select chgpartno,memo,bmoney,[money] from @tmp1
+	open cursor_table
+	fetch next from cursor_table
+	into @chgpartno,@cmd,@bmoney,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd = isnull(@cmd,'') 
+			+ case when len(@cmd)>0 then '&nbsp'+char(59)+'&nbsp'+char(59) else '' end
+			+ '本期結餘：'+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12)) 
+		insert into @tmp(gno,chgpartno,memo)values('1',@chgpartno,@cmd)
+		
+		fetch next from cursor_table
+		into @chgpartno,@cmd,@bmoney,@money
+	end
+	close cursor_table
+	deallocate cursor_table
 
 	select a.* 
+	,b.part chgpart
 	,case when dc='1' then '耗用'  when dc='2' then '繳回' when dc='3' then '存款增補' when dc='4' then '申請' else '' end cdc
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.[money]),1)),4,12)) cmoney
 	from @tmp a
-	order by gno,datea,noa,noq;
->>>>>>> 1b6018e141a46d4692de8ef8e588f231ac485232
+	left join chgpart b on a.chgpartno=b.noa
+	order by chgpartno,gno,datea
+	
+	drop table #chgpart;
 
 z_chgcasha:--z_chgcasha
 	declare @t_bmon nvarchar(10)
