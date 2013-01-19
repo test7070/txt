@@ -1,0 +1,363 @@
+﻿carsal2:
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_accy nvarchar(10)
+	declare @t_mon nvarchar(10)
+	declare @t_bdriverno  nvarchar(10)
+	declare @t_edriverno  nvarchar(10)
+	declare @t_worker nvarchar(20)
+
+	set @t_accy = [1]
+	set @t_mon  = [2]
+	set @t_bdriverno=[3]
+	set @t_edriverno=[4]
+
+	declare  @currentDate  nvarchar(10)
+
+	set  @currentDate  =  convert(nvarchar,Year(Current_Timestamp)-1911)+'/'+
+	right('00'+convert(nvarchar,Month(Current_Timestamp)),2)+'/'+
+	right('00'+convert(nvarchar,Day(Current_Timestamp)),2)
+	--暫存資料
+	declare @tmps  table(
+		noa nvarchar(10),
+		noq nvarchar(10),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		[day]  int,
+		tranmoney float,--運費收入
+		drivermoney float,--司機抽成
+		bonus float,--達成獎金
+		plus  float,--加項
+		[money] float,--應支金額
+		eo float,--執行命令
+		ticket  float,--罰款
+		labor float,--勞保
+		health float,--健保
+		minus  float,--減項
+		carborr  float,--借支
+		total  float,--實領金額
+		unpay  float,--尚欠金額 
+		memo nvarchar(max)
+	)
+	-------------------------------------------------------------------------------------------------------------------
+	
+	declare @cmd nvarchar(max)
+	declare @driverno  nvarchar(20)
+	declare @mon  nvarchar(10)
+	declare @tranmoney  float
+	declare @drivermoney  float
+	declare @driver nvarchar(20)
+	declare @money  float
+	declare @bonusno  nvarchar(20)
+	declare @bonus  float
+	declare @plusmoney  float
+	declare @minusmoney  float
+	declare @driverpay  float
+	declare @carborr float
+	declare @eo float
+	declare @ticket float
+	declare @total float
+	declare @bmon nvarchar(10)
+	declare @emon nvarchar(10)
+	declare @bdate nvarchar(10)
+	declare @edate nvarchar(10)
+	declare @labor float
+	declare @health float
+	declare @t_n  int
+	declare @day  int
+	declare @typea nvarchar(20)
+	declare @unpay float
+	-------------------------------------------------------------------------------------------------------------------
+	declare @tmp_x1 table(
+		driverno nvarchar(20),
+		mon nvarchar(20),
+		tranmoney float,
+		drivermoney float
+	)
+	set @cmd=
+	" select driverno,LEFT(datea,6) mon,sum(ROUND(mount2*price2,0)) tranmoney,sum(ROUND(mount2*price2*discount,0)) drivermoney"+
+	" from view_trans"+@t_accy+
+	" where  LEFT(datea,6)=@t_mon  and  (driverno  between  @t_bdriverno  and  @t_edriverno) and "+
+	" 	(mount2*price2!=0 or mount2*price2*discount!=0)"+
+	" group  by  driverno,LEFT(datea,6)"
+	insert into @tmp_x1
+	execute sp_executesql @cmd,N'@t_mon nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20)',
+	@t_mon=@t_mon,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
+
+	set  @t_n  =  0
+	declare cursor_table cursor for
+	select * from @tmp_x1
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@mon,@tranmoney,@drivermoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set  @t_n  =  @t_n  +  1	
+		set @driver = ''
+		select @driver=namea from driver where noa=@driverno
+		insert  into  @tmps (noa,noq,driverno,driver,tranmoney,drivermoney)values(@mon,RIGHT('000'+convert(varchar,@t_n),3),@driverno,@driver,@tranmoney,@drivermoney)
+		fetch next from cursor_table
+		into @driverno,@mon,@tranmoney,@drivermoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--固定薪資
+	declare cursor_table cursor for
+	select noa,salmoney from driver where(noa  between  @t_bdriverno  and  @t_edriverno) and salmoney>0
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if  not exists(select  *  from  @tmps  where  driverno=@driverno  and  noa=@t_mon )
+		begin
+			set  @t_n  = ''  
+			select  @t_n=MAX(noq)  from  @tmps  where noa=@t_mon
+			set @driver = ''
+			select @driver=namea from driver where noa=@driverno
+			insert into @tmps (noa,noq,driverno,driver)
+			values(@t_mon,right(convert(varchar,'000'+convert(varchar,CONVERT(int,@t_n)+1)),3),@driverno,@driver)
+		end
+		update @tmps  set drivermoney=isnull(drivermoney,0)+isnull(@money,0)  where  noa=@t_mon  and  driverno=@driverno
+		fetch next from cursor_table
+		into @driverno,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------------------------------------------------
+	--達成獎金
+	declare @tmp_x2 table(
+		driverno nvarchar(20),
+		bonusno nvarchar(20),
+		[money] float
+	)
+	set @cmd=
+	" select a.driverno, b.bonusno,sum(ROUND(a.mount2*a.price2,0)) [money]"+
+	" from view_trans"+@t_accy+"  a"+
+	" left  join calctypes  b  on  a.calctype=b.noa+b.noq"+
+	" where  LEFT(datea,6)=@t_mon  and  (driverno  between  @t_bdriverno  and  @t_edriverno) and not(b.bonusno  is  null)"+
+	" group  by  a.driverno, b.bonusno"
+	insert into @tmp_x2
+	execute sp_executesql @cmd,N'@t_mon nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20)',
+	@t_mon=@t_mon,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
+	
+	declare @tmp1 table(
+		driverno nvarchar(20),
+		bonusno nvarchar(20),
+		[money] float,
+		bonus float
+	)
+	declare cursor_table cursor for
+	select * from @tmp_x2
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@bonusno,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if  not exists(select  *  from  @tmps  where  driverno=@driverno  and  noa=@t_mon )
+		begin
+			set  @t_n  = ''  
+			select  @t_n=MAX(noq)  from  @tmps  where noa=@t_mon
+			set @driver = ''
+			select @driver=namea from driver where noa=@driverno
+			insert into @tmps (noa,noq,driverno,driver)
+			values(@t_mon,right(convert(varchar,'000'+convert(varchar,CONVERT(int,@t_n)+1)),3),@driverno,@driver)
+		end
+		set  @bonus  =  0
+		if  exists(select  *  from bonuss  where  noa=@bonusno  and (@money between  strvalue  and  endvalue))
+		begin
+			select @bonus=bonus  from bonuss  where  noa=@bonusno  and (@money between  strvalue  and  endvalue)
+		end
+		else
+		begin
+			select  @bonus=bonus  from bonuss  where  noa=@bonusno  and (@money>=strvalue  and  endvalue=0)
+		end
+		insert  into  @tmp1
+		select  @driverno,@bonusno,@money,@bonus
+		
+		fetch next from cursor_table
+		into @driverno,@bonusno,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select driverno,sum(bonus)  from  @tmp1  group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@bonus
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmps  set  bonus=@bonus  where  noa=@t_mon  and  driverno=@driverno
+		fetch next from cursor_table
+		into @driverno,@bonus
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------------------------------------------------
+	--ETC
+	declare cursor_table cursor for
+	select driverno,SUM([money])
+	from etc where  mon=@t_mon  and  (driverno  between  @t_bdriverno  and  @t_edriverno) and typea='DRIVERPAY'
+	group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if  not exists(select  *  from @tmps where  driverno=@driverno  and  noa=@t_mon )
+		begin
+			set  @t_n  = ''  
+			select  @t_n=MAX(noq)  from @tmps where noa=@t_mon
+			set @driver = ''
+			select @driver=namea from driver where noa=@driverno
+			insert into @tmps (noa,noq,driverno,driver)
+			values(@t_mon,right(convert(varchar,'000'+convert(varchar,CONVERT(int,@t_n)+1)),3),@driverno,@driver)
+		end
+		update  @tmps  set  minus=isnull(minus,0)+@money  where  noa=@t_mon  and  driverno=@driverno
+		fetch next from cursor_table
+		into @driverno,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------------------------------------------------
+	--加減項
+	declare cursor_table cursor for
+	select driverno,SUM(plusmoney),	SUM(minusmoney)
+	from carchg where  LEFT(datea,6)=@t_mon  and  (driverno  between  @t_bdriverno  and  @t_edriverno) 	
+	group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@plusmoney,@minusmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if  not exists(select  *  from @tmps where  driverno=@driverno  and  noa=@t_mon )
+		begin
+			set  @t_n  = ''  
+			select  @t_n=MAX(noq)  from @tmps where noa=@t_mon
+			set @driver = ''
+			select @driver=namea from driver where noa=@driverno
+			insert into @tmps (noa,noq,driverno,driver)
+			values(@t_mon,right(convert(varchar,'000'+convert(varchar,CONVERT(int,@t_n)+1)),3),@driverno,@driver)
+		end
+		update  @tmps  set  plus=isnull(plus,0)+@plusmoney,minus=isnull(minus,0)+@minusmoney  where  noa=@t_mon  and  driverno=@driverno
+		fetch next from cursor_table
+		into @driverno,@plusmoney,@minusmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------------------------------------------------
+	--借支,其他借支,罰單 ,維修
+	declare cursor_table cursor for
+	select  b.typea,b.driverno,sum(a.[money])
+	from  carborrs  a
+	left  join  carborr b  on a.noa=b.noa
+	where  a.mon=@t_mon and len(isnull(b.driverno,''))>0
+	group  by  b.typea,b.driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @typea,@driverno,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if  not exists(select  *  from @tmps where  driverno=@driverno  and  noa=@t_mon )
+		begin
+			set  @t_n  = ''  
+			select  @t_n=MAX(noq)  from @tmps  where noa=@t_mon
+			set @driver = ''
+			select @driver=namea from driver where noa=@driverno
+			insert into @tmps (noa,noq,driverno,driver)
+			values(@t_mon,right(convert(varchar,'000'+convert(varchar,CONVERT(int,@t_n)+1)),3),@driverno,@driver)
+		end
+		if @typea='借支' or  @typea='其他借支' 
+		begin
+			update @tmps  set  carborr=isnull(carborr,0)+@money  where  driverno=@driverno  and  noa=@t_mon  
+		end
+		if @typea='維修'
+		begin
+			update @tmps  set  minus=isnull(minus,0)+@money  where  driverno=@driverno  and  noa=@t_mon  
+		end
+		if @typea='罰單'
+		begin
+			update @tmps  set  ticket=isnull(ticket,0)+@money  where  driverno=@driverno  and  noa=@t_mon  
+		end
+		fetch next from cursor_table
+		into @typea,@driverno,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------------------------------------------------
+	--勞健保,小計,執行命令
+	declare cursor_table cursor for
+	select driverno from @tmps where noa=@t_mon
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @day=0
+		set @cmd ='select @day=count(1) from  (SELECT DISTINCT datea  from  view_trans'+@t_accy+' where  LEFT(datea,6)=@t_mon and driverno=@driverno)as a'
+		execute sp_executesql @cmd,N'@t_mon nvarchar(10),@driverno nvarchar(20),@day int output',@t_mon=@t_mon,@driverno=@driverno,@day=@day output
+		
+		select @labor=0,@health=0,@eo=0
+		select @labor=isnull(labor,0)+isnull(pensionfund,0),@health=health,@eo=eo from driver where noa=@driverno
+		update @tmps set day=@day,labor=@labor,health=@health,eo=@eo,
+			[money]=isnull(drivermoney,0)+isnull(bonus,0)+isnull(plus,0),
+			total= isnull(drivermoney,0)+isnull(bonus,0)+isnull(plus,0)-isnull(@eo,0)-isnull(ticket,0)-@labor-@health-isnull(minus,0)-isnull(carborr,0)
+		where noa=@t_mon and driverno=@driverno
+
+		fetch next from cursor_table
+		into @driverno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select noa,driverno from @tmps
+	open cursor_table
+	fetch next from cursor_table
+	into @mon,@driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @unpay=0
+		
+		select @unpay=SUM(ISNULL(a.[money],0)) from carborrs  a
+		left  join  carborr b on  a.noa=b.noa
+		where  a.mon>@mon  and  b.driverno=@driverno
+		
+		update @tmps set unpay=@unpay where noa=@mon and driverno=@driverno
+		
+		fetch next from cursor_table
+		into @mon,@driverno
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------------------------
+	--回寫合計
+	select @tranmoney=0,@drivermoney=0,@bonus=0,@plusmoney=0,@money=0,@ticket=0,@labor=0,@health=0,@minusmoney=0,@carborr=0,@total=0
+	select @tranmoney=SUM(isnull(tranmoney,0)),@drivermoney=SUM(isnull(drivermoney,0)),
+	@bonus=SUM(isnull(bonus,0)),@plusmoney=SUM(isnull(plus,0)),
+	@money=SUM(isnull([money],0)),@eo=SUM(ISNULL(eo,0)),@ticket=SUM(isnull(ticket,0)),
+	@labor=SUM(isnull(labor,0)),@health=SUM(isnull(health,0)),
+	@minusmoney=SUM(isnull(minus,0)),@carborr=SUM(isnull(carborr,0)),
+	@total=SUM(isnull(total,0))
+	from @tmps where noa=@t_mon
+	
+	set @cmd='001'
+	declare cursor_table cursor for
+	select driverno from @tmps order by driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmps set noq=@cmd where driverno=@driverno
+		set @cmd =RIGHT('000'+ cast((CAST(@cmd as int)+1) as nvarchar),3)
+		
+		fetch next from cursor_table
+		into @driverno
+	end
+	close cursor_table
+	deallocate cursor_table	
+	--------------------------------------------------------------------------------------------------------------------
+	select * from @tmps where driverno between @t_bdriverno and @t_edriverno;
+	
