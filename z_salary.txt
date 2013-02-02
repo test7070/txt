@@ -1279,18 +1279,13 @@ set @t_bxpartno = case when '#non' = [9] then '' else [9] end
 set @t_expartno = case when '#non' = [10] then CHAR(255) else [10] end
 set @t_bsssno = case when '#non' = [4] then '' else [4] end
 set @t_esssno = case when '#non' = [5] then CHAR(255) else [5] end
-declare @i int
-declare @part nvarchar(20)
-declare @countrecord int
-set @i = 0
-set @countrecord = 0
-set @part = ''
+
+
 declare @tmp table(
 		gno  nvarchar(1),
-		idno int identity(0,1),
-		noa nvarchar(30),
 		partno nvarchar(20),
 		part nvarchar(20),
+		sssno nvarchar(20),
 		namea nvarchar(20),
 		jobno nvarchar(20),
 		salary float,
@@ -1298,42 +1293,68 @@ declare @tmp table(
 		bosp float,
 		boad float,
 		boot float,
-		total float
+		bofu float,
+		total float,
+		payrise float,
+		rate float,
+		afsalary float,
+		memo nvarchar(MAX)
 )
-insert into @tmp
-select '0' gno,a.noa,b.partno,b.part,b.namea,a.jobno,a.money,a.bo_traffic,a.bo_special,a.bo_admin,a.bo_oth,
-a.money+a.bo_traffic+a.bo_special+a.bo_admin+a.bo_oth
-from saladjust a
-left join sss b on a.noa = b.noa
-where (LEN(@t_xyear) = 0 or @t_xyear = LEFT(a.datea,3)) and
-(b.partno between @t_bxpartno and @t_expartno) and
-(a.noa between @t_bsssno and @t_esssno)
-and partno != ''
-order by b.partno,a.jobno
+--插入去年薪資
+insert into @tmp 
+select '0'gno, b.partno,b.part,a.noa,b.namea,b.jobno,
+a.money,a.bo_traffic,a.bo_special,a.bo_admin,a.bo_oth,a.bo_full,
+(a.money+a.bo_traffic+a.bo_special+a.bo_admin+a.bo_oth)total,0,0,0,''
+from saladjust a right join sss b on a.noa=b.noa
+where left(a.datea,3)=cast((CAST(@t_xyear as int)-1) as nvarchar(10))
+and a.noa!='Z001'
 
-select @countrecord = COUNT(*) from @tmp 
-while(@i < @countrecord)
-begin
-	if(@part = '' or (select part from @tmp where idno = @i ) != @part)
+--插入今年薪資與備註
+declare @sssno nvarchar(20) 
+declare cursor_table cursor for
+	select sssno from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @sssno
+	while(@@FETCH_STATUS <> -1)
 	begin
-		select @part = part from @tmp where idno = @i
+		update @tmp
+		set afsalary=isnull((select (money+bo_traffic+bo_special+bo_admin+bo_oth) from saladjust where noa=@sssno and left(datea,3)=@t_xyear),0),
+		memo=(select memo from saladjust where noa=@sssno and left(datea,3)=@t_xyear)
+		where sssno=@sssno
+		fetch next from cursor_table
+		into @sssno
 	end
-	else
-	begin
-			update @tmp set part = '' where idno = @i
-	end
-	set @i +=1
-end
+close cursor_table
+deallocate cursor_table
 
-insert into @tmp
-select '1'gno,'','','','','',SUM(salary),SUM(botr),SUM(bosp),SUM(boad),SUM(boot),SUM(total)
-from @tmp
+--插入調整金額與比例
 
-select gno,idno,noa,partno,part,namea,jobno,
-case when salary = 0 then '' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salary),1)),4,12)) end salary,
-case when botr = 0 then '' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,botr),1)),4,12)) end botr,
-case when bosp = 0 then '' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bosp),1)),4,12)) end bosp,
-case when boad = 0 then '' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,boad),1)),4,12)) end boad,
-case when boot = 0 then '' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,boot),1)),4,12)) end boot,
-case when total = 0 then '' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) end total
-from @tmp;
+update @tmp
+set payrise=(afsalary-total)
+
+update @tmp
+set rate=ROUND((payrise/total),3)*100.0
+
+--插入合計
+insert into @tmp 
+select '1'gno, '','','','','',sum(salary),sum(botr),sum(bosp),sum(boad),sum(boot),sum(bofu),sum(total),sum(payrise),0,sum(afsalary),''
+from @tmp where gno='0'
+
+update @tmp
+set rate=ROUND((payrise/total),3)*100.0
+where gno='1'
+
+
+select gno,partno,part,sssno,namea,jobno,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salary),1)),4,12)) salary, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,botr),1)),4,12)) botr, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bosp),1)),4,12)) bosp, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,boad),1)),4,12)) boad, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,boot),1)),4,12)) boot, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bofu),1)),4,12)) bofu,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,payrise),1)),4,12)) payrise,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,afsalary),1)),4,12)) afsalary,
+cast(rate as nvarchar(10))+'%' rate,memo
+from @tmp order by gno,partno,jobno;
