@@ -83,41 +83,68 @@ z_oil1:--z_oil1
 	and (isnull(a.oilstationno,'') between @t_boilstationno and @t_eoilstationno)
 	group by isnull(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.datea,a.carno,a.driverno,isnull(e.namea,''),a.price
 	
+	declare @tmp2 table(
+		carkindno nvarchar(20),
+		carkind nvarchar(10),
+		caryear nvarchar(10),
+		datea nvarchar(10),
+		carno nvarchar(20),
+		tranmoney float,
+		tranmiles float
+	)
+	
+	set @cmd = " select ISNULL(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.datea,a.carno,sum(ISNULL(a.total,0)),sum(ISNULL(a.miles,0))"+
+	" from view_trans"+@t_accy+" a"+
+	" left join car2 b on a.carno=b.carno"+
+	" left join carkind c on b.carkindno=c.noa"+
+	" left join #carkind d on b.carkindno=d.noa"+
+	" where d.noa is not null"+
+	" and (a.datea between @t_bdate and @t_edate)"+
+	" and (LEN(@t_carno)=0 or a.carno=@t_carno)"+
+	" group by ISNULL(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.datea,a.carno"
+	insert into @tmp2
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_carno nvarchar(20)'
+	,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_carno=@t_carno
+
+	declare @carkindno nvarchar(20)
+	declare @carkind nvarchar(10)
+	declare @caryear nvarchar(10)
 	declare @datea nvarchar(10)
 	declare @carno nvarchar(20)
 	declare @tranmoney float
 	declare @tranmiles float
-	declare @rate float
 	
 	declare cursor_table cursor for
-	select datea,carno from @tmp
+	select carkindno,carkind,caryear,datea,carno,tranmoney,tranmiles from @tmp2 
 	open cursor_table
 	fetch next from cursor_table
-	into @datea,@carno
+	into @carkindno,@carkind,@caryear,@datea,@carno,@tranmoney,@tranmiles
 	while(@@FETCH_STATUS <> -1)
 	begin
-		select @tranmoney=0,@tranmiles=0
-		set @cmd = "select @tranmoney=sum(isnull(total,0)),@tranmiles=sum(isnull(miles,0)) from view_trans"+@t_accy+" where datea=@datea and carno=@carno"
-		execute sp_executesql @cmd,N'@tranmoney float out,@tranmiles float out,@datea nvarchar(10),@carno nvarchar(20)'
-		,@tranmoney=@tranmoney out,@tranmiles=@tranmiles out,@datea=@datea,@carno=@carno
-		
-		update @tmp set tranmoney=@tranmoney,tranmiles=@tranmiles where datea=@datea and carno=@carno
-		
+		if not exists(select * from @tmp where datea=@datea and carno=@carno)
+		begin
+			insert into @tmp(gno,carkindno,carkind,caryear,datea,carno,tranmoney,tranmiles)
+			values('0',@carkindno,@carkind,@caryear,@datea,@carno,@tranmoney,@tranmiles)
+		end
+		else
+		begin
+			update @tmp set tranmoney=@tranmoney,tranmiles=@tranmiles where datea=@datea and carno=@carno
+		end
 		fetch next from cursor_table
-		into @datea,@carno
+		into @carkindno,@carkind,@caryear,@datea,@carno,@tranmoney,@tranmiles
 	end
 	close cursor_table
 	deallocate cursor_table
 	
 	insert into @tmp
-	select '1' gno,carkindno,carkind,'','','','','',sum(mount),null,sum([money]),SUM(miles),SUM(isnull(tranmoney,0)),SUM(isnull(tranmiles,0)),null,null
+	select '1' gno,carkindno,carkind,'','','','','',sum(isnull(mount,0)),null,sum(isnull([money],0)),SUM(isnull(miles,0)),SUM(isnull(tranmoney,0)),SUM(isnull(tranmiles,0)),null,null
 	from @tmp where gno='0' group by carkindno,carkind
 	insert into @tmp
-	select '2' gno,CHAR(255),'','','','','','',sum(mount),null,sum([money]),SUM(miles),SUM(isnull(tranmoney,0)),SUM(isnull(tranmiles,0)),null,null
+	select '2' gno,CHAR(255),'','','','','','',sum(isnull(mount,0)),null,sum(isnull([money],0)),SUM(isnull(miles,0)),SUM(isnull(tranmoney,0)),SUM(isnull(tranmiles,0)),null,null
 	from @tmp where gno='0'
 	
-	update @tmp set rate1=  case when tranmoney=0 then 0 else round([money]/tranmoney*100,0) end
-	,rate2 = case when mount=0 then 0 else round(miles/mount,2) end
+	update @tmp set rate1=  case when isnull(tranmoney,0)=0 then 0 else round(isnull([money],0)/isnull(tranmoney,0)*100,0) end
+	,rate2 = case when isnull(mount,0)=0 then 0 else round(isnull(miles,0)/isnull(mount,0),2) end
 	
 	select * 
 	,datea d
