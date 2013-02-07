@@ -6,8 +6,10 @@ set @t_single = case when '#non'=[5] then '' else [5] end
 declare @tmp table(
 	gno nvarchar(1),
 	idno int identity(0,1),
+	orderby nvarchar(10),
 	noa nvarchar(20),
 	namea nvarchar(50),
+	depl_ac nvarchar(20),
 	mount float,
 	unit nvarchar(4),
 	indate nvarchar(10),
@@ -20,17 +22,18 @@ declare @tmp table(
 	year_depl float,
 	notdepltotal float,
 	memo nvarchar(max),
-	isdepl nvarchar(1),
+	isdepl bit,
 	scrapvalue nvarchar(30),
 	accumulat float
 )
 insert into @tmp
 	select
-		'0',noa,namea,mount,UNIT,indate,money,fixmoney,
+		'0','1',noa,namea,depl_ac,mount,UNIT,indate,money,fixmoney,
 		endvalue,'',year,'',year_depl,(money+fixmoney)-year_depl as notdepltotal,
 		memo,isdepl,scrapvalue,accumulat
 	from accz102_1
-declare @isdepl nvarchar(1)
+declare @depl_ac nvarchar(8)
+declare @isdepl bit
 declare @money float
 declare @fixmoney float
 declare @scrapvalue nvarchar(30)
@@ -44,16 +47,12 @@ declare @t2 float
 declare @t3 float
 declare @noa nvarchar(20)
 declare cursor_table cursor for
-	select noa,isdepl,money,fixmoney,scrapvalue,byear,accumulat from @tmp
+	select noa,depl_ac,isdepl,money,fixmoney,scrapvalue,byear,accumulat from @tmp
 open cursor_table
 fetch next from cursor_table
-into @noa,@isdepl,@money,@fixmoney,@scrapvalue,@byear,@accumulat
+into @noa,@depl_ac,@isdepl,@money,@fixmoney,@scrapvalue,@byear,@accumulat
 while(@@FETCH_STATUS <> -1)
 begin
-	------base
---case when isdepl = 1 then 0 
---			else ((money+fixmoney)-(case when scrapvalue= 'N' then 0 else (case when scrapvalue= 'N' or isdepl = 1 then 0 else ROUND((money+fixmoney)/(year+1),0) end) end))
---		end
 	set @base = 0
 	if(@isdepl = 1)
 	begin
@@ -71,7 +70,7 @@ begin
 			set @t2 = 0
 			set @t3 = 0
 			declare cursor_table2 cursor for
-				select depl,mon from acczt where (noa = @noa) and (@isdepl = 0)
+				select depl,mon from acczt102_1 where (noa = @noa) and (@isdepl = 0)
 			open cursor_table2
 			fetch next from cursor_table2
 			into @depl,@mon
@@ -96,15 +95,39 @@ begin
 				set @c = ((@money+@fixmoney)-(@accumulat-@t2-@t3))
 			end
 			set @base = @base - @c
-			update @tmp set base = @base,deplc = (case when @isdepl = 0 then @depl else '' end)
+			update @tmp set base = @base,deplc = (case when @isdepl = 0 then @depl else '' end),year_depl = @depl
 			where current of cursor_table
-			
 		end
 	end
-	
 	fetch next from cursor_table
-	into @noa,@isdepl,@money,@fixmoney,@scrapvalue,@byear,@accumulat
+	into @noa,@depl_ac,@isdepl,@money,@fixmoney,@scrapvalue,@byear,@accumulat
 end
 close cursor_table
 deallocate cursor_table
-select * from @tmp;
+insert into @tmp(gno,orderby,namea)
+	select '1','0',b.acc2
+	from @tmp a
+	left join acc102_1 b on a.noa = b.acc1
+	group by b.acc2
+insert into @tmp(gno,orderby,namea,money,fixmoney,endvalue,base,deplc,year_depl,notdepltotal)
+	select '2','2',b.acc2,SUM(money),SUM(fixmoney),SUM(endvalue),SUM(base),
+				SUM(deplc),SUM(year_depl),SUM(notdepltotal)
+	from @tmp a
+	left join acc102_1 b on a.noa = b.acc1
+	where gno = 0
+	group by b.acc2
+insert into @tmp(gno,orderby,money,fixmoney,endvalue,base,deplc,year_depl,notdepltotal)
+	select '3','3',SUM(money),SUM(fixmoney),SUM(endvalue),SUM(base),
+				SUM(deplc),SUM(year_depl),SUM(notdepltotal)
+	from @tmp where gno = 2
+select 
+gno,noa,namea,mount,unit,indate,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,fixmoney),1)),4,12)) fixmoney,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,endvalue),1)),4,12)) endvalue,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,base),1)),4,12)) base,byear,
+case when (left(depl_ac,1) = '5' and year_depl > 0) then '*' end + 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,deplc),1)),4,12)) deplc,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,year_depl),1)),4,12)) year_depl,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,notdepltotal),1)),4,12)) notdepltotal,memo
+from @tmp order by orderby;
