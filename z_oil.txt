@@ -93,16 +93,16 @@ z_oil1:--z_oil1
 		tranmiles float
 	)
 	
-	set @cmd = " select ISNULL(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.datea,a.carno,sum(ISNULL(a.total,0)),sum(ISNULL(a.miles,0))"+
+	set @cmd = " select ISNULL(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.trandate,a.carno,sum(ISNULL(a.total,0)),sum(ISNULL(a.miles,0))"+
 	" from view_trans"+@t_accy+" a"+
 	" left join car2 b on a.carno=b.carno"+
 	" left join carkind c on b.carkindno=c.noa"+
 	" left join #carkind d on b.carkindno=d.noa"+
 	" left join calctypes e on a.calctype=e.noa+e.noq"+
 	" where (d.noa is not null) and (isnull(e.isoutside,0)=0)"+
-	" and (a.datea between @t_bdate and @t_edate)"+
+	" and (a.trandate between @t_bdate and @t_edate)"+
 	" and (LEN(@t_carno)=0 or a.carno=@t_carno)"+
-	" group by ISNULL(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.datea,a.carno"
+	" group by ISNULL(b.carkindno,''),ISNULL(c.kind,''),ISNULL(b.caryear,''),a.trandate,a.carno"
 	insert into @tmp2
 	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_carno nvarchar(20)'
 	,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_carno=@t_carno
@@ -357,6 +357,7 @@ z_oil2:--z_oil2
 		emount float,
 		emoney float,
 		datea nvarchar(10),
+		carno nvarchar(20),
 		detail nvarchar(max),
 		mount float,
 		price float,
@@ -364,10 +365,10 @@ z_oil2:--z_oil2
 		memo nvarchar(max)
 	)
 	insert into @tmp
-	select '0',oilstationno,'',0,0,0,0,datea,'補充',mount,price,[money],memo
+	select '0',oilstationno,'',0,0,0,0,datea,'','補充',mount,price,[money],memo
 	from @oilin
 	insert into @tmp
-	select '1',oilstationno,'',0,0,0,0,datea,(CAST(driver as CHAR(10))+carno),mount,price,[money],memo
+	select '1',oilstationno,'',0,0,0,0,datea,carno,(CAST(driver as CHAR(10))+carno),mount,price,[money],memo
 	from @oil
 	
 	declare cursor_table cursor for
@@ -399,6 +400,7 @@ z_oil2:--z_oil2
 		emount float,
 		emoney float,
 		datea nvarchar(10),
+		carno nvarchar(20),
 		detail nvarchar(max),
 		mount float,
 		price float,
@@ -409,14 +411,15 @@ z_oil2:--z_oil2
 	)
 	declare @curStation nvarchar(20)
 	set @curStation = CHAR(255)
-	
+	declare @carno nvarchar(20)
+	declare @emiles float
 	declare cursor_table cursor for
 	select ROW_NUMBER()over(order by oilstationno,datea,pno) recno
-	,pno,oilstationno,oilstation,bmount,bmoney,emount,emoney,datea,detail,mount,price,[money],memo
+	,pno,oilstationno,oilstation,bmount,bmoney,emount,emoney,datea,carno,detail,mount,price,[money],memo
 	from  @tmp
 	open cursor_table
 	fetch next from cursor_table
-	into @recno,@pno,@oilstationno,@oilstation,@bmount,@bmoney,@emount,@emoney,@datea,@detail,@mount,@price,@money,@memo
+	into @recno,@pno,@oilstationno,@oilstation,@bmount,@bmoney,@emount,@emoney,@datea,@carno,@detail,@mount,@price,@money,@memo
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if(@curStation!=@oilstation)
@@ -425,11 +428,27 @@ z_oil2:--z_oil2
 			select @curmount=@curmount+@mount,@curmoney=@curmoney+@money
 		else
 			select @curmount=@curmount-@mount,@curmoney=@curmoney-@money
+		
+		set @cmd = ''
+		declare cursor_table2 cursor for
+		select emiles from oil where datea=@datea and carno=@carno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @emiles
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @cmd = @cmd + case when LEN(@cmd)>0 then ',' else '' end + cast(@emiles as nvarchar)
+			fetch next from cursor_table2
+			into @emiles
+		end
+		close cursor_table2
+		deallocate cursor_table2
+			
 		insert into @tmp2
 		(recno,gno,pno,oilstationno,oilstation,bmount,bmoney,emount,emoney,datea,detail,mount,price,[money],memo,curmount,curmoney)
-		values(@recno,'0',@pno,@oilstationno,@oilstation,@bmount,@bmoney,@emount,@emoney,@datea,@detail,@mount,@price,@money,@memo,@curmount,@curmoney)	
+		values(@recno,'0',@pno,@oilstationno,@oilstation,@bmount,@bmoney,@emount,@emoney,@datea,@detail,@mount,@price,@money,@cmd+' '+@memo,@curmount,@curmoney)	
 		fetch next from cursor_table
-		into @recno,@pno,@oilstationno,@oilstation,@bmount,@bmoney,@emount,@emoney,@datea,@detail,@mount,@price,@money,@memo
+		into @recno,@pno,@oilstationno,@oilstation,@bmount,@bmoney,@emount,@emoney,@datea,@carno,@detail,@mount,@price,@money,@memo
 	end
 	close cursor_table
 	deallocate cursor_table
@@ -456,8 +475,8 @@ z_oil2:--z_oil2
 	deallocate cursor_table
 	
 	select * 
-	,CONVERT(nvarchar(15),cast(bmount as money),1) cbmount
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmoney),1)),4,12)) cbmoney
+	,CONVERT(nvarchar(15),cast(bmount as money),1) cbm1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmoney),1)),4,12)) cbm2
 	,CONVERT(nvarchar(15),cast(emount as money),1) cemount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,emoney),1)),4,12)) cemoney
 	,CONVERT(nvarchar(15),cast(mount as money),1) cmount
