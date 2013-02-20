@@ -3,7 +3,7 @@
 	declare @t_edate nvarchar(10)
 	declare @t_bbccno nvarchar(20)
 	declare @t_ebccno nvarchar(20)
-	declare @t_storeno nvarchar(max)
+	declare @t_storeno nvarchar(20)
 
 	set @t_bdate = case when '#non'=[1] then '' else [1] end
 	set @t_edate = case when '#non'=[2] then char(255) else [2] end
@@ -14,6 +14,7 @@
 	--*****************************************************************************************	
 --盤存的資料
 declare @t_result table(
+		storeno nvarchar(20),
 		bccno nvarchar(20),
 		bccname nvarchar(50),
 		datea nvarchar(10),
@@ -21,6 +22,7 @@ declare @t_result table(
 )
 --輸出資料
 declare @result table(
+		storeno nvarchar(20),
 		gno nvarchar(1),
 		bccno nvarchar(20),
 		bccname nvarchar(50),
@@ -31,6 +33,7 @@ declare @result table(
 		mount5 decimal (14,2)
 )
 
+declare	@storeno nvarchar(20)
 declare @gno nvarchar(1)
 declare	@bccno nvarchar(20)
 declare	@bccname nvarchar(50)
@@ -45,19 +48,19 @@ declare	@mount4 decimal (14,2)
 --取最後一筆有盤存的資料
 
 declare bcc_table cursor for
-select b.bccno from bcce a left join bcces b on a.noa=b.noa where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate group by b.bccno
+select b.storeno,b.bccno from bcce a left join bcces b on a.noa=b.noa where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate group by b.storeno,b.bccno
 open bcc_table
 fetch next from bcc_table
-into @bccno
+into @storeno,@bccno
 while(@@FETCH_STATUS <> -1)
 begin
 	insert into @t_result
-	select top 1 b.bccno,b.bccname,a.datea,b.mount
+	select top 1 b.storeno,b.bccno,b.bccname,a.datea,b.mount
 	from bcce a left join bcces b on a.noa=b.noa
 	where b.bccno =@bccno and a.datea < @t_bdate
 	order by a.datea desc
 	fetch next from bcc_table
-	into @bccno
+	into @storeno,@bccno
 
 end
 close bcc_table
@@ -65,13 +68,13 @@ deallocate bcc_table
 
 --計算盤存到資料之前的入領料
 declare bcc_table cursor for
-select bccno,bccname,datea,mount from @t_result
+select storeno,bccno,bccname,datea,mount from @t_result
 open bcc_table
 fetch next from bcc_table
-into @bccno,@bccname,@datea,@mount
+into @storeno,@bccno,@bccname,@datea,@mount
 while(@@FETCH_STATUS <> -1)
 begin
-
+	set @mount=0
 	set @mount=@mount
 		--入料
 		+isnull((select sum(b.mount) mount
@@ -85,10 +88,10 @@ begin
 		group by b.bccno),0)
 	--存入有盤存的期初
 	insert into @result
-	select '0',@bccno,@bccname,@mount,0,0,0,0
+	select @storeno,'0',@bccno,@bccname,@mount,0,0,0,0
 
 	fetch next from bcc_table
-	into @bccno,@bccname,@datea,@mount
+	into @storeno,@bccno,@bccname,@datea,@mount
 
 end
 close bcc_table
@@ -98,16 +101,16 @@ deallocate bcc_table
 --計算沒有盤存的上期餘額
 
 declare bcc_table cursor for
-select noa,product,begindate,beginmount from bcc where noa not in (select c.noa bccno from bcce a left join bcces b on a.noa=b.noa right join bcc c on c.noa=b.bccno where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate)
+select a.noa,b.noa,product from bcc a,store b where a.noa+'-'+b.noa not in (select bccno+'-'+storeno from @result)
 open bcc_table
 fetch next from bcc_table
-into @bccno,@bccname,@datea,@mount
+into @bccno,@storeno,@bccname
 while(@@FETCH_STATUS <> -1)
 begin
 
-	set @mount=@mount
+	set @mount=
 		--入料
-		+isnull((select sum(b.mount) mount
+		isnull((select sum(b.mount) mount
 		from bccin a left join bccins b on a.noa=b.noa
 		where b.bccno=@bccno and  a.datea < @t_bdate
 		group by b.bccno),0)
@@ -118,10 +121,10 @@ begin
 		group by b.bccno),0)
 	--存入沒有盤存的期初
 	insert into @result
-	select '0',@bccno,@bccname,@mount,0,0,0,0
+	select @storeno,'0',@bccno,@bccname,@mount,0,0,0,0
 
 	fetch next from bcc_table
-	into @bccno,@bccname,@datea,@mount
+	into @bccno,@storeno,@bccname
 
 end
 close bcc_table
@@ -131,27 +134,27 @@ deallocate bcc_table
 --計算本月入庫&領料&耗料
 
 declare bcc_table cursor for
-select bccno,mount1 from @result
+select storeno,bccno,mount1 from @result
 open bcc_table
 fetch next from bcc_table
-into @bccno,@mount
+into @storeno,@bccno,@mount
 while(@@FETCH_STATUS <> -1)
 begin
 	
 	--入庫
 	set @mount2 = (select isnull(sum(b.mount),0)
 	from bccin a left join bccins b on a.noa=b.noa
-	where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate
+	where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate and b.storeno=@storeno
 	group by b.bccno)
 	--領料
 	set @mount3 = (select isnull(sum(b.mount),0) 
 	from bccout a left join bccouts b on a.noa=b.noa
-	where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate
+	where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate and b.storeno=@storeno
 	group by b.bccno)
 	--耗料
 	set @mount4 = (select isnull(sum(b.mount-b.bkbcc),0)
 	from bccout a left join bccouts b on a.noa=b.noa
-	where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate
+	where b.bccno=@bccno and  a.datea between @t_bdate and @t_edate and b.storeno=@storeno
 	group by b.bccno)
 	
 	update @result 
@@ -159,36 +162,17 @@ begin
 	where current of bcc_table
 
 	fetch next from bcc_table
-	into @bccno,@mount
+	into @storeno,@bccno,@mount
 
 end
 close bcc_table
 deallocate bcc_table
 
-select * from @result;
+insert into @result
+select storeno,'1','','',0,0,0,0,0 from @result group by storeno
 
---************使用資料表說明*************--
---在日期之前有盤存的資材
---select b.bccno
---from bcce a left join bcces b on a.noa=b.noa
---where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate
---group by b.bccno
---在日期之前沒有盤存的資材
---select noa
---from bcc
---where noa not in
---(select c.noa bccno
---from bcce a left join bcces b on a.noa=b.noa right join bcc c on c.noa=b.bccno
---where b.bccno between @t_bbccno and @t_ebccno and a.datea < @t_bdate)
-----入庫
---select a.datea,b.bccno,b.bccname,sum(b.mount) mount
---from bccin a left join bccins b on a.noa=b.noa
---group by a.datea,b.bccno,b.bccname
-----領料
---select a.datea,b.bccno,b.bccname,sum(b.mount-b.bkbcc) mount
---from bccout a left join bccouts b on a.noa=b.noa
---group by a.datea,b.bccno,b.bccname
-----盤點
---select a.datea,b.bccno,b.bccname,sum(b.mount) mount
---from bcce a left join bcces b on a.noa=b.noa
---group by a.datea,b.bccno,b.bccname
+if(@t_storeno='99')
+	select  a.*,b.store from @result a left join store b on a.storeno=b.noa order by storeno,gno,bccno
+else
+	select  a.*,b.store from @result a left join store b on a.storeno=b.noa where a.storeno=@t_storeno order by storeno,gno,bccno
+;
