@@ -1,0 +1,202 @@
+z_anadc1:--z_anadc1
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bsssno nvarchar(20)
+	declare @t_esssno nvarchar(20)
+
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_bsssno = case when '#non'=[6] then '' else [6] end
+	set @t_esssno = case when '#non'=[7] then char(255) else [7] end
+--*****************************************************************************************
+	declare @result table(
+		gno nvarchar(1),
+		recno int identity(1,1),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		total float
+	)
+	insert into @result 
+	select * from ( 
+		--目前cara單據作業每個車主的貢獻(不含舊車牌帳且不含上期欠款與收款) 
+		select '0'gno,a.carownerno custno,b.namea comp,a.total from ( 
+		select b.carownerno,sum(a.outmoney)total 
+		from caras a left join car2 b on a.carno=b.noa and b.carownerno!='' 
+		where a.caritemno!='001' and a.outmoney!=0 and (datea between @t_bdate and @t_edate) group by b.carownerno )a 
+		left join carOwner b on a.carownerno=b.noa
+		union all 
+		--目前vcc每個客戶的貢獻(排除健勞勞退) 
+		select '0'gno,a.custno,b.comp,a.total from ( 
+		select custno,SUM(total)total from vcc[1] where (left(kind,4)!='健勞勞退') and (datea between @t_bdate and @t_edate) group by custno)a 
+		left join cust b on a.custno=b.noa 
+		union all 
+		--目前trans每個客戶的貢獻 
+		select '0'gno,a.custno,b.comp,a.total from ( 
+		select custno,sum(total2) total from trans[1] where (trandate between @t_bdate and @t_edate) group by custno)a 
+		left join cust b on a.custno=b.noa 
+	)result where custno between @t_bcustno and @t_ecustno order by total desc 
+	
+	--插入合計
+	insert into @result 
+	select '1','','',sum(total) from @result
+
+	select gno,recno,custno,comp
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	from @result;
+--*****************************************************************************************	
+z_anadc2:--z_anadc2
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bsssno nvarchar(20)
+	declare @t_esssno nvarchar(20)
+
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_bsssno = case when '#non'=[6] then '' else [6] end
+	set @t_esssno = case when '#non'=[7] then char(255) else [7] end
+--*****************************************************************************************	
+	declare @result table(
+		gno nvarchar(1),
+		recno int identity(1,1),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		total float
+	)
+	insert into @result 
+	select * from ( 
+		--目前cara單據作業每個車主的貢獻(不含舊車牌帳且不含上期欠款與收款) 
+		select '0'gno,a.carownerno custno,b.namea comp,a.total from ( 
+		select b.carownerno,sum(a.outmoney)total 
+		from caras a left join car2 b on a.carno=b.noa and b.carownerno!='' 
+		where a.caritemno!='001' and a.outmoney!=0 and (datea between @t_bdate and @t_edate) group by b.carownerno )a 
+		left join carOwner b on a.carownerno=b.noa
+		union all 
+		--目前vcc每個客戶的貢獻(排除健勞勞退) 
+		select '0'gno,a.custno,b.comp,a.total from ( 
+		select custno,SUM(total)total from vcc[1] where (left(kind,4)!='健勞勞退') and (datea between @t_bdate and @t_edate) group by custno)a 
+		left join cust b on a.custno=b.noa 
+		union all 
+		--目前trans每個客戶的貢獻 
+		select '0'gno,a.custno,b.comp,a.total from ( 
+		select custno,sum(total2) total from trans[1] where (trandate between @t_bdate and @t_edate) group by custno)a 
+		left join cust b on a.custno=b.noa 
+	)result where custno between @t_bcustno and @t_ecustno order by total desc 
+	
+	--插入合計
+	insert into @result 
+	select '1','','',sum(total) from @result
+
+	--插入明細
+	declare @t_result table( 
+		gno nvarchar(1), 
+		recno int, 
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		datea nvarchar(10),
+		itno nvarchar(20),
+		item nvarchar(50),
+		total float,
+		memo nvarchar(MAX)
+	)
+	
+	declare @gno nvarchar(1) 
+	declare @recno int
+	declare @custno nvarchar(20)
+	declare @comp nvarchar(50)
+	declare @total float
+	
+	declare cursor_table cursor for
+	select * from @result
+	open cursor_table
+	fetch next from cursor_table
+	into @gno,@recno,@custno,@comp,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@gno='0')
+		begin
+			insert into @t_result
+			select '1',@recno,@custno,@comp,'','','',@total,''
+			insert into @t_result
+			select * from(
+				--caras
+				select '0'gno,@recno recno,@custno custno,''comp,a.datea,a.caritemno,(a.carno+a.caritem)item,a.outmoney,a.memo from caras a left join car2 b
+				on a.carno=b.noa where b.carownerno=@custno and a.caritemno!='001' and a.outmoney!=0 and (datea between @t_bdate and @t_edate)
+				union all
+				--vcc
+				select '0'gno,@recno recno,@custno custno,''comp,a.datea,b.productno,b.product,b.total,b.memo from vcc[1] a left join vccs[1] b on a.noa=b.noa
+				where a.custno=@custno and left(a.kind,4)!='健勞勞退' and (a.datea between @t_bdate and @t_edate)
+				union all
+				--trans
+				select '0'gno,@recno recno,@custno custno,''comp,trandate,uccno,carno+'-'+product+'('+straddr+')',total2,po+memo from trans[1]
+				where custno=@custno and (trandate between @t_bdate and @t_edate)
+			)t_result order by datea
+			
+		end
+		else
+		begin
+			insert into @t_result
+			select '2',@recno,@custno,@comp,'','','',@total,''
+		end
+		
+		fetch next from cursor_table
+		into @gno,@recno,@custno,@comp,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	select gno,recno,custno,comp,datea,itno,item,memo
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total 
+	from @t_result;
+	
+--trans車牌與交運日(知道當天哪台車運輸哪天東西)
+--select '0'gno,@recno recno,@custno custno,''comp,trandate,
+--(select uccno+',' from trans[1] b where a.carno=b.carno and a.trandate=b.trandate and custno=@custno FOR XML PATH('')),
+--(select product+',' from trans[1] b where a.carno=b.carno and a.trandate=b.trandate and custno=@custno FOR XML PATH('')),
+--sum(total2),(select memo+',' from trans[1] b where a.carno=b.carno and a.trandate=b.trandate and custno=@custno FOR XML PATH(''))
+-- from trans[1] a
+--where custno=@custno and (trandate between @t_bdate and @t_edate) 
+--group by trandate,carno
+	
+--*****************************************************************************************
+z_anadc3:--z_anadc3
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bsssno nvarchar(20)
+	declare @t_esssno nvarchar(20)
+
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_bsssno = case when '#non'=[6] then '' else [6] end
+	set @t_esssno = case when '#non'=[7] then char(255) else [7] end
+-*****************************************************************************************	
+;	
+--*****************************************************************************************
+z_anadc4:--z_anadc4
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bsssno nvarchar(20)
+	declare @t_esssno nvarchar(20)
+
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_bsssno = case when '#non'=[6] then '' else [6] end
+	set @t_esssno = case when '#non'=[7] then char(255) else [7] end
+
+--*****************************************************************************************	
+;
