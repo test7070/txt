@@ -180,8 +180,190 @@ z_anadc3:--z_anadc3
 	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end
 	set @t_bsssno = case when '#non'=[6] then '' else [6] end
 	set @t_esssno = case when '#non'=[7] then char(255) else [7] end
--*****************************************************************************************	
-;	
+--*****************************************************************************************	
+	declare @result table(
+		sssno nvarchar(20),
+		namea nvarchar(50),
+		total float
+	)
+	--cara
+	insert into @result
+	select a.sssno,b.namea,a.total from (
+	select sssno,sum(outmoney)total
+	from cara a left join caras b on a.noa=b.noa
+	where b.caritemno!='001' and b.outmoney!=0 
+	and (sssno between @t_bsssno and @t_esssno) and (b.datea between @t_bdate and @t_edate)
+	group by sssno)a left join sss b on a.sssno=b.noa
+	
+	--vcc(目前先根據客戶主檔內的業務來做業績歸屬，若有兩人業務則分攤，如果客戶業務沒有業務，則以vcc內的業務或收款人做業績)
+	declare @tmp table(
+		sssno nvarchar(20),
+		total float
+	)--暫存每個業務金額
+	
+	insert into @tmp
+	select noa,0 from sss
+	
+	declare @vccno nvarchar(20)--vcc的salesno
+	declare @vccno2 nvarchar(20)--vcc的salesno2
+	declare @custno nvarchar(20)--cust的salesno
+	declare @custno2 nvarchar(20)--cust的salesno2
+	declare @total float
+	
+	declare cursor_table cursor for
+	select a.salesno,a.salesno2,b.salesno,b.salesno2,a.total
+	from vcc[1] a left join cust b on a.custno=b.noa
+	where (left(kind,4)!='健勞勞退') and (datea between @t_bdate and @t_edate)
+	open cursor_table
+	fetch next from cursor_table
+	into @vccno,@vccno2,@custno,@custno2,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		begin
+			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			begin
+				--業務1
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno
+				--業務2
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno2
+			end
+			else if(LEN(@custno)>0)--只填第一個業務
+			begin
+				--業務1
+				update @tmp
+				set total=total+@total
+				where sssno=@custno
+			end
+			else--只填第二個業務
+			begin
+				--業務2
+				update @tmp
+				set total=total+@total
+				where sssno=@custno2
+			end
+		end
+		else--客戶主檔沒有填寫業務
+		begin
+			if(LEN(@vccno)>0)--vcc業務有值
+			begin
+				update @tmp
+				set total=total+@total
+				where sssno=@vccno
+			end
+			else if(LEN(@vccno2)>0)--vcc業務無值，以收款人
+			begin
+				update @tmp
+				set total=total+@total
+				where sssno=@vccno2
+			end
+		end
+		fetch next from cursor_table
+		into @vccno,@vccno2,@custno,@custno2,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	
+	--tran(不計算外務人員績效，直接以客戶主檔的業務)
+	declare cursor_table cursor for
+	select b.salesno,b.salesno2,total2 from trans[1] a left join cust b on a.custno=b.noa
+	where (trandate between @t_bdate and @t_edate)
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@custno2,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		begin
+			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			begin
+				--業務1
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno
+				--業務2
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno2
+			end
+			else if(LEN(@custno)>0)--只填第一個業務
+			begin
+				--業務1
+				update @tmp
+				set total=total+@total
+				where sssno=@custno
+			end
+			else--只填第二個業務
+			begin
+				--業務2
+				update @tmp
+				set total=total+@total
+				where sssno=@custno2
+			end
+		end
+		
+		fetch next from cursor_table
+		into @custno,@custno2,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--清除業績為0的員工或不再員工範圍內員工
+	delete @tmp
+	where total=0 or (sssno not between @t_bsssno and @t_esssno)
+	
+	--結果插入輸出table
+	declare @sssno nvarchar(20)
+	declare @namea nvarchar(50)
+	
+	declare cursor_table cursor for
+	select a.sssno,b.namea,a.total from @tmp a left join sss b on a.sssno=b.noa
+	open cursor_table
+	fetch next from cursor_table
+	into @sssno,@namea,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((select COUNT(*) from @result where sssno=@sssno)>0) --輸出已存在員工
+		begin
+			update @result
+			set total=total+@total
+			where sssno=@sssno
+		end
+		else
+		begin
+			insert into @result
+			select @sssno,@namea,@total
+		end
+		fetch next from cursor_table
+		into @sssno,@namea,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--排名並輸出
+	declare @t_result table(
+		gno nvarchar(1),
+		recno int identity(1,1),
+		sssno nvarchar(20),
+		namea nvarchar(50),
+		total float
+	)
+	insert into @t_result
+	select '0',sssno,namea,total from @result
+	order by total desc
+	
+	--插入合計
+	insert into @t_result 
+	select '1','','',sum(total) from @t_result
+
+	select gno,recno,sssno,namea
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	from @t_result;
 --*****************************************************************************************
 z_anadc4:--z_anadc4
 	declare @t_bdate nvarchar(10)
@@ -199,4 +381,352 @@ z_anadc4:--z_anadc4
 	set @t_esssno = case when '#non'=[7] then char(255) else [7] end
 
 --*****************************************************************************************	
-;
+	declare @result table(
+		sssno nvarchar(20),
+		namea nvarchar(50),
+		total float
+	)
+	--cara
+	insert into @result
+	select a.sssno,b.namea,a.total from (
+	select sssno,sum(outmoney)total
+	from cara a left join caras b on a.noa=b.noa
+	where b.caritemno!='001' and b.outmoney!=0 
+	and (sssno between @t_bsssno and @t_esssno) and (b.datea between @t_bdate and @t_edate)
+	group by sssno)a left join sss b on a.sssno=b.noa
+	
+	--vcc(目前先根據客戶主檔內的業務來做業績歸屬，若有兩人業務則分攤，如果客戶業務沒有業務，則以vcc內的業務或收款人做業績)
+	declare @tmp table(
+		sssno nvarchar(20),
+		total float
+	)--暫存每個業務金額
+	
+	insert into @tmp
+	select noa,0 from sss
+	
+	declare @vccno nvarchar(20)--vcc的salesno
+	declare @vccno2 nvarchar(20)--vcc的salesno2
+	declare @custno nvarchar(20)--cust的salesno
+	declare @custno2 nvarchar(20)--cust的salesno2
+	declare @total float
+	
+	declare cursor_table cursor for
+	select a.salesno,a.salesno2,b.salesno,b.salesno2,a.total
+	from vcc[1] a left join cust b on a.custno=b.noa
+	where (left(kind,4)!='健勞勞退') and (datea between @t_bdate and @t_edate)
+	open cursor_table
+	fetch next from cursor_table
+	into @vccno,@vccno2,@custno,@custno2,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		begin
+			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			begin
+				--業務1
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno
+				--業務2
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno2
+			end
+			else if(LEN(@custno)>0)--只填第一個業務
+			begin
+				--業務1
+				update @tmp
+				set total=total+@total
+				where sssno=@custno
+			end
+			else--只填第二個業務
+			begin
+				--業務2
+				update @tmp
+				set total=total+@total
+				where sssno=@custno2
+			end
+		end
+		else--客戶主檔沒有填寫業務
+		begin
+			if(LEN(@vccno)>0)--vcc業務有值
+			begin
+				update @tmp
+				set total=total+@total
+				where sssno=@vccno
+			end
+			else if(LEN(@vccno2)>0)--vcc業務無值，以收款人
+			begin
+				update @tmp
+				set total=total+@total
+				where sssno=@vccno2
+			end
+		end
+		fetch next from cursor_table
+		into @vccno,@vccno2,@custno,@custno2,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	
+	--tran(不計算外務人員績效，直接以客戶主檔的業務)
+	declare cursor_table cursor for
+	select b.salesno,b.salesno2,total2 from trans[1] a left join cust b on a.custno=b.noa
+	where (trandate between @t_bdate and @t_edate)
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@custno2,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		begin
+			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			begin
+				--業務1
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno
+				--業務2
+				update @tmp
+				set total=total+round((@total/2),0)
+				where sssno=@custno2
+			end
+			else if(LEN(@custno)>0)--只填第一個業務
+			begin
+				--業務1
+				update @tmp
+				set total=total+@total
+				where sssno=@custno
+			end
+			else--只填第二個業務
+			begin
+				--業務2
+				update @tmp
+				set total=total+@total
+				where sssno=@custno2
+			end
+		end
+		
+		fetch next from cursor_table
+		into @custno,@custno2,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--清除業績為0的員工或不再員工範圍內員工
+	delete @tmp
+	where total=0 or (sssno not between @t_bsssno and @t_esssno)
+	
+	--結果插入輸出table
+	declare @sssno nvarchar(20)
+	declare @namea nvarchar(50)
+	
+	declare cursor_table cursor for
+	select a.sssno,b.namea,a.total from @tmp a left join sss b on a.sssno=b.noa
+	open cursor_table
+	fetch next from cursor_table
+	into @sssno,@namea,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((select COUNT(*) from @result where sssno=@sssno)>0) --輸出已存在員工
+		begin
+			update @result
+			set total=total+@total
+			where sssno=@sssno
+		end
+		else
+		begin
+			insert into @result
+			select @sssno,@namea,@total
+		end
+		fetch next from cursor_table
+		into @sssno,@namea,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--排名並輸出
+	declare @t_result table(
+		gno nvarchar(1),
+		recno int identity(1,1),
+		sssno nvarchar(20),
+		namea nvarchar(50),
+		total float
+	)
+	insert into @t_result
+	select '0',sssno,namea,total from @result
+	order by total desc
+	
+	--插入合計
+	insert into @t_result 
+	select '1','','',sum(total) from @t_result
+
+	
+	--插入每個員工與公司的業績
+	declare @tmpa table(
+		sssno nvarchar(20),
+		custno nvarchar(20),
+		total float
+	)
+	insert into @tmpa
+	select a.noa,b.noa,0 from sss a,cust b
+	
+	declare @xcustno nvarchar(20)
+	
+	declare cursor_table cursor for
+	select a.custno,a.salesno,a.salesno2,b.salesno,b.salesno2,a.total
+	from vcc[1] a left join cust b on a.custno=b.noa
+	where (left(kind,4)!='健勞勞退') and (datea between @t_bdate and @t_edate)
+	open cursor_table
+	fetch next from cursor_table
+	into @xcustno,@vccno,@vccno2,@custno,@custno2,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		begin
+			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			begin
+				--業務1
+				update @tmpa
+				set total=total+round((@total/2),0)
+				where sssno=@custno and custno=@xcustno
+				--業務2
+				update @tmpa
+				set total=total+round((@total/2),0)
+				where sssno=@custno2 and custno=@xcustno
+			end
+			else if(LEN(@custno)>0)--只填第一個業務
+			begin
+				--業務1
+				update @tmpa
+				set total=total+@total
+				where sssno=@custno and custno=@xcustno
+			end
+			else--只填第二個業務
+			begin
+				--業務2
+				update @tmpa
+				set total=total+@total
+				where sssno=@custno2 and custno=@xcustno
+			end
+		end
+		else--客戶主檔沒有填寫業務
+		begin
+			if(LEN(@vccno)>0)--vcc業務有值
+			begin
+				update @tmpa
+				set total=total+@total
+				where sssno=@vccno and custno=@xcustno
+			end
+			else if(LEN(@vccno2)>0)--vcc業務無值，以收款人
+			begin
+				update @tmpa
+				set total=total+@total
+				where sssno=@vccno2 and custno=@xcustno
+			end
+		end
+		fetch next from cursor_table
+		into @xcustno,@vccno,@vccno2,@custno,@custno2,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select a.custno,b.salesno,b.salesno2,total2 from trans[1] a left join cust b on a.custno=b.noa
+	where (trandate between @t_bdate and @t_edate)
+	open cursor_table
+	fetch next from cursor_table
+	into @xcustno,@custno,@custno2,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		begin
+			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			begin
+				--業務1
+				update @tmpa
+				set total=total+round((@total/2),0)
+				where sssno=@custno and custno=@xcustno
+				--業務2
+				update @tmpa
+				set total=total+round((@total/2),0)
+				where sssno=@custno2 and custno=@xcustno
+			end
+			else if(LEN(@custno)>0)--只填第一個業務
+			begin
+				--業務1
+				update @tmpa
+				set total=total+@total
+				where sssno=@custno and custno=@xcustno
+			end
+			else--只填第二個業務
+			begin
+				--業務2
+				update @tmpa
+				set total=total+@total
+				where sssno=@custno2 and custno=@xcustno
+			end
+		end
+		
+		fetch next from cursor_table
+		into @xcustno,@custno,@custno2,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--清除業績為0的員工或不再員工範圍內員工
+	delete @tmpa
+	where total=0 or (sssno not between @t_bsssno and @t_esssno)
+	
+	
+	--插入明細
+	declare @x_result table( 
+		gno nvarchar(1), 
+		recno int, 
+		sssno nvarchar(20), 
+		namea nvarchar(50), 
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		total float
+	)
+	
+	declare @gno nvarchar(1) 
+	declare @recno int
+	
+	declare cursor_table cursor for
+	select gno,recno,sssno,namea,total from @t_result
+	open cursor_table
+	fetch next from cursor_table
+	into @gno,@recno,@sssno,@namea,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@gno=0)
+		begin
+			insert into @x_result
+			select '1',@recno,@sssno,@namea,'','',@total
+			
+			insert into @x_result
+			select * from (
+			select '0'gno,@recno recno,@sssno sssno,@namea namea,a.custno custno,b.namea comp,a.total total from (
+			select carownerno custno ,sum(outmoney) total from cara a left join caras b on a.noa=b.noa
+			where b.caritemno!='001' and b.outmoney!=0 and (a.sssno=@sssno) and (b.datea between @t_bdate and @t_edate)
+			group by carownerno)a left join carOwner b on a.custno=b.noa
+			union all
+			select '0'gno,@recno recno,@sssno sssno,@namea namea,a.custno custno,b.comp comp,a.total total from @tmpa a left join cust b on a.custno=b.noa
+			where sssno=@sssno)x_result order by custno
+		end
+		else
+		begin
+			insert into @x_result
+			select '2',@recno,@sssno,@namea,'','',@total
+		end
+		
+		fetch next from cursor_table
+		into @gno,@recno,@sssno,@namea,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select gno,recno,sssno,namea,custno,comp
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	from @x_result;
