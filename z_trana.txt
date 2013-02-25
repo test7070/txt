@@ -274,6 +274,7 @@ z_trana01:--z_trana01
 	update #z_tran01 set profit=ISNULL(tranmoney,0)-ISNULL(drivermoney,0)-ISNULL(oilmoney,0)-ISNULL(tolls,0)-ISNULL(ticket,0)-ISNULL(reserve,0)
 	
 	delete #z_tran01 where (isnull(tranmoney,0)=0 and isnull(oilmoney,0)=0 and @t_rate>0) or (isnull(tranmoney,0)!=0 and round(isnull(oilmoney,0)*100/isnull(tranmoney,0),0)<CAST(@t_rate as float))
+	
 	---------------------------------------------------------------------------------------------
 	insert  into  #z_tran01
 	select  2,'2',CHAR(255),'','','','',CHAR(255)
@@ -289,29 +290,33 @@ z_trana01:--z_trana01
 	declare @str varchar(max)
 	declare @bool bit
 	declare @rate1 float
+	declare @oilstation nvarchar(20)
+	declare @price float
+	declare @bmiles float
+	declare @emiles float
+	declare @oilmoney float
 	
-	--出車明細
-	if(patindex('%detail%',@t_filter)>0)
+	if(patindex('%trans%',@t_filter)>0 or patindex('%oil%',@t_filter)>0)
 	begin
 		declare cursor_table cursor for
-		select trandate,carkindno,carno,isnull(rate1,0) from #z_tran01 where gno='1'
+		select trandate,carkindno,carno,isnull(rate1,0),tranmoney,oilmoney from #z_tran01 where gno='1'
 		open cursor_table
 		fetch next from cursor_table
-		into @trandate,@carkindno,@carno,@rate1
+		into @trandate,@carkindno,@carno,@rate1,@tranmoney,@oilmoney
 		while(@@FETCH_STATUS <> -1)
 		begin
+			--出車明細
 			set @bool = 0
 			set @cmd ="if exists(select noa from view_trans"+@t_accy+" where carno=@carno and trandate=@trandate) set @bool = 1 else set @bool = 0"
-			execute sp_executesql @cmd,N'@bool bit output,@carno nvarchar(20),@trandate nvarchar(10)',@bool=@bool output,@carno=@carno,@trandate=@trandate
-			
-			if(@bool=1)
+			execute sp_executesql @cmd,N'@bool bit output,@carno nvarchar(20),@trandate nvarchar(10)',@bool=@bool output,@carno=@carno,@trandate=@trandate			
+			if(@bool=1 and patindex('%trans%',@t_filter)>0)
 			begin
 				set @str = '司機'+SPACE(8)
 				+SPACE(2)+'起迄地點'+SPACE(12)
 				+SPACE(2)+SPACE(6)+'收入'
 				+SPACE(2)+SPACE(4)+'里程數'
 				set @str = REPLACE(@str,SPACE(1),'&nbsp'+CHAR(59))
-				insert into #z_tran01(n,gno,trandate,carkindno,carno,memo,rate1)values(0,'0',@trandate,@carkindno,@carno,@str,@rate1)
+				insert into #z_tran01(n,gno,trandate,carkindno,carno,memo,rate1,tranmoney,oilmoney)values(0,'3',@trandate,@carkindno,@carno,@str,@rate1,@tranmoney,@oilmoney)
 				set @cmd =
 				" declare cursor_table2 cursor for"+
 				" select driver,straddr,total,miles from view_trans"+@t_accy+" where carno=@carno and trandate=@trandate"+
@@ -325,18 +330,60 @@ z_trana01:--z_trana01
 				" 	+SPACE(2)+ RIGHT(space(10)+ reverse(substring(reverse(convert(varchar(15),CONVERT(money,isnull(@total,0)),1)),4,10)),10)"+
 				" 	+SPACE(2)+ RIGHT(space(10)+ reverse(substring(reverse(convert(varchar(15),CONVERT(money,isnull(@miles,0)),1)),4,10)),10)"+
 				" 	set @str = REPLACE(@str,SPACE(1),'&nbsp'+CHAR(59))"+
-				" 	insert into #z_tran01(n,gno,trandate,carkindno,carno,memo,rate1)values(0.1,'0',@trandate,@carkindno,@carno,@str,@rate1)"+
+				" 	insert into #z_tran01(n,gno,trandate,carkindno,carno,memo,rate1,tranmoney,oilmoney)values(0.1,'0',@trandate,@carkindno,@carno,@str,@rate1,@tranmoney,@oilmoney)"+
 				" 	fetch next from cursor_table2"+
 				" 	into @driver,@straddr,@total,@miles"+
 				" end"+
 				" close cursor_table2"+
 				" deallocate cursor_table2"
 				
-				execute sp_executesql @cmd,N'@rate1 float,@carno nvarchar(20),@carkindno nvarchar(20),@trandate nvarchar(10),@driver nvarchar(20),@straddr nvarchar(40),@total float,@miles float,@str varchar(max)'
-				,@rate1=@rate1,@carno=@carno,@carkindno=@carkindno,@trandate=@trandate,@driver=@driver,@straddr=@straddr,@total=@total,@miles=@miles,@str=@str
+				execute sp_executesql @cmd,N'@tranmoney float,@oilmoney float,@rate1 float,@carno nvarchar(20),@carkindno nvarchar(20),@trandate nvarchar(10),@driver nvarchar(20),@straddr nvarchar(40),@total float,@miles float,@str varchar(max)'
+				,@tranmoney=@tranmoney,@oilmoney=@oilmoney,@rate1=@rate1,@carno=@carno,@carkindno=@carkindno,@trandate=@trandate,@driver=@driver,@straddr=@straddr,@total=@total,@miles=@miles,@str=@str
 			end
+			--加油明細
+			set @bool = 0
+			if exists(select noa from oil where carno=@carno and datea=@trandate )
+				set @bool = 1
+			else
+				set @bool = 0
+			if(@bool=1 and patindex('%oil%',@t_filter)>0)
+			begin	
+				set @str = '站名'+SPACE(4)
+				+SPACE(2)+SPACE(4)+'公升'
+				+SPACE(2)+SPACE(4)+'單價'
+				+SPACE(2)+SPACE(4)+'金額'
+				+SPACE(2)+SPACE(2)+'上次里程數'
+				+SPACE(2)+SPACE(2)+'本次里程數'
+				+SPACE(2)+SPACE(4)+'里程數'
+				set @str = REPLACE(@str,SPACE(1),'&nbsp'+CHAR(59))
+				insert into #z_tran01(n,gno,trandate,carkindno,carno,memo,rate1,tranmoney,oilmoney)values(0.2,'4',@trandate,@carkindno,@carno,@str,@rate1,@tranmoney,@oilmoney)
+				
+				declare cursor_table2 cursor for
+				select oilstation,price,mount,[money],bmiles,emiles,miles from oil where carno=@carno and datea=@trandate order by datea,noa
+				open cursor_table2
+				fetch next from cursor_table2
+				into @oilstation,@price,@mount,@money,@bmiles,@emiles,@miles
+				while(@@FETCH_STATUS <> -1)
+				begin
+					set @str = left(CAST(@oilstation+space(8) as varchar(8)),8)
+					+SPACE(2)+ RIGHT(space(8)+ Cast(CAST(@mount as decimal(10,2)) as varchar(8)),8) 
+					+SPACE(2)+ RIGHT(space(8)+ Cast(CAST(@price as decimal(10,2)) as varchar(8)),8)
+					+SPACE(2)+ RIGHT(space(8)+ reverse(substring(reverse(convert(varchar(15),CONVERT(money,isnull(@money,0)),1)),4,8)),8) 
+					+SPACE(2)+ RIGHT(space(12)+ reverse(substring(reverse(convert(varchar(15),CONVERT(money,isnull(@bmiles,0)),1)),4,12)),12)
+					+SPACE(2)+ RIGHT(space(12)+ reverse(substring(reverse(convert(varchar(15),CONVERT(money,isnull(@emiles,0)),1)),4,12)),12)
+					+SPACE(2)+ RIGHT(space(10)+ reverse(substring(reverse(convert(varchar(15),CONVERT(money,isnull(@miles,0)),1)),4,10)),10)
+					set @str = REPLACE(@str,SPACE(1),'&nbsp'+CHAR(59))
+					insert into #z_tran01(n,gno,trandate,carkindno,carno,memo,rate1,tranmoney,oilmoney)values(0.21,'0',@trandate,@carkindno,@carno,@str,@rate1,@tranmoney,@oilmoney)
+					
+					fetch next from cursor_table2
+					into @oilstation,@price,@mount,@money,@bmiles,@emiles,@miles
+				end
+				close cursor_table2
+				deallocate cursor_table2
+			end
+				
 			fetch next from cursor_table
-			into @trandate,@carkindno,@carno,@rate1
+			into @trandate,@carkindno,@carno,@rate1,@tranmoney,@oilmoney
 		end
 		close cursor_table
 		deallocate cursor_table
@@ -365,7 +412,7 @@ z_trana01:--z_trana01
 		left join carKind c on b.carkindno=c.noa
 		left join driver d on a.driverno=d.noa
 		left join carpresents e on a.carno=e.carno and a.trandate=e.datea
-		order  by  a.trandate,a.carkindno,b.caryear,a.carno,n,gno
+		order  by  a.trandate,a.carkindno,b.caryear,a.carno,n
 	end
 	else
 	begin
@@ -388,7 +435,7 @@ z_trana01:--z_trana01
 		left join carKind c on b.carkindno=c.noa
 		left join driver d on a.driverno=d.noa
 		left join carpresents e on a.carno=e.carno and a.trandate=e.datea
-		order  by  sort01 desc,a.trandate,a.carkindno,b.caryear,a.carno,n,gno
+		order  by  sort01 desc,a.trandate,a.carkindno,b.caryear,a.carno,n
 	end
 	----------------------------------------------------------------------------------------------
 	drop table #carkind
