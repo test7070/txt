@@ -915,7 +915,341 @@ z_anadc6:--z_anadc6
 	set @t_bsssno = case when '#non'=[9] then '' else [9] end
 	set @t_esssno = case when '#non'=[10] then char(255) else [10] end
 --*****************************************************************************************
-;
+SET QUOTED_IDENTIFIER OFF
+	declare @result table( 
+		partno nvarchar(10),
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		total float 
+	) 
+	declare @tmp table( 
+		gno nvarchar(1), 
+		partno nvarchar(10),
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		money float,
+		salarycost float,
+		partcost float,
+		total float
+	) 
+	IF OBJECT_ID('tempdb..#t_result')is not null
+	BEGIN
+		   drop table #t_result
+	END
+	--年度表
+	create table #t_result( 
+		gno nvarchar(1), 
+		partno nvarchar(10),
+		part nvarchar(20),
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		money01 float,
+		salarycost01 float,
+		partcost01 float,
+		total01 float, 
+		money02 float,
+		salarycost02 float,
+		partcost02 float,
+		total02 float, 
+		money03 float,
+		salarycost03 float,
+		partcost03 float,
+		total03 float, 
+		money04 float,
+		salarycost04 float,
+		partcost04 float,
+		total04 float, 
+		money05 float,
+		salarycost05 float,
+		partcost05 float,
+		total05 float, 
+		money06 float,
+		salarycost06 float,
+		partcost06 float,
+		total06 float, 
+		money07 float,
+		salarycost07 float,
+		partcost07 float,
+		total07 float, 
+		money08 float,
+		salarycost08 float,
+		partcost08 float,
+		total08 float, 
+		money09 float,
+		salarycost09 float,
+		partcost09 float,
+		total09 float, 
+		money10 float,
+		salarycost10 float,
+		partcost10 float,
+		total10 float, 
+		money11 float,
+		salarycost11 float,
+		partcost11 float,
+		total11 float, 
+		money12 float,
+		salarycost12 float,
+		partcost12 float,
+		total12 float
+	)
+	
+	declare @partno nvarchar(20)
+	declare @part nvarchar(50)
+	declare @custno nvarchar(20)
+	declare @comp nvarchar(50)
+	declare @money float
+	declare @salarycost float
+	declare @partcost float
+	declare @total float
+	declare @cmd nvarchar(max)
+	--設定月份
+	declare @x_mon int
+	set @x_mon=1
+	
+	while(@x_mon<=12)
+	begin
+		set @t_mon='102/'+right(('0'+cast(@x_mon as nvarchar(10))),2)
+	
+		insert into @result 
+		select * from ( 
+		--目前cara單據作業每個車主的貢獻(不含舊車牌帳且不含上期欠款與收款) 
+		select '07'partno,a.carownerno custno,b.namea comp,a.total from ( 
+		select b.carownerno,sum(a.outmoney)total 
+		from caras a left join car2 b on a.carno=b.noa and b.carownerno!='' 
+		where a.caritemno!='001' and a.outmoney!=0 and (datea between @t_mon+'/01' and @t_mon+'/31') group by b.carownerno )a 
+		left join carOwner b on a.carownerno=b.noa 
+		union all 
+		--目前vcc每個客戶的貢獻(排除健勞勞退) 
+		select a.partno,a.custno,b.nick,a.total from ( 
+		select custno,partno,SUM(total)total from vcc102 where (left(kind,4)!='健勞勞退') and (datea between @t_mon+'/01' and @t_mon+'/31') group by partno,custno)a 
+		left join cust b on a.custno=b.noa 
+		union all 
+		--目前trans每個客戶的貢獻 
+		select '08'partno,a.custno,b.nick,a.total from ( 
+		select custno,sum(total2) total from trans102 where (trandate between @t_mon+'/01' and @t_mon+'/31') group by custno)a 
+		left join cust b on a.custno=b.noa 
+		)result order by custno --where custno between @t_bcustno and @t_ecustno 
+		
+		--插入收入
+		insert into @tmp(gno,partno,custno,comp,money)
+		select '0',partno,custno,comp,total from @result
+		
+		--插入薪資攤提
+		declare cursor_table cursor for
+		select b.partno,sum(a.total5) from salarys a left join sss b on a.sno=b.noa
+		where a.mon=@t_mon group by b.partno
+		open cursor_table
+		fetch next from cursor_table
+		into @partno,@total
+		while(@@FETCH_STATUS <> -1)
+		begin
+			update @tmp
+			set salarycost=round(@total*money/(select sum(money) from @tmp where partno=@partno),0)
+			where partno=@partno
+			
+			fetch next from cursor_table
+			into @partno,@total
+		end
+		close cursor_table
+		deallocate cursor_table
+		
+		--插入費用攤提
+		declare cursor_table cursor for
+			select part,SUM(dmoney-cmoney) total from acccs102_1 a
+			where (left(accc5,1)='5' or left(accc5,1)='6' or left(accc5,1)='8' or left(accc5,1)='9') and accc5!='6010.' and part!='' and (accc2 between right(@t_mon,2)+'/01' and right(@t_mon,2)+'/31')
+			group by part order by part
+			open cursor_table
+			fetch next from cursor_table
+			into @partno,@total
+			while(@@FETCH_STATUS <> -1)
+			begin
+				update @tmp
+				set partcost=round(@total*money/(select sum(money) from @tmp where partno=@partno),0)
+				where partno=@partno
+				
+				fetch next from cursor_table
+				into @partno,@total
+			end
+			close cursor_table
+			deallocate cursor_table
+			
+			--更新損益
+			update @tmp
+			set total=isnull(money,0)-isnull(salarycost,0)-isnull(partcost,0)
+			
+		--寫入到年度表
+		if(@x_mon=1)
+		begin
+			insert into #t_result(gno,partno,part,custno,comp,money01,salarycost01,partcost01,total01) 
+			select a.gno,a.partno,b.part,a.custno,a.comp,a.money,a.salarycost,a.partcost,a.total
+			from @tmp a left join part b on a.partno=b.noa
+			order by custno
+		end
+		else
+		begin
+			declare cursor_table cursor for
+			select a.partno,b.part,a.custno,a.comp,a.money,a.salarycost,a.partcost,a.total
+			from @tmp a left join part b on a.partno=b.noa order by custno
+			open cursor_table
+			fetch next from cursor_table
+			into @partno,@part,@custno,@comp,@money,@salarycost,@partcost,@total
+			while(@@FETCH_STATUS <> -1)
+			begin
+				if((select COUNT(*) from #t_result where partno=@partno and custno=@custno)>0)
+				begin
+					set @cmd="update #t_result set money"+right(@t_mon,2)+"=@money,salarycost"+right(@t_mon,2)+"=@salarycost,partcost"+right(@t_mon,2)+"=@partcost,total"+right(@t_mon,2)+"=@total where partno='"+@partno+"' and custno='"+@custno+"'"
+				end
+				else
+				begin
+					set @cmd="insert into #t_result(gno,partno,part,custno,comp,money"+right(@t_mon,2)+",salarycost"+right(@t_mon,2)+",partcost"+right(@t_mon,2)+",total"+right(@t_mon,2)+") "
+					set @cmd=@cmd+"select '0','"+@partno+"','"+@part+"','"+@custno+"','"+@comp+"',@money,@salarycost,@partcost,@total"
+				end
+				EXECUTE sp_executesql @cmd,@params=N'@money float,@salarycost float,@partcost float,@total float',@money=@money,@salarycost=@salarycost,@partcost=@partcost,@total=@total
+				
+				fetch next from cursor_table
+				into @partno,@part,@custno,@comp,@money,@salarycost,@partcost,@total
+			end
+			close cursor_table
+			deallocate cursor_table
+		end
+		
+		--清除table
+		delete @result
+		delete @tmp
+		
+		set @x_mon=@x_mon+1
+	end
+	
+	--排名並輸出所需的客戶
+	declare @t_result table( 
+		gno nvarchar(1), 
+		recno int identity(1,1),
+		partno nvarchar(10),
+		part nvarchar(20),
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		money01 float,
+		salarycost01 float,
+		partcost01 float,
+		total01 float, 
+		money02 float,
+		salarycost02 float,
+		partcost02 float,
+		total02 float, 
+		money03 float,
+		salarycost03 float,
+		partcost03 float,
+		total03 float, 
+		money04 float,
+		salarycost04 float,
+		partcost04 float,
+		total04 float, 
+		money05 float,
+		salarycost05 float,
+		partcost05 float,
+		total05 float, 
+		money06 float,
+		salarycost06 float,
+		partcost06 float,
+		total06 float, 
+		money07 float,
+		salarycost07 float,
+		partcost07 float,
+		total07 float, 
+		money08 float,
+		salarycost08 float,
+		partcost08 float,
+		total08 float, 
+		money09 float,
+		salarycost09 float,
+		partcost09 float,
+		total09 float, 
+		money10 float,
+		salarycost10 float,
+		partcost10 float,
+		total10 float, 
+		money11 float,
+		salarycost11 float,
+		partcost11 float,
+		total11 float, 
+		money12 float,
+		salarycost12 float,
+		partcost12 float,
+		total12 float
+	)
+	insert into @t_result
+	select * from #t_result where custno between @t_bcustno and @t_ecustno order by custno
+	
+	IF OBJECT_ID('tempdb..#t_result')is not null
+	BEGIN
+		   drop table #t_result
+	END
+
+	--插入合計 
+	insert into @t_result 
+	select '1','','','','',sum(money01),sum(salarycost01),sum(partcost01),sum(total01)
+	,sum(money02),sum(salarycost02),sum(partcost02),sum(total02)
+	,sum(money03),sum(salarycost03),sum(partcost03),sum(total03)
+	,sum(money04),sum(salarycost04),sum(partcost04),sum(total04)
+	,sum(money05),sum(salarycost05),sum(partcost05),sum(total05)
+	,sum(money06),sum(salarycost06),sum(partcost06),sum(total06)
+	,sum(money07),sum(salarycost07),sum(partcost07),sum(total07)
+	,sum(money08),sum(salarycost08),sum(partcost08),sum(total08)
+	,sum(money09),sum(salarycost09),sum(partcost09),sum(total09)
+	,sum(money10),sum(salarycost10),sum(partcost10),sum(total10)
+	,sum(money11),sum(salarycost11),sum(partcost11),sum(total11)
+	,sum(money12),sum(salarycost12),sum(partcost12),sum(total12) from @t_result 
+
+	select gno,recno,partno,part pname,custno,comp 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money01),1)),4,12)) money01
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost01),1)),4,12)) salarycost01
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost01),1)),4,12)) partcost01
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total01),1)),4,12)) total01
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money02),1)),4,12)) money02
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost02),1)),4,12)) salarycost02
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost02),1)),4,12)) partcost02
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total02),1)),4,12)) total02
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money03),1)),4,12)) money03
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost03),1)),4,12)) salarycost03
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost03),1)),4,12)) partcost03
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total03),1)),4,12)) total03
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money04),1)),4,12)) money04
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost04),1)),4,12)) salarycost04
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost04),1)),4,12)) partcost04
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total04),1)),4,12)) total04
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money05),1)),4,12)) money05
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost05),1)),4,12)) salarycost05
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost05),1)),4,12)) partcost05
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total05),1)),4,12)) total05
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money06),1)),4,12)) money06
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost06),1)),4,12)) salarycost06
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost06),1)),4,12)) partcost06
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total06),1)),4,12)) total06
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money07),1)),4,12)) money07
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost07),1)),4,12)) salarycost07
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost07),1)),4,12)) partcost07
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total07),1)),4,12)) total07
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money08),1)),4,12)) money08
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost08),1)),4,12)) salarycost08
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost08),1)),4,12)) partcost08
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total08),1)),4,12)) total08
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money09),1)),4,12)) money09
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost09),1)),4,12)) salarycost09
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost09),1)),4,12)) partcost09
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total09),1)),4,12)) total09
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money10),1)),4,12)) money10
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost10),1)),4,12)) salarycost10
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost10),1)),4,12)) partcost10
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total10),1)),4,12)) total10
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money11),1)),4,12)) money11
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost11),1)),4,12)) salarycost11
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost11),1)),4,12)) partcost11
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total11),1)),4,12)) total11
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money12),1)),4,12)) money12
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salarycost12),1)),4,12)) salarycost12
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost12),1)),4,12)) partcost12
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total12),1)),4,12)) total12
+	from @t_result;
 --*****************************************************************************************
 z_anadc7:--z_anadc7
 	declare @t_bdate nvarchar(10)
@@ -1024,7 +1358,6 @@ z_anadc7:--z_anadc7
 	end
 	close cursor_table
 	deallocate cursor_table
-	
 	
 	--tran(不計算外務人員績效，直接以客戶主檔的業務)
 	declare cursor_table cursor for
@@ -1164,7 +1497,6 @@ z_anadc7:--z_anadc7
 	--更新損益
 	update @tmpa
 	set total=isnull(money,0)-isnull(salary,0)-isnull(partcost,0)
-	
 	
 	--排名並輸出
 	declare @t_result table(
@@ -1615,5 +1947,10 @@ SET QUOTED_IDENTIFIER OFF
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salary12),1)),4,12)) salary12
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,partcost12),1)),4,12)) partcost12
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total12),1)),4,12)) total12
-	from #t_result;
+	from #t_result
+	
+	IF OBJECT_ID('tempdb..#t_result')is not null
+	BEGIN
+		   drop table #t_result
+	END	;
 --*****************************************************************************************
