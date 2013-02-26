@@ -1,0 +1,261 @@
+chart01:--chart01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(max)
+	declare @t_btrandate nvarchar(10)
+	declare @t_etrandate nvarchar(10)
+	declare @t_carkind nvarchar(max)
+	declare @t_carno nvarchar(20)
+	
+	set @t_accy = [1]
+	set @t_btrandate = [2]
+	set @t_etrandate = [3]
+	set @t_carkind = [4]
+	set @t_carno = [5]
+	
+	declare @t_date nvarchar(10)
+	declare @t_date1 nvarchar(10)
+	declare @t_date2 nvarchar(10)
+	----------------------------------------------------------------------------------------------------------
+	set @t_date1 = convert(nvarchar(4),convert(int,LEFT(@t_btrandate,3))+1911)+'-'+SUBSTRING(@t_btrandate,5,2)+'-'+RIGHT(@t_btrandate,2)
+	set @t_date2 = convert(nvarchar(4),convert(int,LEFT(@t_etrandate,3))+1911)+'-'+SUBSTRING(@t_etrandate,5,2)+'-'+RIGHT(@t_etrandate,2)
+	set @t_date=@t_date1
+
+	if(isdate(@t_date1)=0 or isdate(@t_date2)=0)
+	begin
+		print '日期錯誤'
+		return	
+	end
+	if(DATEDIFF(MM,@t_date1,@t_date2)>2)
+	begin
+		print '查詢區間不可超過三個月'
+		return	
+	end
+	IF OBJECT_ID('tempdb..#listDate')is not null
+	BEGIN
+		set @cmd = 'drop table #listDate'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #listDate(
+		[date] nvarchar(20)
+	)
+
+	while (@t_date between @t_date1 and @t_date2)
+	begin
+		insert into #listDate select right('00'+convert(nvarchar(3),convert(int,YEAR(@t_date))-1911),3)+'/'+right('0'+convert(nvarchar(2),convert(int,MONTH(@t_date))),2)+'/'+right('0'+convert(nvarchar(2),convert(int,DAY(@t_date))),2)
+		set @t_date= convert(date,DATEADD(DD,1,@t_date),111)
+	end
+	----------------------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	
+	IF OBJECT_ID('tempdb..#carkind')is not null
+	BEGIN
+		set @cmd = 'drop table #carkind'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carkind(
+		noa nvarchar(20)
+	)
+	set @string = @t_carkind
+	while(1=1)
+	begin
+		set @n = PATINDEX('%@%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carkind select @string
+			end
+			break
+		end
+		insert into #carkind select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	-----------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#chart01')is not null
+	BEGIN
+		set @cmd = 'drop table #chart01'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #chart01(
+		carkindno nvarchar(20),
+		carkind nvarchar(20),
+		carno nvarchar(20),
+		datea nvarchar(10),
+		caryear nvarchar(10),--年份
+		inmoney float,--收入
+		outmoney float,--業績獎金
+		tranmiles float,--公里數
+		oilmoney float,--油費
+		oilmount float,--油量
+		oilmiles float,--公里數
+		tolls float,--通行費
+		ticket float,--罰款
+		reserve float,--寄櫃費
+		profit float--淨利
+	)
+	----------------------------------------------------------------------------------
+	declare @carkindno nvarchar(20)
+	declare @carkind nvarchar(20)
+	declare @caryear nvarchar(10)
+	declare @carno nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @inmoney float
+	declare @outmoney float
+	declare @tranmiles float
+	declare @reserve float
+	
+	set @cmd =
+	" declare cursor_table cursor for"+
+	" select ISNULL(e.noa,'') carkindno,ISNULL(e.kind,'') carkind,ISNULL(b.caryear,'') caryear,a.carno carno,a.trandate datea"+
+	" ,SUM(ISNULL(a.total,0)) inmoney,SUM(ISNULL(a.total2,0)) outmoney,SUM(ISNULL(a.miles,0)) tranmiles,SUM(ISNULL(a.reserve,0)) reserve"+
+	" from view_trans"+@t_accy+" a"+
+	" left join car2 b on a.carno=b.carno"+
+	" left join calctypes c on c.noa+c.noq=a.calctype "+
+	" left join #carkind d on b.carkindno=d.noa"+
+	" left join carKind e on d.noa=e.noa"+
+	" where isnull(c.isoutside,0)=0"+ --判斷是不是公司車
+	" and d.noa is not null"+
+	" and (a.trandate between @t_btrandate and @t_etrandate)"+
+	" and (len(@t_carno)=0 or a.carno=@t_carno)"+
+	" group by ISNULL(e.noa,''),ISNULL(e.kind,''),ISNULL(b.caryear,''),a.carno,a.trandate"+
+	" order by carkindno,carkind,caryear,carno,datea"+
+	" open cursor_table"+
+	" fetch next from cursor_table"+
+	" into @carkindno,@carkind,@caryear,@carno,@datea,@inmoney,@outmoney,@tranmiles,@reserve"+
+	" while(@@FETCH_STATUS <> -1)"+
+	" begin"+
+	" 	insert into #chart01(carkindno,carkind,caryear,carno,datea,inmoney,outmoney,tranmiles,reserve)"+
+	" 	values(@carkindno,@carkind,@caryear,@carno,@datea,@inmoney,@outmoney,@tranmiles,@reserve)"+
+		
+	" 	fetch next from cursor_table"+
+	" 	into @carkindno,@carkind,@caryear,@carno,@datea,@inmoney,@outmoney,@tranmiles,@reserve"+
+	" end"+
+	" close cursor_table"+
+	" deallocate cursor_table"
+	execute sp_executesql @cmd,N'@t_btrandate nvarchar(10),@t_etrandate nvarchar(10),@t_carno nvarchar(20),@carkindno nvarchar(20),@carkind nvarchar(20),@caryear nvarchar(10),@carno nvarchar(20),@datea nvarchar(10),@inmoney float,@outmoney float,@tranmiles float,@reserve float'
+	,@t_btrandate=@t_btrandate,@t_etrandate=@t_etrandate,@t_carno=@t_carno
+	,@carkindno=@carkindno,@carkind=@carkind,@caryear=@caryear,@carno=@carno,@datea=@datea
+	,@inmoney=@inmoney,@outmoney=@outmoney,@tranmiles=@tranmiles,@reserve=@reserve
+	------------------------------------------------------------------------------------
+	--OIL
+	declare @oilmount float
+	declare @oilmoney float
+	declare @oilmiles float
+	
+	declare cursor_table cursor for
+	select ISNULL(e.noa,'') carkindno,ISNULL(e.kind,'') carkind,ISNULL(b.caryear,'') caryear,a.carno carno,a.datea datea
+	,sum(ISNULL(a.mount,0)) oilmount,sum(ISNULL(a.[money],0)) oilmoney,sum(ISNULL(a.miles,0)) oilmiles
+	from oil a
+	left join car2 b on a.carno=b.carno
+	left join #carkind d on b.carkindno=d.noa
+	left join carKind e on d.noa=e.noa
+	where d.noa is not null
+	and (a.datea between @t_btrandate and @t_etrandate)
+	and (len(@t_carno)=0 or a.carno=@t_carno)
+	group by ISNULL(e.noa,''),ISNULL(e.kind,''),ISNULL(b.caryear,''),a.carno,a.datea
+	order by carkindno,carkind,caryear,carno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @carkindno,@carkind,@caryear,@carno,@datea,@oilmount,@oilmoney,@oilmiles
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from #chart01 where carno=@carno and datea=@datea)
+			update #chart01 set oilmount=@oilmount,oilmoney=@oilmoney,oilmiles=@oilmiles where carno=@carno and datea=@datea
+		else
+			insert into #chart01(carkindno,carkind,caryear,carno,datea,oilmount,oilmoney,oilmiles)
+			values(@carkindno,@carkind,@caryear,@carno,@datea,@oilmount,@oilmoney,@oilmiles)
+
+		fetch next from cursor_table
+		into @carkindno,@carkind,@caryear,@carno,@datea,@oilmount,@oilmoney,@oilmiles
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------
+	--ETC
+	declare @tolls float
+	
+	declare cursor_table cursor for
+	select ISNULL(e.noa,'') carkindno,ISNULL(e.kind,'') carkind,ISNULL(b.caryear,'') caryear,a.carno carno,a.datea datea
+	,SUM(isnull(a.[money],0)) tolls
+	from etc a
+	left join car2 b on a.carno=b.carno
+	left join #carkind d on b.carkindno=d.noa
+	left join carKind e on d.noa=e.noa
+	where (a.typea='ETC' or a.typea='CASH') and (d.noa is not null)
+	and (a.datea between @t_btrandate and @t_etrandate)
+	and (len(@t_carno)=0 or a.carno=@t_carno)
+	group by ISNULL(e.noa,''),ISNULL(e.kind,''),ISNULL(b.caryear,''),a.carno,a.datea
+	order by carkindno,carkind,caryear,carno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @carkindno,@carkind,@caryear,@carno,@datea,@tolls
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from #chart01 where carno=@carno and datea=@datea)
+			update #chart01 set tolls=@tolls where carno=@carno and datea=@datea
+		else
+			insert into #chart01(carkindno,carkind,caryear,carno,datea,tolls)
+			values(@carkindno,@carkind,@caryear,@carno,@datea,@tolls)
+
+		fetch next from cursor_table
+		into @carkindno,@carkind,@caryear,@carno,@datea,@tolls
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------
+	--罰單
+	declare @ticket float
+	
+	declare cursor_table cursor for
+	select ISNULL(e.noa,'') carkindno,ISNULL(e.kind,'') carkind,ISNULL(b.caryear,'') caryear,a.carno carno,a.datea datea
+	,sum(ISNULL(a.comppay,0)) ticket
+	from carborr a
+	left join car2 b on a.carno=b.carno
+	left join #carkind d on b.carkindno=d.noa
+	left join carKind e on d.noa=e.noa
+	where isnull(a.comppay,0)!=0 and d.noa is not null
+	and (a.datea between @t_btrandate and @t_etrandate)
+	and (len(@t_carno)=0 or a.carno=@t_carno)
+	group by ISNULL(e.noa,''),ISNULL(e.kind,''),ISNULL(b.caryear,''),a.carno,a.datea
+	order by carkindno,carkind,caryear,carno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @carkindno,@carkind,@caryear,@carno,@datea,@ticket
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from #chart01 where carno=@carno and datea=@datea)
+			update #chart01 set ticket=@ticket where carno=@carno and datea=@datea
+		else
+			insert into #chart01(carkindno,carkind,caryear,carno,datea,ticket)
+			values(@carkindno,@carkind,@caryear,@carno,@datea,@ticket)
+
+		fetch next from cursor_table
+		into @carkindno,@carkind,@caryear,@carno,@datea,@ticket
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select b.carkindno,b.carkind,b.caryear,b.carno,a.[date] 
+	from #listDate a,(select carkindno,carkind,caryear,carno from #chart01 group by carkindno,carkind,caryear,carno) b
+	open cursor_table
+	fetch next from cursor_table
+	into @carkindno,@carkind,@caryear,@carno,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from #chart01 where carno=@carno and datea=@datea)
+			insert into #chart01(carkindno,carkind,caryear,carno,datea)
+			values(@carkindno,@carkind,@caryear,@carno,@datea)
+
+		fetch next from cursor_table
+		into @carkindno,@carkind,@caryear,@carno,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------
+	update #chart01 set profit=ISNULL(inmoney,0)-ISNULL(outmoney,0)-ISNULL(oilmoney,0)-ISNULL(tolls,0)-ISNULL(ticket,0)-ISNULL(reserve,0)
+	select * from z_anatran_chart01
+	union all
+	select * from #chart01 order by carkindno,carkind,caryear,carno,datea;
