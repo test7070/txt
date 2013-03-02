@@ -708,3 +708,199 @@ reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12))
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmoney),1)),4,12)) inmoney 
 from @tmp 
 order by custno,gno ;
+--------------------------------------------------------------------------------------------------
+z_carcs4:--z_carcs4
+declare @t_bdate nvarchar(20)  
+declare @t_edate nvarchar(20)  
+declare @cmd nvarchar(max)
+set @t_bdate = case when '#non' = [2] then '' else [2] end 
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end 
+set @cmd = ''
+IF OBJECT_ID('tempdb..#w_carcs_w')is not null
+	BEGIN
+		set @cmd = 'drop table #w_carcs_w'
+		EXECUTE sp_executesql @cmd
+	END
+IF OBJECT_ID('tempdb..#w_carcs_a_w')is not null
+	BEGIN
+		set @cmd = 'drop table #w_carcs_a_w'
+		EXECUTE sp_executesql @cmd
+	END
+
+declare @tmpa table(
+	nick nvarchar(90)
+)
+declare @tmpb table(
+	idno int identity(0,1),
+	nick nvarchar(90),
+	type1a int,
+	type1b int,
+	type2a int,
+	type2b int,
+	type3a int,
+	type3b int
+)
+insert into @tmpa 
+	select b.nick from carcsas a left join carcsa b on a.noa = b.noa left join cust c on b.cno = c.comp
+	where b.noa is not null 
+	union all
+	select b.nick from carcsb a left join cust b on a.comp = b.comp
+	union all
+	select b.nick from carcsc a left join cust b on a.comp = b.comp
+
+insert into @tmpb(nick)
+	select distinct(nick) from @tmpa
+declare @nick nvarchar(90)
+set @nick = ''
+declare cursor_table cursor for
+	select nick from @tmpb
+open cursor_table
+fetch next from cursor_table into @nick
+while(@@FETCH_STATUS <> -1)
+begin
+	update @tmpb set type1a = (
+		select SUM(a.inmoney) from carcsb a left join cust b on a.comp = b.comp
+		where (b.nick = @nick) and (a.calctype = 'E01') and (datea between @t_bdate and @t_edate)
+	) where nick = @nick
+	update @tmpb set type1b = (
+		select SUM(a.inmoney) from carcsb a left join cust b on a.comp = b.comp
+		where (b.nick = @nick) and (a.calctype != 'E01') and (datea between @t_bdate and @t_edate)
+	) where nick = @nick
+	update @tmpb set type2a = (
+		select SUM(a.inmoney) from carcsc a left join cust b on a.comp = b.comp
+		where (b.nick = @nick) and (a.calctype = 'E01') and (datea between @t_bdate and @t_edate)
+	) where nick = @nick
+	update @tmpb set type2b = (
+		select SUM(a.inmoney) from carcsc a left join cust b on a.comp = b.comp
+		where (b.nick = @nick) and (a.calctype != 'E01') and (datea between @t_bdate and @t_edate)
+	) where nick = @nick
+	update @tmpb set type3a = (
+		select sum(a.inmoney) from carcsas a left join carcsa b on a.noa = b.noa left join cust c on b.cno = c.comp
+		where (b.noa is not null) and (b.nick = @nick) and (a.calctype = 'E01') and (trandate between @t_bdate and @t_edate)
+	) where nick = @nick
+	update @tmpb set type3b = (
+		select sum(a.inmoney) from carcsas a left join carcsa b on a.noa = b.noa left join cust c on b.cno = c.comp
+		where (b.noa is not null) and (b.nick = @nick) and (a.calctype != 'E01') and (trandate between @t_bdate and @t_edate)
+	) where nick = @nick
+	fetch next from cursor_table into @nick
+end
+close cursor_table
+deallocate cursor_table
+
+declare @i int
+declare @comprecord int
+declare @compfileddeclare nvarchar(max)
+declare @insertcompname nvarchar(max)
+declare @typevalue int
+declare @sumfileda nvarchar(max)
+declare @sumfiledb nvarchar(max)
+declare @outputhtml nvarchar(max)
+declare @outputhtml_header nvarchar(max)
+declare @outputhtml_body nvarchar(max)
+declare @outputhtml_body1 nvarchar(max)
+declare @outputhtml_body2 nvarchar(max)
+declare @outputhtml_body3 nvarchar(max)
+declare @outputhtml_body4 nvarchar(max)
+set @outputhtml = ''
+set @outputhtml_header = '<tr align="center"><td style="border:1px solid">項           目</td>'
+set @outputhtml_body = ''
+set @outputhtml_body1 = char(39) + '<tr align="center"><td style="border:1px solid" width="120">內銷收入(未稅)</td>' + char(39) + '+'
+set @outputhtml_body2 = char(39) + '<tr align="center"><td style="border:1px solid" width="120">外銷收入(未稅)</td>' + char(39) + '+'
+set @outputhtml_body3 = char(39) + '<tr align="center"><td style="border:1px solid" width="120">租車收入(未稅)</td>' + char(39) + '+'
+set @outputhtml_body4 = char(39) + '<tr align="center"><td style="border:1px solid" width="120">【收  入 總  計】</td>' + char(39) + '+'
+set @sumfileda = ''
+set @sumfiledb = ''
+set @typevalue = 0
+set @i = 0
+set @compfileddeclare = ''
+set @insertcompname = ''
+select @comprecord = COUNT(*) from @tmpb
+create table #w_carcs_w(
+	gno nvarchar(1),
+	typea nvarchar(10)
+)
+insert into #w_carcs_w values('0','1'),('0','2'),('0','3')
+----公司名稱欄位 a b 
+while(@i < @comprecord)
+begin
+	set @compfileddeclare += 'compa' + CAST(@i as nvarchar) + ' nvarchar(90),'
+	set @compfileddeclare += 'compb' + CAST(@i as nvarchar) + ' nvarchar(90)'
+	set @outputhtml_body1 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compa' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body1 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compb' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body2 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compa' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body2 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compb' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body3 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compa' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body3 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compb' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body4 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compa' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @outputhtml_body4 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(compb' + CAST(@i as nvarchar) + ' as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+	set @cmd = 'alter table #w_carcs_w add ' + @compfileddeclare
+	EXECUTE sp_executesql @cmd
+	set @compfileddeclare = ''
+	select @typevalue = type1a from @tmpb where idno = @i
+	set @cmd = 'update #w_carcs_w set compa' + CAST(@i as nvarchar) + '='+ CHAR(39) + CAST(@typevalue as nvarchar) + CHAR(39) + ' where typea = 1'
+	EXECUTE sp_executesql @cmd
+	select @typevalue = type1b from @tmpb where idno = @i
+	set @cmd = 'update #w_carcs_w set compb' + CAST(@i as nvarchar) + '='+ CHAR(39) + CAST(@typevalue as nvarchar) + CHAR(39) + ' where typea = 1'
+	EXECUTE sp_executesql @cmd
+	select @typevalue = type2a from @tmpb where idno = @i
+	set @cmd = 'update #w_carcs_w set compa' + CAST(@i as nvarchar) + '='+ CHAR(39) + CAST(@typevalue as nvarchar) + CHAR(39) + ' where typea = 2'
+	EXECUTE sp_executesql @cmd
+	select @typevalue = type2b from @tmpb where idno = @i
+	set @cmd = 'update #w_carcs_w set compb' + CAST(@i as nvarchar) + '='+ CHAR(39) + CAST(@typevalue as nvarchar) + CHAR(39) + ' where typea = 2'
+	EXECUTE sp_executesql @cmd
+	select @typevalue = type3a from @tmpb where idno = @i
+	set @cmd = 'update #w_carcs_w set compa' + CAST(@i as nvarchar) + '='+ CHAR(39) + CAST(@typevalue as nvarchar) + CHAR(39) + ' where typea = 3'
+	EXECUTE sp_executesql @cmd
+	select @typevalue = type3b from @tmpb where idno = @i
+	set @cmd = 'update #w_carcs_w set compb' + CAST(@i as nvarchar) + '='+ CHAR(39) + CAST(@typevalue as nvarchar) + CHAR(39) + ' where typea = 3'
+	EXECUTE sp_executesql @cmd
+	set @insertcompname +=  char(39) + (select isnull(nick,'') from @tmpb where idno = @i) +  char(39) + ','
+	set @insertcompname +=  char(39) + (select isnull(nick,'') from @tmpb where idno = @i) +  char(39) + ','
+	set @sumfileda += 'sum(isnull(cast(compa' + CAST(@i as nvarchar)+' as int),0))+'+'sum(isnull(cast(compb' + CAST(@i as nvarchar) + ' as int),0))+'
+	set @sumfiledb += 'sum(isnull(cast(compa' + CAST(@i as nvarchar)+' as int),0)),'+'sum(isnull(cast(compb' + CAST(@i as nvarchar) + ' as int),0)),'
+	set @outputhtml_header += '<td colspan="2" style="border:1px solid">'+(select isnull(nick,'') from @tmpb where idno = @i)+'</td>'
+	if(@i = @comprecord-1)
+	begin
+		set @insertcompname = left(@insertcompname,len(@insertcompname)-1)
+		set @sumfileda = left(@sumfileda,len(@sumfileda)-1)
+	end 
+	set @i += 1
+end
+set @outputhtml_body1 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(total as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+set @outputhtml_body2 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(total as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+set @outputhtml_body3 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(total as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+set @outputhtml_body4 += char(39) + '<td align="right" style="border:1px solid" width="80">' + CHAR(39) + '+isnull(cast(total as nvarchar),0) + ' + char(39) + '</td>' + CHAR(39) + ' + '
+set @outputhtml_header += '<td colspan="2" style="border:1px solid">合計</td></tr>'
+set @cmd = 'insert into #w_carcs_w values(0,0,' + @insertcompname + ')'
+EXECUTE sp_executesql @cmd
+alter table #w_carcs_w add total int
+set @cmd = 'update #w_carcs_w set total = (select '+@sumfileda+' from #w_carcs_w where typea =1) where typea =1'
+EXECUTE sp_executesql @cmd
+set @cmd = 'update #w_carcs_w set total = (select '+@sumfileda+' from #w_carcs_w where typea =2) where typea =2'
+EXECUTE sp_executesql @cmd
+set @cmd = 'update #w_carcs_w set total = (select '+@sumfileda+' from #w_carcs_w where typea =3) where typea =3'
+EXECUTE sp_executesql @cmd
+set @cmd = 'insert into #w_carcs_w	select 0,4,' + @sumfiledb + 'sum(cast(total as int)) from #w_carcs_w where typea != 0'
+EXECUTE sp_executesql @cmd
+create table #w_carcs_a_w(
+	gno nvarchar(1),
+	memo nvarchar(max)
+)
+set @cmd = 'insert into #w_carcs_a_w select 1,' + @outputhtml_body1 + ' + ' + CHAR(39) + '</tr>' + CHAR(39) + ' from #w_carcs_w where typea = 1'
+EXECUTE sp_executesql @cmd
+set @cmd = 'insert into #w_carcs_a_w select 2,' + @outputhtml_body2 + ' + ' + CHAR(39) + '</tr>' + CHAR(39) + ' from #w_carcs_w where typea = 2'
+EXECUTE sp_executesql @cmd
+set @cmd = 'insert into #w_carcs_a_w select 3,' + @outputhtml_body3 + ' + ' + CHAR(39) + '</tr>' + CHAR(39) + ' from #w_carcs_w where typea = 3'
+EXECUTE sp_executesql @cmd
+set @cmd = 'insert into #w_carcs_a_w select 4,' + @outputhtml_body4 + ' + ' + CHAR(39) + '</tr>' + CHAR(39) + ' from #w_carcs_w where typea = 4'
+EXECUTE sp_executesql @cmd
+set @outputhtml_body = (select memo from #w_carcs_a_w where gno = '1')
+set @outputhtml_body += (select memo from #w_carcs_a_w where gno = '2')
+set @outputhtml_body += (select memo from #w_carcs_a_w where gno = '3')
+set @outputhtml_body += (select memo from #w_carcs_a_w where gno = '4')
+set @cmd = 'insert into #w_carcs_a_w select 0,' + char(39) + @outputhtml_header + @outputhtml_body + CHAR(39)
+EXECUTE sp_executesql @cmd
+update #w_carcs_a_w set memo = '</td></tr></table><table border="1px solid" rules="ALL">' + memo + '</table><table>'
+select * from #w_carcs_a_w where gno = 0
+drop table #w_carcs_w
+drop table #w_carcs_a_w;
