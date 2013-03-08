@@ -532,3 +532,256 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,@title title
 from @tmpa order by orderby,custno,comp,gno,acomp,ticketno desc,taxrates;
+
+z_vcca01:--z_vcca01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_cno nvarchar(max)
+	
+	set @t_accy = '[11]'
+	set @t_bmon = case when '#non'=[1] then '' else [1] end
+	set @t_emon = case when '#non'=[2] then CHAR(255) else [2] end
+	set @t_cno = case when '#non'=[12] then '' else [12] end
+	---------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	IF OBJECT_ID('tempdb..#acomp')is not null
+	BEGIN
+		set @cmd = 'drop table #acomp'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #acomp(
+		noa nvarchar(20)
+	)
+	set @string = @t_cno
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #acomp select @string
+			end
+			break
+		end
+		insert into #acomp select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(3),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		cno nvarchar(20),
+		acomp nvarchar(20),
+		invono nvarchar(10),
+		serial nvarchar(8),
+		buyerno nvarchar(20),
+		buyer nvarchar(40),
+		custno nvarchar(20),
+		cust nvarchar(40),
+		[money] float,
+		tax float,
+		total float,
+		memo nvarchar(max)
+	)
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @cno nvarchar(20)
+	declare @acomp nvarchar(40)
+	declare @binvono nvarchar(10)
+	declare @einvono nvarchar(10)
+	declare @taxtype nvarchar(10)
+	declare @invono nvarchar(10)
+	declare @serial nvarchar(8)
+	declare @buyerno nvarchar(20)
+	declare @buyer nvarchar(40)
+	declare @custno nvarchar(20)
+	declare @cust nvarchar(40)
+	declare @money float
+	declare @tax float
+	declare @total float
+	declare @memo nvarchar(max)
+	
+	declare cursor_table cursor for
+	select a.noa,b.noq,a.cno,a.acomp,b.binvono,b.einvono 
+	from vccar a
+	left join vccars b on a.noa=b.noa
+	left join #acomp c on a.cno=c.noa
+	where (c.noa is not null) and len(b.binvono)=10
+	and ((LEFT(a.bdate,6) between @t_bmon and @t_emon) or (LEFT(a.edate,6) between @t_bmon and @t_emon))
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@noq,@cno,@acomp,@binvono,@einvono
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @n=0
+		while(@n<50)
+		begin	
+			set @invono = SUBSTRING(@binvono,1,8)+ right('0'+cast(cast(SUBSTRING(@binvono,9,2) as int)+@n as nvarchar),2)
+			select @serial='',@buyerno='',@buyer='',@custno='',@cust='',@money=0,@tax=0,@total=0,@memo=''
+			if exists(select noa from vcca where noa=@invono)
+			begin
+				select @taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno,@buyer=a.buyer
+				,@custno=a.custno,@cust=case when len(isnull(b.nick,''))>0 then b.nick else left(a.comp,4)end
+				,@money=a.[money],@tax=a.tax,@total=a.total,@memo=a.memo 
+				from vcca a
+				left join cust b on a.custno=b.noa
+				where a.noa=@invono
+				if(@taxtype='6')
+					insert into @tmp(gno,noa,noq,cno,acomp,invono,serial,memo)values('0',@noa,@noq,@cno,@acomp,@invono,'作廢',@memo)
+				else
+					insert into @tmp(gno,noa,noq,cno,acomp,invono,serial,buyerno,buyer,custno,cust,[money],tax,total,memo)
+					values('0',@noa,@noq,@cno,@acomp,@invono,@serial,@buyerno,@buyer,@custno,@cust,@money,@tax,@total,@memo)
+			end
+			else
+			begin
+				insert into @tmp(gno,noa,noq,cno,acomp,invono)values('0',@noa,@noq,@cno,@acomp,@invono)
+			end
+			set @n = @n + 1
+		end
+		select @money=0,@tax=0,@total=0
+		select @money=SUM(ISNULL([money],0)),@tax=SUM(ISNULL(tax,0)),@total=SUM(ISNULL(total,0)) from @tmp where noa=@noa and noq=@noq
+		insert into @tmp(gno,noa,noq,cno,acomp,[money],tax,total)values('1',@noa,@noq,@cno,@acomp,@money,@tax,@total)
+		fetch next from cursor_table
+		into @noa,@noq,@cno,@acomp,@binvono,@einvono
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[tax]),1)),4,12)) tx
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[total]),1)),4,12)) tt
+	from @tmp order by noa,noq,gno;
+	
+z_vcca02:--z_vcca02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_cno nvarchar(max)
+	
+	set @t_accy = '[11]'
+	set @t_bmon = case when '#non'=[1] then '' else [1] end
+	set @t_emon = case when '#non'=[2] then CHAR(255) else [2] end
+	set @t_cno = case when '#non'=[12] then '' else [12] end
+	---------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	IF OBJECT_ID('tempdb..#acomp')is not null
+	BEGIN
+		set @cmd = 'drop table #acomp'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #acomp(
+		noa nvarchar(20)
+	)
+	set @string = @t_cno
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #acomp select @string
+			end
+			break
+		end
+		insert into #acomp select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(3),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		cno nvarchar(20),
+		acomp nvarchar(20),
+		binvono nvarchar(10),
+		einvono nvarchar(10),
+		[money] float,
+		tax float,
+		total float,
+		memo nvarchar(max)
+	)
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @cno nvarchar(20)
+	declare @acomp nvarchar(40)
+	declare @binvono nvarchar(10)
+	declare @einvono nvarchar(10)
+	declare @invono nvarchar(10)
+	declare @taxtype nvarchar(10)
+	declare @money float
+	declare @tax float
+	declare @total float
+	
+	declare @i int
+	declare @j int
+	
+	declare cursor_table cursor for
+	select a.noa,b.noq,a.cno,d.nick,b.binvono,b.einvono 
+	from vccar a
+	left join vccars b on a.noa=b.noa
+	left join #acomp c on a.cno=c.noa
+	left join acomp d on a.cno=d.noa
+	where (c.noa is not null) and len(b.binvono)=10
+	and ((LEFT(a.bdate,6) between @t_bmon and @t_emon) or (LEFT(a.edate,6) between @t_bmon and @t_emon))
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@noq,@cno,@acomp,@binvono,@einvono
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @n=0,@i=0,@j=0,@money=0,@tax=0,@total=0
+		while(@n<50)
+		begin	
+			set @invono = SUBSTRING(@binvono,1,8)+ right('0'+cast(cast(SUBSTRING(@binvono,9,2) as int)+@n as nvarchar),2)
+			select @taxtype=taxtype,@money=@money+ISNULL([money],0),@tax=@tax+ISNULL([tax],0),@total=@total+ISNULL([total],0) from vcca where noa=@invono		
+			if exists(select noa from vcca where noa=@invono)
+				if(@taxtype!='6')
+					set @i = @i + 1
+				else
+					set @j = @j + 1
+			set @n = @n + 1
+		end	
+		set @cmd = case when @i<10 then '&nbsp'+CHAR(59)+'&nbsp'+CHAR(59)+CAST(@i as varchar) else CAST(@i as varchar) end + '張'
+		if(@j>0)
+		begin
+			set @cmd = @cmd + '&nbsp'+CHAR(59)+'&nbsp'+CHAR(59)+ '作廢：'+case when @j<10 then '&nbsp'+CHAR(59)+'&nbsp'+CHAR(59)+CAST(@j as varchar) else CAST(@j as varchar) end + '張'
+		end
+		insert into @tmp(gno,noa,noq,cno,acomp,binvono,einvono,[money],tax,total,memo)
+		values('0',@noa,@noq,@cno,@acomp,@binvono,@einvono,isnull(@money,0),isnull(@tax,0),isnull(@total,0),@cmd)
+		
+		fetch next from cursor_table
+		into @noa,@noq,@cno,@acomp,@binvono,@einvono
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select cno,sum([money]),sum(tax),sum(total) from @tmp group by cno
+	open cursor_table
+	fetch next from cursor_table
+	into @cno,@money,@tax,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into @tmp(gno,cno,[money],tax,total)values('1',@cno,@money,@tax,@total)
+		fetch next from cursor_table
+		into @cno,@money,@tax,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[tax]),1)),4,12)) tx
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[total]),1)),4,12)) tt
+	from @tmp order by cno,gno,noa,noq;
+
