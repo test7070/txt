@@ -833,22 +833,21 @@ z_oil4:--z_oil4
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,curmoney),1)),4,12)) ccurmoney
 	from  @tmp2;
 	------------------------------------------------------------------------------------------------
-	z_oil6:--z_oil6
-	SET QUOTED_IDENTIFIER OFF
-	declare @cmd nvarchar(max)
-	declare @t_accy nvarchar(10)
-	declare @t_bdate nvarchar(10)
-	declare @t_edate nvarchar(10)
-	declare @t_carno nvarchar(20)
-	declare @t_bdriverno nvarchar(20)
-	declare @t_edriverno nvarchar(20)
-	declare @t_boilstationno nvarchar(20)
-	declare @t_eoilstationno nvarchar(20)
-	declare @t_bmon nvarchar(10)
-	declare @t_emon nvarchar(10)
-	declare @t_carkind nvarchar(max)
-	
-	set @t_accy = '[1]'
+	z_oil6:--z_oil6 
+declare @t_accy nvarchar(10) 
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_carno nvarchar(20) 
+declare @t_bdriverno nvarchar(20) 
+declare @t_edriverno nvarchar(20) 
+declare @t_boilstationno nvarchar(20) 
+declare @t_eoilstationno nvarchar(20) 
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_carkind nvarchar(max) 
+declare @t_oilkind nvarchar(max) 
+
+set @t_accy = '[1]'
 	set @t_bdate = case when '#non'=[2] then '' else [2] end
 	set @t_edate = case when '#non'=[3] then char(255) else [3] end
 	set @t_carno = case when '#non'=[4] then '' else [4] end
@@ -859,104 +858,313 @@ z_oil4:--z_oil4
 	set @t_bmon = case when '#non'=[9] then '' else [9] end
 	set @t_emon = case when '#non'=[10] then char(255) else [10] end
 	set @t_carkind = case when '#non'=[11] then '' else [11] end
-	-------------------------------------------------------------------------------
+set @t_oilkind = case when '#non'=[12] then '' else [12] end 
+
+-----------主要資料--------
+declare @tmpa table(  ---全部的資料(有條件篩選的)
+	gno nvarchar(1), 
+	idno int identity(0,1), 
+	datea nvarchar(20), 
+	b_year nvarchar(10), 
+	b_mon nvarchar(10), 
+	b_day nvarchar(10),
+	titleno nvarchar(20),
+	title nvarchar(20),  
+	mount float, 
+	money float, 
+	price float,
+	pagemount int
+) 
+----將篩選後的資料插入 @tmpa
+insert into @tmpa
+	select '0',datea, 
+	substring(datea,1, charindex('/', datea)-1) b_year, 
+	substring(datea, charindex('/', datea)+1,2) b_mon, 
+	case when substring(RIGHT(datea,2),1,1) = '0' then SUBSTRING(RIGHT(datea,2),2,1) else RIGHT(datea,2) end b_day,oilstationno,
+	oilstation,mount,money,price,DENSE_RANK()over (order by left(datea,6))
+	from oil
+	where (LEFT(datea,6) between @t_bmon and @t_emon) and charindex(oilstationno,@t_oilkind) > 0
+	order by oilstation,datea
+-------------------------------------------------------------------------------------------
+declare @tmpb table( ---顯示 製造的月份跟該月份有幾頁
+	idno int identity(0,1), 
+	datea nvarchar(20),
+	pagemount int
+) 	
+insert into @tmpb
+	select distinct(b_year + '/' + b_mon),0 from @tmpa
+---------------------------------------------------------------------------------------------	
+declare @titletmp table(---distinct Title and sum mount,money
+	idno int identity(0,1),
+	title nvarchar(100),
+	datea nvarchar(10),
+	mount float,
+	money float,
+	pagemount int,
+	onwhere int
+)
+insert into @titletmp 
+	select distinct(title),(b_year + '/' + b_mon) datea,SUM(mount),SUM(money),'0','0' from @tmpa
+	group by title,(b_year + '/' + b_mon)
+	order by datea,title
+declare @x int ---位置
+declare @y int ---頁數
+declare @x_title nvarchar(90)
+declare @x_datea nvarchar(90)
+declare @lastdatea nvarchar(10)
+set @x = 1
+set @y = 1
+set @x_title = ''
+set @x_datea = ''
+set @lastdatea = 'qwwert'
+----將@titletmp 該月份該公司要在哪頁與哪個位置的值插入
+----onwhere 一頁兩家公司 判斷在左邊或在右邊 1為左 2為右
+----pagemount 頁數
+declare cursor_table cursor for
+select title,datea from @titletmp
+open cursor_table
+fetch next from cursor_table
+into @x_title,@x_datea
+while(@@FETCH_STATUS <> -1)
+begin
+	----如果跨日期則頁數+1 起始位置返回1
+	if(@x_datea != @lastdatea and @lastdatea != 'qwwert')
+	begin
+		if(@x!=1) begin set @y += 1 end
+		set @x=1
+	end
+	if(@x = 2)
+	begin
+		------如果起始位置等於2 則更新完後 頁數+1 起始位置返回1
+		------@lastdatea = 該筆日期
+		update @titletmp set pagemount = @y where title = @x_title and datea = @x_datea
+		update @titletmp set onwhere = @x where title = @x_title and datea = @x_datea
+		set @x=1
+		set @y += 1
+		set @lastdatea = @x_datea
+	end
+	else
+	begin
+		------如果起始位置等於1 則更新完後 起始位置+1
+		------@lastdatea = 該筆日期
+		update @titletmp set pagemount = @y where title = @x_title and datea = @x_datea
+		update @titletmp set onwhere = @x where title = @x_title and datea = @x_datea
+		set @x +=1
+		set @lastdatea = @x_datea
+	end
+	fetch next from cursor_table
+	into @x_title,@x_datea
+end
+close cursor_table
+deallocate cursor_table
+declare @check_datea nvarchar(10)
+declare @check_mount int
+declare @check_money int
+set @check_datea = ''
+set @check_mount = 0
+set @check_money = 0
+declare cursor_table cursor for
+select datea,mount,money from @titletmp
+open cursor_table
+fetch next from cursor_table
+into @check_datea,@check_mount,@check_money
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@check_mount > 0 and @check_money > 0)
+	begin
+		update @tmpb set pagemount +=1 where datea = @check_datea
+	end
+	fetch next from cursor_table
+	into @check_datea,@check_mount,@check_money
+end
+close cursor_table
+deallocate cursor_table
+
+update @tmpb set pagemount = (pagemount / 2) where (pagemount % 2) =0
+update @tmpb set pagemount = (pagemount / 2)+1 where (pagemount % 2) !=0
+declare @result table(  ---有日期的
+	gno nvarchar(1), 
+	idno int identity(0,1), 
+	datea nvarchar(20), 
+	b_year nvarchar(10), 
+	b_mon nvarchar(10), 
+	b_day nvarchar(10),
+	title1 nvarchar(20),  
+	mount1 float, 
+	money1 float, 
+	price1 float,
+	title2 nvarchar(20),  
+	mount2 float, 
+	money2 float, 
+	price2 float,
+	pagemount int
+)
 declare @t_year int 
 declare @t_mon nvarchar(10) 
 declare @t_days nvarchar(10) 
 declare @i int 
 declare @j int 
+declare @k int 
 declare @countrecord int 
-set @i = 0 
+declare @pagemount int
+set @pagemount = 0
+set @i = 0  
 set @j = 1 
+set @k = 0 
 set @countrecord = 0 
-declare @tmp table( 
-gno nvarchar(1), 
-idno int identity(0,1), 
-datea nvarchar(20), 
-b_year nvarchar(10), 
-b_mon nvarchar(10), 
-b_day nvarchar(10), 
-mount1 float, 
-money1 float, 
-price1 float,
-mount2 float, 
-money2 float,
-price2 float 
-) 
-declare @tmpa table( 
-idno int identity(0,1), 
-datea nvarchar(20) 
-) 
-declare @tmpb table( 
-gno nvarchar(1), 
-idno int identity(0,1), 
-d_year nvarchar(10), 
-d_mon nvarchar(10), 
-d_day nvarchar(10), 
-mount1 float, 
-money1 float,
-price1 float, 
-mount2 float, 
-money2 float,
-price2 float 
-) 
-
-insert into @tmp 
-select '1' gno,datea, 
-substring(datea,1, charindex('/', datea)-1) b_year, 
-substring(datea, charindex('/', datea)+1,2) b_mon, 
-case when substring(RIGHT(datea,2),1,1) = '0' then SUBSTRING(RIGHT(datea,2),2,1) else RIGHT(datea,2) end b_day, 
-case when oilstation = '山隆' then mount end,case when oilstation = '山隆' then money end,case when oilstation = '山隆' then price end, 
-case when oilstation = '現金' then mount end,case when oilstation = '現金' then money end,case when oilstation = '現金' then price end 
-from oil 
-where LEFT(datea,6) between @t_bmon and @t_emon 
-order by datea,b_year,b_mon,b_day 
-insert into @tmpa 
-select distinct(b_year + '/' + b_mon) from @tmp 
-select @countrecord = count(*) from @tmpa 
+select @countrecord = count(*) from @tmpb --日期不同的個數
 while(@i < @countrecord) 
 begin 
-select @t_year = substring(datea,1, charindex('/', datea)-1) from @tmpa where idno = @i 
-select @t_mon = substring(datea, charindex('/', datea)+1,2) from @tmpa where idno = @i 
-if (@t_mon = 2) 
-begin 
-if (((@t_year % 4 = 0) and (@t_year % 100 != 0)) or (@t_year % 400 = 0) ) 
-begin set @t_days = 29 end 
-else 
-begin set @t_days = 28 end 
-end 
-else if ((@t_mon = 4) or (@t_mon = 6) or (@t_mon = 9) or (@t_mon = 11)) 
-begin set @t_days = 30 end 
-else 
-begin set @t_days = 31	end 
-set @j = 1 
-while(@j < (@t_days+1)) 
-begin 
-insert into @tmpb(gno,d_year,d_mon,d_day) 
-values('0',@t_year,@t_mon,@j) 
-set @j += 1 
-end 
-set @i += 1 
-end 
-set @i = 0 
-select @countrecord = COUNT(*) from @tmp where gno = 1 
-insert into @tmp 
-select '0',datea,b_year,b_mon,b_day,SUM(mount1),SUM(money1),max(price1),SUM(mount2),SUM(money2),max(price2) from @tmp 
-group by datea,b_year,b_mon,b_day 
-update @tmpb set mount1 = a.mount1,money1 = a.money1,price1 = a.price1,mount2 = a.mount2,money2 = a.money2,price2 = a.price2 from @tmp a 
-where ((d_year = a.b_year) and (d_mon = a.b_mon) and (d_day = a.b_day)) and a.gno = 0 
-insert into @tmpb (gno,d_year,d_mon,mount1,money1,price1,mount2,money2,price2) 
-select '1',d_year,d_mon,SUM(mount1),SUM(money1),max(price1),SUM(mount2),SUM(money2),max(price2) from @tmpb 
-where gno = 0 group by d_year,d_mon 
-select gno,(d_year + '年' + d_mon + '月') datea,d_year,d_mon,d_day, 
-isnull(reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount1),1)),4,12)),0) mount1, 
+	select @t_year = substring(datea,1, charindex('/', datea)-1) from @tmpb where idno = @i 
+	select @t_mon = substring(datea, charindex('/', datea)+1,2) from @tmpb where idno = @i 
+	----調整月日變量
+	if (@t_mon = 2) 
+	begin 
+		if (((@t_year % 4 = 0) and (@t_year % 100 != 0)) or (@t_year % 400 = 0) ) 
+		begin set @t_days = 29 end 
+		else 
+		begin set @t_days = 28 end 
+	end 
+	else if ((@t_mon = 4) or (@t_mon = 6) or (@t_mon = 9) or (@t_mon = 11)) begin set @t_days = 30 end 
+	else begin set @t_days = 31	end 
+	----調整月日變量
+	set @k = 0
+	while(@k < (select pagemount from @tmpb where datea = (cast(@t_year as nvarchar) + '/' + cast(@t_mon as nvarchar))))
+	begin
+		set @pagemount += 1
+		set @j = 1 
+		while(@j < (@t_days+1)) 
+		begin 
+			insert into @result(gno,b_year,b_mon,b_day,pagemount) values('0',@t_year,@t_mon,@j,@pagemount) 
+			set @j += 1 
+		end
+		---每新增一個月頁數+1
+		---insert into @result(gno,pagemount) values(1,@pagemount)
+		---每新增一個月頁數+1
+		set @k += 1
+	end
+	set @i += 1 
+end
+declare @x_pagemount int
+declare @x_onwhere int
+set @x_pagemount = 0
+set @x_onwhere = 0
+declare cursor_table cursor for
+select title,datea,pagemount,onwhere from @titletmp
+open cursor_table
+fetch next from cursor_table
+into @x_title,@x_datea,@x_pagemount,@x_onwhere
+while(@@FETCH_STATUS <> -1)
+begin
+	-------插入名稱 如果@x_onwhere(位置) =  1 則插入title1 (左邊)
+	if(@x_onwhere = 1)
+	begin
+		update @result set title1 = @x_title where (b_year + '/' + b_mon) = @x_datea and pagemount = @x_pagemount
+	end
+	else
+	begin
+		update @result set title2 = @x_title where (b_year + '/' + b_mon) = @x_datea and pagemount = @x_pagemount
+	end
+	fetch next from cursor_table
+	into @x_title,@x_datea,@x_pagemount,@x_onwhere
+end
+close cursor_table
+deallocate cursor_table
+insert into @tmpa(gno,datea,b_year,b_mon,b_day,title,mount,money,price)
+	select '1',datea,b_year,b_mon,b_day,title,SUM(mount),SUM(money),round(AVG(price),2) from @tmpa
+	group by title,datea,b_year,b_mon,b_day
+	
+declare @onwhere int
+declare @b_year nvarchar(15)
+declare @b_mon nvarchar(15)
+declare @b_day nvarchar(15)
+declare @x_mount float
+declare @x_money float
+declare @x_price float
+set @b_year = '0'
+set @b_mon = '0'
+set @b_day = '0'
+set @onwhere = 0
+set @x_mount = 0
+set @x_money = 0
+set @x_price = 0
+set @pagemount = 0
+declare cursor_table cursor for
+select title,datea,b_year,b_mon,b_day,mount,money,price from @tmpa
+where gno = 1 order by datea
+open cursor_table
+fetch next from cursor_table
+into @x_title,@x_datea,@b_year,@b_mon,@b_day,@x_mount,@x_money,@x_price
+while(@@FETCH_STATUS <> -1)
+begin
+	------先取得該筆之料應該位於哪裡 與取得該筆資料的頁數(防止跨月份同公司)
+	------如果 @x_onwhere = 1 則插入 該日總計過後的值 於左邊
+	select @onwhere = onwhere from @titletmp where title = @x_title and datea = (@b_year + '/' + @b_mon)
+	select @pagemount = pagemount from @titletmp where title = @x_title and datea = (@b_year + '/' + @b_mon)
+	if(@onwhere = 1)
+	begin
+		update @result set mount1 = @x_mount where (b_year = @b_year) and (b_mon = @b_mon) and (b_day = @b_day) and (title1 = @x_title) and (pagemount = @pagemount)
+		update @result set money1 = @x_money where (b_year = @b_year) and (b_mon = @b_mon) and (b_day = @b_day) and (title1 = @x_title) and (pagemount = @pagemount)
+		update @result set price1 = @x_price where (b_year = @b_year) and (b_mon = @b_mon) and (b_day = @b_day) and (title1 = @x_title) and (pagemount = @pagemount)
+	end
+	else if(@onwhere = 2)
+	begin
+		update @result set mount2 = @x_mount where (b_year = @b_year) and (b_mon = @b_mon) and (b_day = @b_day) and (title2 = @x_title) and (pagemount = @pagemount)
+		update @result set money2 = @x_money where (b_year = @b_year) and (b_mon = @b_mon) and (b_day = @b_day) and (title2 = @x_title) and (pagemount = @pagemount)
+		update @result set price2 = @x_price where (b_year = @b_year) and (b_mon = @b_mon) and (b_day = @b_day) and (title2 = @x_title) and (pagemount = @pagemount)
+	end
+	fetch next from cursor_table
+	into @x_title,@x_datea,@b_year,@b_mon,@b_day,@x_mount,@x_money,@x_price
+end
+close cursor_table
+deallocate cursor_table
+------建立合計紀錄(尚未執行合計)
+insert into @result(pagemount,gno,b_year,b_mon,b_day,title1,title2)
+	select distinct(pagemount),'1',b_year,b_mon,count(b_day),title1,title2 from @result
+	group by b_year,b_mon,title1,title2,pagemount
+declare @x_title1 nvarchar(90)	
+declare @x_title2 nvarchar(90)	
+set @x_title1 = ''
+set @x_title2 = ''
+declare cursor_table cursor for
+select title1,title2,b_year,b_mon from @result
+where gno = 1
+open cursor_table
+fetch next from cursor_table
+into @x_title1,@x_title2,@b_year,@b_mon
+while(@@FETCH_STATUS <> -1)
+begin
+	-----更新合計的值
+	select @x_mount = SUM(mount1) from @result where (title1 = @x_title1) and (b_year = @b_year) and (b_mon = @b_mon) and (gno = 0)
+	update @result set mount1 = @x_mount where (gno = 1) and (title1 = @x_title1) and (b_year = @b_year) and (b_mon = @b_mon)
+	select @x_mount = SUM(mount2) from @result where (title2 = @x_title2) and (b_year = @b_year) and (b_mon = @b_mon) and (gno = 0)
+	update @result set mount2 = @x_mount where (gno = 1) and (title2 = @x_title2) and (b_year = @b_year) and (b_mon = @b_mon)
+
+	select @x_money = SUM(money1) from @result where (title1 = @x_title1) and (b_year = @b_year) and (b_mon = @b_mon) and (gno = 0)
+	update @result set money1 = @x_money where (gno = 1) and (title1 = @x_title1) and (b_year = @b_year) and (b_mon = @b_mon)
+	select @x_money = SUM(money2) from @result where (title2 = @x_title2) and (b_year = @b_year) and (b_mon = @b_mon) and (gno = 0)
+	update @result set money2 = @x_money where (gno = 1) and (title2 = @x_title2) and (b_year = @b_year) and (b_mon = @b_mon)
+
+	select @x_price = round(AVG(price1),2) from @result where (title1 = @x_title1) and (b_year = @b_year) and (b_mon = @b_mon) and (gno = 0)
+	update @result set price1 = @x_price where (gno = 1) and (title1 = @x_title1) and (b_year = @b_year) and (b_mon = @b_mon)
+	select @x_price = round(AVG(price2),2) from @result where (title2 = @x_title2) and (b_year = @b_year) and (b_mon = @b_mon) and (gno = 0)
+	update @result set price2 = @x_price where (gno = 1) and (title2 = @x_title2) and (b_year = @b_year) and (b_mon = @b_mon)
+
+	fetch next from cursor_table
+	into @x_title1,@x_title2,@b_year,@b_mon
+end
+close cursor_table
+deallocate cursor_table
+
+select gno,(b_year + '年' + b_mon + '月') datea,b_day,
+title1+'(公升)' title1,isnull(reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount1),1)),4,12)),0) mount1, 
 isnull(reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)),0) money1,
 isnull(price1,0) price1,
+title2+'(公升)' title2,
 isnull(reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount2),1)),4,12)),0) mount2, 
 isnull(reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)),0) money2,
-isnull(price2,0) price2
-from @tmpb 
-order by d_year,d_mon,gno;
+isnull(price2,0) price2,pagemount
+from @result order by pagemount,gno;
 -------------------------------------------
 z_oil7:--z_oil7
 declare @t_bmon nvarchar(20)
