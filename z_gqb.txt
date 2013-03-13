@@ -34,7 +34,126 @@
 	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
 	set @t_acc1 = case when '#non'=[16] then '' else [16] end
 	-------------------------------------------------------------------------------
-	;
+	declare @tmp1 table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		datea nvarchar(10),
+		accno nvarchar(20),
+		memo nvarchar(max),
+		dmoney float,
+		cmoney float
+	)
+	set @cmd =
+	" select a.accc5,isnull(b.acc2,''),a.accc2,a.accc3,a.accc7,isnull(a.dmoney,0),isnull(a.cmoney,0)"+
+	" from acccs"+@t_accy+" a"+
+	" left join acc"+@t_accy+" b on a.accc5=b.acc1"+
+	" where LEFT(a.accc5,4)='1112' "+
+	" and (a.accc2 <= right(@t_eydate,5))"+
+	" and (len(@t_acc1)=0 or @t_acc1=a.accc5)"
+	insert into @tmp1
+	execute sp_executesql @cmd,N'@t_eydate nvarchar(10),@t_acc1 nvarchar(20)'
+	,@t_eydate=@t_eydate,@t_acc1=@t_acc1
+	--收票
+	declare @tmp2 table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		indate nvarchar(10),
+		gqbno nvarchar(20),
+		memo nvarchar(max),
+		[money] float
+	)
+	set @cmd=
+	" select isnull(b.accl,''),isnull(c.acc2,''),isnull(d.indate,''),a.checkno,isnull(d.memo,''),isnull(d.[money],0) "+
+	" from chk2s a"+
+	" left join chk2 b on a.noa=b.noa"+
+	" left join acc"+@t_accy+" c on b.accl=c.acc1 "+
+	" left join gqb d on a.checkno=d.gqbno"+
+	" where isnull(a.sel,0)=1 and ISNULL(d.enda,'')!='Y' "+
+	" and (ISNULL(d.indate,'') <= @t_eydate)"+
+	" and (len(@t_acc1)=0 or @t_acc1=isnull(b.accl,''))"
+	insert into @tmp2
+	execute sp_executesql @cmd,N'@t_eydate nvarchar(10),@t_acc1 nvarchar(20)'
+	,@t_eydate=@t_eydate,@t_acc1=@t_acc1
+	
+	declare @tmp table(
+		gno nvarchar(10),
+		pno nvarchar(10),
+		noa nvarchar(20),
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		datea nvarchar(10),
+		memo nvarchar(max),
+		dmoney float,
+		cmoney float,
+		total float
+	)
+	
+	insert into @tmp
+	select '0','1','',acc1,acc2,'','期初',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),0
+	from(
+		select acc1,acc2,dmoney,cmoney
+		from @tmp1 
+		where datea < right(@t_bydate,5)
+		union all
+		select acc1,acc2,[money],0
+		from @tmp2
+		where indate < @t_bydate) a
+	group by acc1,acc2
+	
+	insert into @tmp
+	select '0','2',accno,acc1,acc2,datea,memo,dmoney,cmoney,0
+	from @tmp1
+	where datea >= right(@t_bydate,5)
+	
+	insert into @tmp
+	select '0','3',gqbno,acc1,acc2,right(indate,5),'收票 '+memo,[money],0,0
+	from @tmp2
+	where indate >=@t_bydate
+	-------------------------------------------------------------------------------
+	declare @acc1 nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @dmoney float
+	declare @cmoney float
+	declare @total float
+	
+	declare cursor_table cursor for
+	select acc1 from @tmp group by acc1
+	open cursor_table
+	fetch next from cursor_table
+	into @acc1
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @total = 0
+		declare cursor_table2 cursor for
+		select noa,dmoney,cmoney from @tmp where acc1=@acc1 order by acc1,datea,pno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa,@dmoney,@cmoney
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @total = @total + @dmoney - @cmoney
+			update @tmp set total=@total where acc1=@acc1 and noa=@noa
+			
+			fetch next from cursor_table2
+			into @noa,@dmoney,@cmoney
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		fetch next from cursor_table
+		into @acc1
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmp
+	select '1','3','',acc1,acc2,char(255),'',0,0,0 from @tmp group by acc1,acc2
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(dmoney,0)),1)),4,12)) dm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(cmoney,0)),1)),4,12)) cm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(total,0)),1)),4,12)) tt
+	from @tmp 
+	order by acc1,datea,pno;
 
 z_gqb1:--z_gqb1
 	SET QUOTED_IDENTIFIER OFF
