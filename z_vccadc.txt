@@ -856,26 +856,37 @@ set @t_bdate = case when '#non'=[1] then '' else [1] end
 set @t_edate = case when '#non'=[2] then CHAR(255) else [2] end 
 declare @tmp table(
 	gno nvarchar(1),
+	idno int,
+	acomp nvarchar(100),
 	cno nvarchar(35),
-	acomp nvarchar(90),
+	comp nvarchar(90),
 	abinvono nvarchar(50),
 	aeinvono nvarchar(50),
 	noq nvarchar(10),
 	bbinvono nvarchar(50),
 	beinvono nvarchar(50),
-	money float
+	money float,
+	taxrate float,
+	tax float
 )
+
 insert into @tmp
-	select '0',a.cno,a.acomp,a.binvono,a.einvono,b.noq,b.binvono,b.einvono,0 from vccar a 
+	select '0','0',a.acomp,b.custno,b.comp,a.binvono,a.einvono,b.noq,b.binvono,b.einvono,0,
+	isnull(e.taxrate,(select taxrate from custroutines f where (f.custno = b.custno) and (f.cno = '') and ((a.bdate between f.bdate and f.edate) or (a.edate between f.bdate and f.edate))))	
+	,0 from vccar a 
 	left join vccars b on a.noa = b.noa
+	left join custroutines e on ((b.custno = e.custno) and (a.cno = e.cno)) and ((a.bdate between e.bdate and e.edate) or (a.edate between e.bdate and e.edate))
 	where
 	(left(a.bdate,6) between @t_bdate and @t_edate) or
 	(left(a.edate,6) between @t_bdate and @t_edate)
 	order by b.noa,b.noq
+update @tmp set taxrate = 5 where cno = 'H249'
+--update @tmp set taxrate = 8.5 where taxrate is null
+
 declare @noa nvarchar(10)
 declare @money float
 declare cursor_table cursor for
-	select noa,money  from vcca
+	select noa,money from vcca
 open cursor_table
 fetch next from cursor_table
 into @noa,@money
@@ -887,7 +898,16 @@ begin
 end
 close cursor_table
 deallocate cursor_table
+update @tmp set tax = round((money * (taxrate/100)),2)
+insert into @tmp(gno,idno,acomp,money,tax)
+	select 1,0,acomp,SUM(money),SUM(tax) from @tmp
+	group by acomp
+insert into @tmp(gno,idno,money,tax)
+	select 2,2,SUM(money),SUM(tax) from @tmp where gno = 0
+	
 select
-	gno,acomp,noq,bbinvono,beinvono,
-	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money
-from @tmp;
+	gno,idno,acomp,cno,comp cmp,noq,bbinvono,beinvono,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+	taxrate tar,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax
+from @tmp order by idno,acomp,gno;
