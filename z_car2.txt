@@ -1961,6 +1961,47 @@ declare @tmpa table(
 page int
 ) 
 
+declare @tmpc table( 
+	[gno] nvarchar(1),
+	[noa] nvarchar(30), 
+	[noq] nvarchar(20), 
+	[carno] nvarchar(20), 
+	[carownerno] nvarchar(20), 
+	[carowner] nvarchar(50), 
+	[indate] nvarchar(10), 
+	[carbrandno] nvarchar(20), 
+	[carbrand] nvarchar(50), 
+	[caryear] nvarchar(10), 
+	[mobile] nvarchar(50), 
+	[caritemno] nvarchar(50), 
+	[caritem] nvarchar(50), 
+	[mon] nvarchar(20), 
+	[datea] nvarchar(20), 
+	[memo] nvarchar(max), 
+	[outmoney] int, 
+	[inmoney] int, 
+	[total] int
+) 
+
+declare @gno nvarchar(2) 
+declare @noa nvarchar(20) 
+declare @noq nvarchar(3) 
+declare @carno nvarchar(20)
+declare @carownerno nvarchar(20) 
+declare @carowner nvarchar(50)
+declare @indate nvarchar(20) 
+declare @carbrandno nvarchar(20)
+declare @carbrand nvarchar(50)
+declare @caryear nvarchar(20)
+declare @mobile nvarchar(50)
+declare @caritemno nvarchar(50)
+declare @caritem nvarchar(50)
+declare @mon nvarchar(10)
+declare @datea nvarchar(10)
+declare @memo nvarchar(Max)
+declare @outmoney int 
+declare @inmoney int 
+declare @total int 
 
 set @cmd =	"select a.*,0 "+ 
 " from( " + 
@@ -1985,6 +2026,52 @@ execute sp_executesql @cmd,N'@t_bcarno nvarchar(20),@t_ecarno nvarchar(20),@t_bc
 @t_bmon nvarchar(10),@t_emon nvarchar(10)', 
 @t_bcarno = @t_bcarno,@t_ecarno = @t_ecarno,@t_bcarownerno=@t_bcarownerno,@t_ecarownerno=@t_ecarownerno, 
 @t_bmon=@t_bmon,@t_emon=@t_emon 
+
+--1020312更新加入VCCTRAN的車主資料 
+if(left(@t_bmon,3)>='101')
+begin
+	set @cmd="
+	select '0'gno,(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0   
+	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)) 
+	else   (select top 1 carno from cara c where mon=left(a.datea,6) and a.custno=c.carownerno order by carno ) end)+'-'+left(datea,6) noa
+	,'999' noq
+	,(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0   
+	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)) 
+	else   (select top 1 carno from cara c where mon=left(a.datea,6) and a.custno=c.carownerno order by carno ) end)carno
+	,a.custno carownerno,a.comp carowner,b.indate,b.carbrandno,d.brand,b.caryear,e.mobile,'' caritemno,a.memo caritem
+	,left(a.datea,6) mon,a.datea,a.noa memo,a.total outmoney ,0 inmoney,0
+	from vcc"+left(@t_bmon,3)+" a left join car2 b on 
+	(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0   
+	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)) 
+	else   (select top 1 carno from cara c where mon=left(a.datea,6) and a.custno=c.carownerno order by carno ) end)=b.noa
+	left join carbrand d on b.carbrandno=d.noa
+	left join carOwner e on a.custno=e.noa
+	where left(a.custno,1)='H' and (left(a.datea,6) between '"+@t_bmon+"' and '"+@t_emon+"')
+	and (a.datea>='102/03/01')
+	order by noa "
+
+	insert into @tmpc
+	execute sp_executesql @cmd
+	
+	--插入tmpc(vcctran)
+	declare cursor_table cursor for 
+	select * from @tmpc 
+	where noa in(select noa from @tmp group by noa)
+	open cursor_table 
+	fetch next from cursor_table 
+	into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+	
+		insert into @tmp 
+		select @gno,@noa,(select right('00'+cast((cast(MAX(noq) as int)+1)as nvarchar(3)),3) from @tmp where noa=@noa),@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+	
+	fetch next from cursor_table 
+	into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+	end
 
 --月小計
 insert into @tmp 
@@ -2013,27 +2100,8 @@ left join carOwner c on c.noa = b.carownerno
 left join carbrand d on d.noa = b.carbrandno 
 where b.noa in(select carno from @tmp where carno not in (select carno from @tmp where gno='4' group by carno)group by carno)
 
-
 -----------------------------------------------------------------------------------------------
-declare @gno nvarchar(2) 
-declare @noa nvarchar(20) 
-declare @noq nvarchar(3) 
-declare @carno nvarchar(20)
-declare @carownerno nvarchar(20) 
-declare @carowner nvarchar(50)
-declare @indate nvarchar(20) 
-declare @carbrandno nvarchar(20)
-declare @carbrand nvarchar(50)
-declare @caryear nvarchar(20)
-declare @mobile nvarchar(50)
-declare @caritemno nvarchar(50)
-declare @caritem nvarchar(50)
-declare @mon nvarchar(10)
-declare @datea nvarchar(10)
-declare @memo nvarchar(Max)
-declare @outmoney int 
-declare @inmoney int 
-declare @total int 
+
 declare @count int 
 declare @t_total int 
 declare @t_outmoney int 
@@ -2054,7 +2122,6 @@ set @t_carownerno='ZZZZ'
 set @x_total =0
 set @x_count =0
 set @t_pagecount=1
-
 
 declare cursor_table cursor for 
 select * from @tmp order by carownerno,carno,mon,gno,datea,noq
@@ -2180,8 +2247,16 @@ while(@@FETCH_STATUS <> -1)
 						end
 					else
 						begin
-							insert into @tmpa
-							select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
+							if(@gno='4')--20130119改成最後一個月cara的金額合計(檢查是否結轉正確)
+							begin
+								insert into @tmpa
+								select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total,@count,'',(@t_pagecount/@pageCount)+1
+							end
+							else
+							begin
+								insert into @tmpa
+								select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
+							end
 						end
 					
 					set @count=@count+1
@@ -2268,31 +2343,31 @@ set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
 
 declare @tmpb table( 
-[gno] nvarchar(2), 
-[noa] nvarchar(30), 
-[noq] nvarchar(20), 
-[carno] nvarchar(20), 
-[carownerno] nvarchar(20), 
-[carowner] nvarchar(50), 
-[indate] nvarchar(10), 
-[carbrandno] nvarchar(20), 
-[carbrand] nvarchar(50), 
-[caryear] nvarchar(10), 
-[mobile] nvarchar(50), 
-[caritemno] nvarchar(50), 
-[caritem] nvarchar(50), 
-[mon] nvarchar(20), 
-[datea] nvarchar(20), 
-[memo] nvarchar(max), 
-[outmoney] int, 
-[inmoney] int, 
-[total] int, 
-[count] int,
-[xmemo] nvarchar(max),
-page int,
-zip nvarchar(50),
-addr nvarchar(200),
-nowdate nvarchar(10)
+	[gno] nvarchar(2), 
+	[noa] nvarchar(30), 
+	[noq] nvarchar(20), 
+	[carno] nvarchar(20), 
+	[carownerno] nvarchar(20), 
+	[carowner] nvarchar(50), 
+	[indate] nvarchar(10), 
+	[carbrandno] nvarchar(20), 
+	[carbrand] nvarchar(50), 
+	[caryear] nvarchar(10), 
+	[mobile] nvarchar(50), 
+	[caritemno] nvarchar(50), 
+	[caritem] nvarchar(50), 
+	[mon] nvarchar(20), 
+	[datea] nvarchar(20), 
+	[memo] nvarchar(max), 
+	[outmoney] int, 
+	[inmoney] int, 
+	[total] int, 
+	[count] int,
+	[xmemo] nvarchar(max),
+	page int,
+	zip nvarchar(50),
+	addr nvarchar(200),
+	nowdate nvarchar(10)
 ) 
 
 declare cursor_table cursor for 
@@ -2569,6 +2644,47 @@ declare @tmpa table(
 [xmemo] nvarchar(max)
 ) 
 
+declare @tmpb table( 
+	[gno] nvarchar(1),
+	[noa] nvarchar(30), 
+	[noq] nvarchar(20), 
+	[carno] nvarchar(20), 
+	[carownerno] nvarchar(20), 
+	[carowner] nvarchar(50), 
+	[indate] nvarchar(10), 
+	[carbrandno] nvarchar(20), 
+	[carbrand] nvarchar(50), 
+	[caryear] nvarchar(10), 
+	[mobile] nvarchar(50), 
+	[caritemno] nvarchar(50), 
+	[caritem] nvarchar(50), 
+	[mon] nvarchar(20), 
+	[datea] nvarchar(20), 
+	[memo] nvarchar(max), 
+	[outmoney] int, 
+	[inmoney] int, 
+	[total] int
+) 
+
+declare @gno nvarchar(1) 
+declare @noa nvarchar(20) 
+declare @noq nvarchar(3) 
+declare @carno nvarchar(20)
+declare @carownerno nvarchar(20) 
+declare @carowner nvarchar(50)
+declare @indate nvarchar(20) 
+declare @carbrandno nvarchar(20)
+declare @carbrand nvarchar(50)
+declare @caryear nvarchar(20)
+declare @mobile nvarchar(50)
+declare @caritemno nvarchar(50)
+declare @caritem nvarchar(50)
+declare @mon nvarchar(10)
+declare @datea nvarchar(10)
+declare @memo nvarchar(Max)
+declare @outmoney int 
+declare @inmoney int 
+declare @total int 
 
 set @cmd =	"select a.*,0 "+ 
 " from( " + 
@@ -2594,6 +2710,52 @@ execute sp_executesql @cmd,N'@t_bcarno nvarchar(20),@t_ecarno nvarchar(20),@t_bc
 @t_bcarno = @t_bcarno,@t_ecarno = @t_ecarno,@t_bcarownerno=@t_bcarownerno,@t_ecarownerno=@t_ecarownerno, 
 @t_bmon=@t_bmon,@t_emon=@t_emon 
 
+--1020312更新加入VCCTRAN的車主資料 
+if(left(@t_bmon,3)>='101')
+begin
+	set @cmd="
+	select '0'gno,(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0   
+	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)) 
+	else   (select top 1 carno from cara c where mon=left(a.datea,6) and a.custno=c.carownerno order by carno ) end)+'-'+left(datea,6) noa
+	,'999' noq
+	,(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0   
+	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)) 
+	else   (select top 1 carno from cara c where mon=left(a.datea,6) and a.custno=c.carownerno order by carno ) end)carno
+	,a.custno carownerno,a.comp carowner,b.indate,b.carbrandno,d.brand,b.caryear,e.mobile,'' caritemno,a.memo caritem
+	,left(a.datea,6) mon,a.datea,a.noa memo,a.total outmoney ,0 inmoney,0
+	from vcc"+left(@t_bmon,3)+" a left join car2 b on 
+	(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0   
+	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)) 
+	else   (select top 1 carno from cara c where mon=left(a.datea,6) and a.custno=c.carownerno order by carno ) end)=b.noa
+	left join carbrand d on b.carbrandno=d.noa
+	left join carOwner e on a.custno=e.noa
+	where left(a.custno,1)='H' and (left(a.datea,6) between '"+@t_bmon+"' and '"+@t_emon+"')
+	and (a.datea>='102/03/01')
+	order by noa "
+
+	insert into @tmpb
+	execute sp_executesql @cmd
+
+	--插入tmpb(vcctran)
+	declare cursor_table cursor for 
+	select * from @tmpb 
+	where noa in(select noa from @tmp group by noa)
+	open cursor_table 
+	fetch next from cursor_table 
+	into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+	
+	insert into @tmp 
+	select @gno,@noa,(select right('00'+cast((cast(MAX(noq) as int)+1)as nvarchar(3)),3) from @tmp where noa=@noa),@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+	
+	fetch next from cursor_table 
+	into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+end
+
 --月小計
 insert into @tmp 
 select '2',noa,'',carno,carownerno,'','','','','','','','',mon,'','',SUM(outmoney),SUM(inmoney),0 from @tmp group by noa,carownerno,carno,mon
@@ -2614,25 +2776,6 @@ left join carbrand d on d.noa = b.carbrandno
 where a.carno in(select carno from @tmp group by carno) and mon=@t_emon
 
 -----------------------------------------------------------------------------------------------
-declare @gno nvarchar(1) 
-declare @noa nvarchar(20) 
-declare @noq nvarchar(3) 
-declare @carno nvarchar(20)
-declare @carownerno nvarchar(20) 
-declare @carowner nvarchar(50)
-declare @indate nvarchar(20) 
-declare @carbrandno nvarchar(20)
-declare @carbrand nvarchar(50)
-declare @caryear nvarchar(20)
-declare @mobile nvarchar(50)
-declare @caritemno nvarchar(50)
-declare @caritem nvarchar(50)
-declare @mon nvarchar(10)
-declare @datea nvarchar(10)
-declare @memo nvarchar(Max)
-declare @outmoney int 
-declare @inmoney int 
-declare @total int 
 declare @count int 
 declare @t_total int 
 declare @t_outmoney int 
@@ -2758,8 +2901,16 @@ while(@@FETCH_STATUS <> -1)
 						end
 					else
 						begin
-							insert into @tmpa
-							select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
+							if(@gno='4')--20130119改成最後一個月cara的金額合計(檢查是否結轉正確)
+							begin
+								insert into @tmpa
+								select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total,@count,''
+							end
+							else
+							begin
+								insert into @tmpa
+								select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
+							end
 						end
 					
 					set @count=@count+1
