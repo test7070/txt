@@ -1,3 +1,297 @@
+z_trd4:--z_trd4
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_accy nvarchar(10)
+	declare @t_bcustno nvarchar(30)
+	declare @t_ecustno nvarchar(30)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_vccano nvarchar(20)
+	declare @t_sort1 nvarchar(max)
+	declare @t_noa nvarchar(max)
+
+	set @pageCount = 14
+	set @t_accy = [1]
+	set @t_bcustno = case when '#non'=[2] then '' else [2] end
+	set @t_ecustno = case when '#non'=[3] then char(255) else [3] end
+	set @t_bdate = case when '#non'=[4] then '' else [4] end
+	set @t_edate = case when '#non'=[5] then char(255) else [5] end
+	set @t_vccano = case when '#non'=[6] then '' else [6] end
+	set @t_sort1 = case when '#non'=[7] then '' else [7] end
+	set @t_noa = case when '#non'=[8] then '' else [8] end	
+	-------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_trd4')is not null 
+	BEGIN 
+		set @cmd = 'drop table #z_trd4' 
+		EXECUTE sp_executesql @cmd 
+	END 
+	create table #z_trd4 ( 
+		noa nvarchar(20),
+		custno nvarchar(20),
+		cust nvarchar(40),
+		serial nvarchar(10),
+		addr nvarchar(40),
+		tel nvarchar(max),
+		fax nvarchar(40),
+		custchgno nvarchar(max)
+	) 
+	----------------------------------------------------------------------------------------------
+	set @cmd = 
+	" select a.noa,a.custno,isnull(b.comp,'') cust,ISNULL(b.serial,'') serial"+
+	" ,ISNULL(b.addr_comp,'') addr,ISNULL(b.tel,''),ISNULL(b.fax,''),a.custchgno"+
+	" from view_trd"+@t_accy+" a"+
+	" left join cust b on a.custno=b.noa"+
+	" where (len(@t_noa)=0 or @t_noa=a.noa)"
+	insert into #z_trd4
+	execute sp_executesql @cmd,N'@t_noa nvarchar(20)',@t_noa=@t_noa
+	 
+	declare @tmp1 table(
+		noa nvarchar(20),
+		tranno nvarchar(20),
+		trandate nvarchar(10),
+		addrno nvarchar(20),
+		addr nvarchar(40),
+		carno nvarchar(20),
+		product nvarchar(40),
+		mount float,
+		price float,
+		[money] float,
+		memo nvarchar(max)
+	)
+	set @cmd = 
+	" select a.noa,a.tranno,a.trandate,isnull(c.straddrno,''),a.straddr,a.carno,a.product,a.mount,a.price,a.total"+
+	" ,case when ISNULL(a.total,0)!=ISNULL(c.total,0) then '應付金額不一致，請檢查。' else '' end + isnull(c.po,'')"+
+	" from view_trds"+@t_accy+" a"+
+	" left join #z_trd4 b on a.noa=b.noa"+
+	" left join view_trans"+@t_accy+" c on a.tranno=c.noa"+
+	" where b.noa is not null"
+	insert into @tmp1
+	execute sp_executesql @cmd
+	-------------------------------------------------------------------
+	--custchg
+	declare @tmp2 table(
+		trdno nvarchar(20),
+		custchgno nvarchar(20),
+		datea nvarchar(10),
+		item nvarchar(40),
+		plusmoney float,
+		minusmoney float,
+		memo nvarchar(max)
+	)
+	declare @string nvarchar(max)
+	declare @n int
+	declare @trdno nvarchar(20)
+	declare @custchgno nvarchar(max)
+	declare @datea nvarchar(10)
+	declare @item nvarchar(max)
+	declare @plusmoney float
+	declare @minusmoney float
+	declare @memo nvarchar(max)
+	
+	declare cursor_table cursor for
+	select noa,custchgno from #z_trd4 
+	open cursor_table
+	fetch next from cursor_table
+	into @trdno,@custchgno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @string = @custchgno	
+		while(1=1)
+		begin
+			set @n = PATINDEX('%,%',@string)
+			if @n=0
+			begin
+				if LEN(@string)>0
+				begin
+					select @datea='',@item='',@plusmoney=0,@minusmoney=0,@memo=''
+					select @datea=datea,@item=isnull(plusitem,'')+isnull(minusitem,'') 
+					,@plusmoney=isnull(plusmoney,0),@minusmoney=isnull(minusmoney,0),@memo=isnull(memo,'')
+					from custchg where noa=@string
+					insert into @tmp2 
+					select @trdno,@string,@datea,@item,@plusmoney,@minusmoney,@memo
+				end
+				break
+			end
+			select @datea='',@item='',@plusmoney=0,@minusmoney=0,@memo=''
+			select @datea=datea,@item=isnull(plusitem,'')+isnull(minusitem,'') 
+			,@plusmoney=isnull(plusmoney,0),@minusmoney=isnull(minusmoney,0),@memo=isnull(memo,'')
+			from custchg where noa=LEFT(@string,@n-1)
+			insert into @tmp2 
+			select @trdno,LEFT(@string,@n-1),@datea,@item,@plusmoney,@minusmoney,@memo
+			set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+		end	
+		fetch next from cursor_table
+		into @trdno,@custchgno
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		pno nvarchar(10),
+		trdno nvarchar(20),
+		custno nvarchar(20),
+		cust nvarchar(40),
+		serial nvarchar(10),
+		cust_addr nvarchar(40),
+		cust_tel nvarchar(40),
+		cust_fax nvarchar(40),
+		tmoney float,
+		tdiscount float,
+		tplus float,
+		ttax float,
+		tplusmoney float,
+		tminusmoney float,
+		total float,
+		tmemo nvarchar(max),
+		tranno nvarchar(20),
+		trandate nvarchar(20),
+		addrno nvarchar(20),
+		addr nvarchar(20),
+		carno nvarchar(20),
+		product nvarchar(20),
+		mount float,
+		price float,
+		[money] float,
+		memo1 nvarchar(max),
+		custchgno nvarchar(20),
+		datea nvarchar(10),
+		item nvarchar(max),
+		plusmoney float,
+		minusmoney float,
+		memo2 nvarchar(max)
+	)
+	declare @tranno nvarchar(20)
+	declare @trandate nvarchar(10)
+	declare @addrno nvarchar(20)
+	declare @addr nvarchar(max)
+	declare @carno nvarchar(20)
+	declare @product nvarchar(20)
+	declare @mount float
+	declare @price float
+	declare @money float
+	
+	declare @custno nvarchar(20)
+	declare @cust nvarchar(20)
+	declare @serial nvarchar(10)
+	declare @cust_addr nvarchar(40)
+	declare @tel nvarchar(40)
+	declare @fax nvarchar(40)
+	
+	declare @tmoney float
+	declare @tdiscount float
+	declare @tplus float
+	declare @ttax float
+	declare @tplusmoney float
+	declare @tminusmoney float
+	declare @total float
+	
+	declare cursor_table cursor for
+	select noa,custno,cust,serial,addr,tel,fax from #z_trd4
+	open cursor_table
+	fetch next from cursor_table
+	into @trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax
+	while(@@FETCH_STATUS <> -1)
+	begin
+		--出車明細
+		select @tmoney = 0
+		declare cursor_table2 cursor for
+		select trandate,addrno,addr,carno,product,mount,price,[money],memo from @tmp1 where noa=@trdno
+		order by trandate,addrno,tranno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @trandate,@addrno,@addr,@carno,@product,@mount,@price,@money,@memo
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @tmoney = @tmoney + ISNULL(@money,0)
+			insert into @tmp
+			(gno,pno,trdno,custno,cust,serial,cust_addr,cust_tel,cust_fax
+			,tranno,trandate,addrno,addr,carno,product,mount,price,[money],memo1)
+			values('0','1',@trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax
+			,@tranno,@trandate,@addrno,@addr,@carno,@product,@mount,@price,@money,@memo)
+				
+			fetch next from cursor_table2
+			into @trandate,@addrno,@addr,@carno,@product,@mount,@price,@money,@memo
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		--加減項
+		select @tplusmoney=0,@tminusmoney=0
+		if exists(select * from @tmp2 where trdno=@trdno)
+		begin
+			insert into @tmp
+			(gno,pno,trdno,custno,cust,serial,cust_addr,cust_tel,cust_fax)
+			values('1','2',@trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax)
+		end
+		declare cursor_table2 cursor for
+		select custchgno,datea,item,plusmoney,minusmoney,memo from @tmp2 where trdno=@trdno
+		order by datea
+		open cursor_table2
+		fetch next from cursor_table2
+		into @custchgno,@datea,@item,@plusmoney,@minusmoney,@memo
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @tplusmoney=@tplusmoney+ISNULL(@plusmoney,0),@tminusmoney=@tminusmoney+ISNULL(@minusmoney,0)
+			insert into @tmp
+			(gno,pno,trdno,custno,cust,serial,cust_addr,cust_tel,cust_fax
+			,custchgno,datea,item,plusmoney,minusmoney,memo2)
+			values('2','3',@trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax
+			,@custchgno,@datea,@item,@plusmoney,@minusmoney,@memo)
+				
+			fetch next from cursor_table2
+			into @custchgno,@datea,@item,@plusmoney,@minusmoney,@memo
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		--金額檢查
+		set @cmd="select @string=noa from view_trd"+@t_accy+" where noa=@trdno and [money]!=@tmoney"
+		execute sp_executesql @cmd,N'@trdno nvarchar(20),@tmoney float,@string nvarchar(max) output '
+		,@trdno=@trdno,@tmoney=@tmoney,@string=@string output
+		if LEN(ISNULL(@string,''))>0
+			insert into @tmp
+			(gno,pno,trdno,custno,cust,serial,cust_addr,cust_tel,cust_fax,tmemo)
+			values('4','9',@trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax,'交運金額異常')
+		
+		set @cmd = "select @string=noa from view_trd"+@t_accy+" where noa=@trdno and (plusmoney!=@tplusmoney or minusmoney!=@tminusmoney)"
+		execute sp_executesql @cmd,N'@trdno nvarchar(20),@tplusmoney float,@tminusmoney float,@string nvarchar(max) output '
+		,@trdno=@trdno,@tplusmoney=@tplusmoney,@tminusmoney=@tminusmoney,@string=@string output
+		if LEN(ISNULL(@string,''))>0
+		begin
+			if exists( select * from @tmp where gno='4' and pno='9' and trdno=@trdno)
+				update @tmp set tmemo=tmemo + case when len(isnull(tmemo,''))>0 then ',' else '' end + '加減項金額異常'
+				where gno='4' and pno='9' and trdno=@trdno
+			else
+				insert into @tmp
+				(gno,pno,trdno,custno,cust,serial,cust_addr,cust_tel,cust_fax,tmemo)
+				values('4','9',@trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax,'加減項金額異常')
+		end
+		--合計
+		select @tmoney=0,@tdiscount=0,@tplus=0,@ttax=0,@tplusmoney=0,@tminusmoney=0,@total=0
+		set @cmd =
+		" select @tmoney=[money],@tdiscount=discount,@tplus=plus,@ttax=tax"+
+		" ,@tplusmoney=plusmoney,@tminusmoney=minusmoney,@total=total "+
+		" from view_trd"+@t_accy+" where noa=@trdno "
+		execute sp_executesql @cmd,N'@trdno nvarchar(20),@tmoney float output,@tdiscount float output,@tplus float output,@ttax float output,@tplusmoney float output,@tminusmoney float output,@total float output'
+		,@trdno=@trdno,@tmoney=@tmoney output,@tdiscount=@tdiscount output,@tplus=@tplus output,@ttax=@ttax output,@tplusmoney=@tplusmoney output,@tminusmoney=@tminusmoney output,@total=@total output
+		
+		insert into @tmp
+		(gno,pno,trdno,custno,cust,serial,cust_addr,cust_tel,cust_fax,tmoney,tdiscount,tplus,ttax,tplusmoney,tminusmoney,total)
+		values('3','4',@trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax
+		,@tmoney,@tdiscount,@tplus,@ttax,@tplusmoney,@tminusmoney,@total)
+
+		fetch next from cursor_table
+		into @trdno,@custno,@cust,@serial,@cust_addr,@tel,@fax
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------
+	select * 
+	from @tmp 
+	order by trdno,pno
+	
+	drop table #z_trd4;
+
 z_trd3:--z_trd3
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
