@@ -920,3 +920,174 @@ select
 	taxrate tar,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax
 from @tmp order by idno,acomp,gno;
+
+z_vccadc08:--z_vccadc08
+declare @t_year nvarchar(10) 
+set @t_year = case when '#non'=[15] then '101' else [15] end 
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(1,1),
+	cno nvarchar(35),
+	comp nvarchar(90),
+	mon12_money float,
+	mon12_fixed float,
+	mon34_money float,
+	mon34_fixed float,
+	mon56_money float,
+	mon56_fixed float,
+	mon78_money float,
+	mon78_fixed float,
+	mon910_money float,
+	mon910_fixed float,
+	mon1112_money float,
+	mon1112_fixed float,
+	otherincome float,--其他收入
+	claimmoney float,--理賠收入 
+	total float,
+	lastmoney float,
+	interestmoney float,--利息
+	mayinterest float, --預估增加利息
+	lastdeinter float --餘 額-利息
+)
+insert into @tmp
+	select '0',noa,nick,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 from acomp a
+declare @cno nvarchar(35)
+declare @money float
+declare @productno nvarchar(10)
+declare @datea nvarchar(10)
+declare @datea_new nvarchar(10)
+set @cno = ''
+set @money = 0
+set @productno = ''
+set @datea = ''
+declare cursor_table cursor for
+	select cno,money,productno,datea from vcca
+	where
+		left(datea,3) = @t_year and
+		taxtype != 6
+	order by datea
+open cursor_table
+fetch next from cursor_table
+into @cno,@money,@productno,@datea
+while(@@FETCH_STATUS <> -1)
+begin
+	set @datea_new = left(right(@datea,5),2)
+	if(@datea_new = '01' or @datea_new = '02')
+	begin
+		update @tmp set mon12_money = @money where cno = @cno
+		if(@productno = 'N01' or @productno = 'N011')
+			update @tmp set mon12_fixed += @money where cno = @cno
+	end
+	else if(@datea_new = '03' or @datea_new = '04')
+	begin
+		update @tmp set mon34_money += @money where cno = @cno
+		if(@productno = 'N01' or @productno = 'N011')
+			update @tmp set mon34_fixed += @money where cno = @cno
+	end
+	else if(@datea_new = '05' or @datea_new = '06')
+	begin
+		update @tmp set mon56_money += @money where cno = @cno
+		if(@productno = 'N01' or @productno = 'N011')
+			update @tmp set mon56_fixed += @money where cno = @cno
+	end
+	else if(@datea_new = '07' or @datea_new = '08')
+	begin
+		update @tmp set mon78_money += @money where cno = @cno
+		if(@productno = 'N01' or @productno = 'N011')
+			update @tmp set mon78_fixed += @money where cno = @cno
+	end
+	else if(@datea_new = '09' or @datea_new = '10')
+	begin
+		update @tmp set mon910_money += @money where cno = @cno
+		if(@productno = 'N01' or @productno = 'N011')
+			update @tmp set mon910_fixed += @money where cno = @cno
+	end
+	else if(@datea_new = '11' or @datea_new = '12')
+	begin
+		update @tmp set mon1112_money += @money where cno = @cno
+		if(@productno = 'N01' or @productno = 'N011')
+			update @tmp set mon1112_fixed += @money where cno = @cno
+	end
+	fetch next from cursor_table
+	into @cno,@money,@productno,@datea
+end
+close cursor_table
+deallocate cursor_table
+declare cursor_table cursor for
+	select cno,money,datea from vccb
+	where left(datea,3) = @t_year
+	order by datea
+open cursor_table
+fetch next from cursor_table
+into @cno,@money,@datea
+while(@@FETCH_STATUS <> -1)
+begin
+	set @datea_new = left(right(@datea,5),2)
+	set @money = @money * (-1)
+	if(@datea_new = '01' or @datea_new = '02')
+	begin
+		update @tmp set mon12_money = @money where cno = @cno
+	end
+	else if(@datea_new = '03' or @datea_new = '04')
+	begin
+		update @tmp set mon34_money += @money where cno = @cno
+	end
+	else if(@datea_new = '05' or @datea_new = '06')
+	begin
+		update @tmp set mon56_money += @money where cno = @cno
+	end
+	else if(@datea_new = '07' or @datea_new = '08')
+	begin
+		update @tmp set mon78_money += @money where cno = @cno
+	end
+	else if(@datea_new = '09' or @datea_new = '10')
+	begin
+		update @tmp set mon910_money += @money where cno = @cno
+	end
+	else if(@datea_new = '11' or @datea_new = '12')
+	begin
+		update @tmp set mon1112_money += @money where cno = @cno
+	end
+	fetch next from cursor_table
+	into @cno,@money,@datea
+end
+close cursor_table
+deallocate cursor_table
+update @tmp set total = (mon12_money - mon12_fixed) + 
+						(mon34_money - mon34_fixed) + 
+						(mon56_money - mon56_fixed) + 
+						(mon78_money - mon78_fixed) + 
+						(mon910_money - mon910_fixed) + 
+						(mon1112_money - mon1112_fixed)
+update @tmp set lastmoney = 30000000 - total
+update @tmp set lastdeinter = lastmoney - interestmoney - mayinterest
+insert into @tmp
+	select '1','','',SUM(mon12_money),SUM(mon12_fixed),SUM(mon34_money),SUM(mon34_fixed),
+	SUM(mon56_money),SUM(mon56_fixed),
+	SUM(mon78_money),SUM(mon78_fixed),
+	SUM(mon910_money),SUM(mon910_fixed),
+	SUM(mon1112_money),SUM(mon1112_fixed),SUM(otherincome),sum(claimmoney),
+	sum(total),sum(lastmoney),sum(interestmoney),sum(mayinterest),sum(lastdeinter)
+	from @tmp
+select
+	gno,idno,cno,comp,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon12_money),1)),4,12)) mon12_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon12_fixed),1)),4,12)) mon12_fixed,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon34_money),1)),4,12)) mon34_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon34_fixed),1)),4,12)) mon34_fixed,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon56_money),1)),4,12)) mon56_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon56_fixed),1)),4,12)) mon56_fixed,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon78_money),1)),4,12)) mon78_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon78_fixed),1)),4,12)) mon78_fixed,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon910_money),1)),4,12)) mon910_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon910_fixed),1)),4,12)) mon910_fixed,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon1112_money),1)),4,12)) mon1112_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mon1112_fixed),1)),4,12)) mon1112_fixed,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,otherincome),1)),4,12)) otherincome,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,claimmoney),1)),4,12)) claimmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) lastmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,interestmoney),1)),4,12)) interestmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mayinterest),1)),4,12)) mayinterest,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastdeinter),1)),4,12)) lastdeinter
+from @tmp;
