@@ -1,3 +1,295 @@
+z_trana03:--z_trana03	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_btrandate nvarchar(10)
+	declare @t_etrandate nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carkind  nvarchar(max)
+	declare @t_rate nvarchar(10)
+	declare @t_sort01 nvarchar(max)
+	declare @t_filter nvarchar(max)
+	declare @t_sort02 nvarchar(max)
+	declare @t_option nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_btrandate = case when '#non'=[4] then '' else [4] end
+	set @t_etrandate = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_carno = case when '#non'=[6] then '' else [6] end
+	set @t_carkind  = case when '#non'=[7] then '' else [7] end
+	set @t_rate  = case when '#non'=[8] then '' else [8] end
+	set @t_sort01  = case when '#non'=[9] then '' else [9] end
+	set @t_filter  = case when '#non'=[10] then '' else [10] end
+	set @t_sort02  = case when '#non'=[11] then '' else [11] end
+	set @t_option  = case when '#non'=[12] then '' else [12] end
+	------------------------------------------------------------------------------------------
+	declare @ncarno int
+	set @ncarno = 15 -- 一頁顯示幾台車
+	declare @carno nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @field nvarchar(20)
+	declare @miles float
+	declare @carkindno nvarchar(20)
+	declare @carkind nvarchar(20)
+	declare @caryear nvarchar(20)
+	------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#carkind')is not null
+	BEGIN
+		set @cmd = 'drop table #carkind'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carkind(
+		noa nvarchar(20)
+	)
+	set @string = @t_carkind
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carkind select @string
+			end
+			break
+		end
+		insert into #carkind select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	--日期列表
+	declare @t_date nvarchar(10)
+	declare @t_date1 nvarchar(10)
+	declare @t_date2 nvarchar(10)
+
+	set @t_date1 = convert(nvarchar(4),convert(int,LEFT(@t_btrandate,3))+1911)+'-'+SUBSTRING(@t_btrandate,5,2)+'-'+RIGHT(@t_btrandate,2)
+	set @t_date2 = convert(nvarchar(4),convert(int,LEFT(@t_etrandate,3))+1911)+'-'+SUBSTRING(@t_etrandate,5,2)+'-'+RIGHT(@t_etrandate,2)
+	set @t_date=@t_date1
+
+	if(isdate(@t_date1)=0 or isdate(@t_date2)=0)
+	begin
+		print '日期錯誤'
+		return	
+	end
+	if(DATEDIFF(MM,@t_date1,@t_date2)>2)
+	begin
+		print '查詢區間不可超過三個月'
+		return	
+	end
+	IF OBJECT_ID('tempdb..#listDate')is not null
+	BEGIN
+		set @cmd = 'drop table #listDate'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #listDate(
+		[date] nvarchar(20)
+	)
+
+	while (@t_date between @t_date1 and @t_date2)
+	begin
+		insert into #listDate select right('00'+convert(nvarchar(3),convert(int,YEAR(@t_date))-1911),3)+'/'+right('0'+convert(nvarchar(2),convert(int,MONTH(@t_date))),2)+'/'+right('0'+convert(nvarchar(2),convert(int,DAY(@t_date))),2)
+		set @t_date= convert(date,DATEADD(DD,1,@t_date),111)
+	end
+	------------------------------------------------------------------------------------------------
+	declare @tmp1 table(
+		carno nvarchar(20),
+		trandate nvarchar(20),
+		miles float
+	)
+	insert into @tmp1
+	select a.carno,a.trandate,sum(ISNULL(miles,0))
+	from view_trans102 a
+	left join car2 b on a.carno=b.carno
+	left join calctypes c on c.noa+c.noq=a.calctype 
+	left join #carkind d on b.carkindno=d.noa
+	left join carKind e on d.noa=e.noa 
+	where len(ISNULL(a.carno,''))>0 and isnull(c.isoutside,0)=0 --判斷是不是公司車 
+	and (patindex('%option01%',@t_option)=0 or (patindex('%option01%',@t_option)>0 and isnull(b.option01,0)=1))
+	and d.noa is not null
+	and (a.trandate between @t_btrandate and @t_etrandate)
+	and (len(@t_carno)=0 or a.carno=@t_carno)
+	and ISNULL(a.miles,0)!=0
+	group by a.carno,a.trandate
+	-------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_trana03')is not null 
+	BEGIN 
+		set @cmd = 'drop table #z_trana03' 
+		EXECUTE sp_executesql @cmd 
+	END 
+	create table #z_trana03( 
+		n int,
+		gno nvarchar(10),
+		pno nvarchar(10),
+		datea nvarchar(10)
+	)
+	CREATE INDEX noa ON #z_trana03 (n,datea)
+	
+	set @n = 1
+	while(@n<=@ncarno)
+	begin
+		set @cmd = "ALTER TABLE #z_trana03 ADD aa"+RIGHT("00"+CAST(@n as nvarchar),2)+" nvarchar(20) NULL"
+		+",bb"+RIGHT("00"+CAST(@n as nvarchar),2)+" nvarchar(20) NULL"
+		+",cc"+RIGHT("00"+CAST(@n as nvarchar),2)+" nvarchar(20) NULL"
+		+",dd"+RIGHT("00"+CAST(@n as nvarchar),2)+" nvarchar(20) NULL"
+		execute sp_executesql @cmd
+		set @n = @n + 1
+	end
+	-------------------------------------------------------------------------------------------------
+	--車輛欄位對應
+	declare @tmp2 table(
+		n int,
+		field nvarchar(10),
+		carno nvarchar(20),
+		carkindno nvarchar(20),
+		carkind nvarchar(20),
+		caryear nvarchar(10)
+	)
+	insert into @tmp2
+	select null,null,a.carno,isnull(b.carkindno,''),isnull(c.kind,''),isnull(b.caryear,'') from @tmp1 a
+	left join car2 b on a.carno=b.carno
+	left join carKind c on b.carkindno=c.noa
+	group by a.carno,isnull(b.carkindno,''),isnull(c.kind,''),isnull(b.caryear,'')
+	order by isnull(b.carkindno,''),isnull(b.caryear,''),a.carno
+	
+	set @n = 0
+	declare cursor_table cursor for
+	select carno from @tmp2
+	open cursor_table
+	fetch next from cursor_table
+	into @carno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp2 set n = floor(@n/@ncarno)+1,field= right("00"+cast(@n%@ncarno+1 as nvarchar),2) where carno=@carno
+		set @n = @n + 1
+		fetch next from cursor_table
+		into @carno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	--總計欄位
+	declare @tmp3 table(
+		n int,
+		field nvarchar(10)
+	)
+	insert into @tmp3 select floor(@n/@ncarno)+1, right("00"+cast(@n%@ncarno+1 as nvarchar),2)
+	------------------------------------------------------------------------------------------------
+	declare @count int
+	set @count = floor(@n/@ncarno)+1
+	while @count > 0
+	begin
+		insert into #z_trana03(n,gno,pno,datea)values(@count,'1','2','車輛小計')
+		declare cursor_table cursor for
+		select [date] from #listDate
+		open cursor_table
+		fetch next from cursor_table
+		into @datea
+		while(@@FETCH_STATUS <> -1)
+		begin
+			insert into #z_trana03(n,gno,pno,datea)values(@count,'0','1',@datea)
+			declare cursor_table2 cursor for
+			select n,field,carno,carkind,caryear from @tmp2
+			open cursor_table2
+			fetch next from cursor_table2
+			into @n,@field,@carno,@carkind,@caryear
+			while(@@FETCH_STATUS <> -1)
+			begin
+				set @cmd = "update #z_trana03 set aa"+@field+"=@carkind"
+				+",bb"+@field+"=@caryear"
+				+",cc"+@field+"=@carno"
+				+" where n=@n"			
+				execute sp_executesql @cmd,N'@n int,@carkind nvarchar(20),@caryear nvarchar(20),@carno nvarchar(20)'
+				,@n=@n,@carkind=@carkind,@caryear=@caryear,@carno=@carno
+				
+				fetch next from cursor_table2
+				into @n,@field,@carno,@carkind,@caryear
+			end
+			close cursor_table2
+			deallocate cursor_table2
+			
+			select @n=null,@field=null
+			select @n = n, @field = field from @tmp3 
+			set @cmd = "update #z_trana03 set aa"+@field+"=''"
+			+",bb"+@field+"='日小計'"
+			+",cc"+@field+"=''"
+			+" where n=@n"			
+			execute sp_executesql @cmd,N'@n int,@carkind nvarchar(20),@caryear nvarchar(20),@carno nvarchar(20)'
+			,@n=@n,@carkind=@carkind,@caryear=@caryear,@carno=@carno
+			
+			fetch next from cursor_table
+			into @datea
+		end
+		close cursor_table
+		deallocate cursor_table
+		set @count= @count - 1
+	end
+	---------------------------------------------------------------------------------------
+	--每日
+	declare cursor_table cursor for
+	select a.carno,a.trandate,a.miles,b.n,b.field,b.carkindno,b.carkind,b.caryear from @tmp1 a
+	left join @tmp2 b on a.carno=b.carno
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@datea,@miles,@n,@field,@carkindno,@carkind,@caryear
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd = "update #z_trana03 set dd"+@field+"=reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(@miles,0)),1)),4,12))"
+		+" where n=@n and datea=@datea"
+		execute sp_executesql @cmd,N'@n int,@datea nvarchar(10),@miles float'
+		,@n=@n,@datea=@datea,@miles=@miles
+		fetch next from cursor_table
+		into @carno,@datea,@miles,@n,@field,@carkindno,@carkind,@caryear
+	end
+	close cursor_table
+	deallocate cursor_table
+	--日小計
+	declare cursor_table cursor for
+	select b.n,b.field,a.trandate,SUM(ISNULL(a.miles,0)) from @tmp1 a,@tmp3 b  
+	group by b.n,b.field,a.trandate
+	open cursor_table
+	fetch next from cursor_table
+	into @n,@field,@datea,@miles
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd = "update #z_trana03 set dd"+@field+"=reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(@miles,0)),1)),4,12))"
+		+" where n=@n and datea=@datea"
+		execute sp_executesql @cmd,N'@n int,@datea nvarchar(10),@miles float'
+		,@n=@n,@datea=@datea,@miles=@miles
+		fetch next from cursor_table
+		into @n,@field,@datea,@miles
+	end
+	close cursor_table
+	deallocate cursor_table
+	--車輛小計
+	declare cursor_table cursor for
+	select a.carno,SUM(ISNULL(a.miles,0)),b.n,b.field,b.carkindno,b.carkind,b.caryear from @tmp1 a
+	left join @tmp2 b on a.carno=b.carno
+	group by a.carno,b.n,b.field,b.carkindno,b.carkind,b.caryear
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@miles,@n,@field,@carkindno,@carkind,@caryear
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd = "update #z_trana03 set dd"+@field+"=reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(@miles,0)),1)),4,12))"
+		+" where n=@n and gno='1'"
+		execute sp_executesql @cmd,N'@n int,@datea nvarchar(10),@miles float'
+		,@n=@n,@datea=@datea,@miles=@miles
+		fetch next from cursor_table
+		into @carno,@miles,@n,@field,@carkindno,@carkind,@caryear
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * from #z_trana03 order by n,pno,datea
+	drop table #z_trana03;
+
 z_trana02:--z_trana02	
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
@@ -784,7 +1076,7 @@ z_trana01:--z_trana01
 	" left join #carkind c on b.carkindno=c.noa"+
 	" left  join  calctypes d on d.noa+d.noq=a.calctype "+
 	" where (c.noa is not null)"+
-	" and patindex('%option01%',@t_option)=0 or (patindex('%option01%',@t_option)>0 and isnull(b.option01,0)=1)"+
+	" and (patindex('%option01%',@t_option)=0 or (patindex('%option01%',@t_option)>0 and isnull(b.option01,0)=1))"+
 	" and isnull(d.isoutside,0)=0"+
 	" and (a.trandate between @t_btrandate and @t_etrandate)"+
 	" group by a.carno,a.trandate"
