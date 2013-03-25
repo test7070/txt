@@ -649,7 +649,7 @@ z_vcca01:--z_vcca01
 		noa nvarchar(20),
 		noq nvarchar(10),
 		cno nvarchar(20),
-		acomp nvarchar(20),
+		acomp nvarchar(max),
 		invono nvarchar(10),
 		serial nvarchar(8),
 		buyerno nvarchar(20),
@@ -664,7 +664,7 @@ z_vcca01:--z_vcca01
 	declare @noa nvarchar(20)
 	declare @noq nvarchar(10)
 	declare @cno nvarchar(20)
-	declare @acomp nvarchar(40)
+	declare @acomp nvarchar(max)
 	declare @binvono nvarchar(10)
 	declare @einvono nvarchar(10)
 	declare @taxtype nvarchar(10)
@@ -679,25 +679,26 @@ z_vcca01:--z_vcca01
 	declare @total float
 	declare @memo nvarchar(max)
 	
+	declare @m int
 	declare cursor_table cursor for
-	select a.noa,b.noq,a.cno,a.acomp,b.binvono,b.einvono 
+	select a.noa,b.noq,a.cno,a.acomp+''+b.binvono+'~'+b.einvono ,b.binvono,b.einvono 
 	from vccar a
 	left join vccars b on a.noa=b.noa
 	left join #acomp c on a.cno=c.noa
 	where (c.noa is not null) and len(b.binvono)=10
 	and ((LEFT(a.bdate,6) between @t_bmon and @t_emon) or (LEFT(a.edate,6) between @t_bmon and @t_emon))
-	and (custno between @t_bcustno and @t_ecustno)
 	open cursor_table
 	fetch next from cursor_table
 	into @noa,@noq,@cno,@acomp,@binvono,@einvono
 	while(@@FETCH_STATUS <> -1)
 	begin
-		set @n=0
+		select @n = 0, @m = 0
 		while(@n<50)
 		begin	
 			set @invono = SUBSTRING(@binvono,1,8)+ right('0'+cast(cast(SUBSTRING(@binvono,9,2) as int)+@n as nvarchar),2)
 			select @serial='',@buyerno='',@buyer='',@custno='',@cust='',@money=0,@tax=0,@total=0,@memo=''
-			if exists(select noa from vcca where noa=@invono)
+			--若有指定客戶 只顯示那個害戶
+			if exists(select noa from vcca where noa=@invono and (len(@t_bcustno)=0 or (len(@t_bcustno)>0 and custno between @t_bcustno and @t_ecustno)))
 			begin
 				select @taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno,@buyer=a.buyer
 				,@custno=a.custno,@cust=case when len(isnull(b.nick,''))>0 then b.nick else left(a.comp,4)end
@@ -710,16 +711,24 @@ z_vcca01:--z_vcca01
 				else
 					insert into @tmp(gno,noa,noq,cno,acomp,invono,serial,buyerno,buyer,custno,cust,[money],tax,total,memo)
 					values('0',@noa,@noq,@cno,@acomp,@invono,@serial,@buyerno,@buyer,@custno,@cust,@money,@tax,@total,@memo)
+				set @m = @m + 1
 			end
 			else
 			begin
-				insert into @tmp(gno,noa,noq,cno,acomp,invono)values('0',@noa,@noq,@cno,@acomp,@invono)
+				if len(@t_bcustno)=0
+				begin
+					insert into @tmp(gno,noa,noq,cno,acomp,invono)values('0',@noa,@noq,@cno,@acomp,@invono)
+					set @m = @m + 1
+				end
 			end
 			set @n = @n + 1
 		end
-		select @money=0,@tax=0,@total=0
-		select @money=SUM(ISNULL([money],0)),@tax=SUM(ISNULL(tax,0)),@total=SUM(ISNULL(total,0)) from @tmp where noa=@noa and noq=@noq
-		insert into @tmp(gno,noa,noq,cno,acomp,[money],tax,total)values('1',@noa,@noq,@cno,@acomp,@money,@tax,@total)
+		if(@m>0)
+		begin
+			select @money=0,@tax=0,@total=0
+			select @money=SUM(ISNULL([money],0)),@tax=SUM(ISNULL(tax,0)),@total=SUM(ISNULL(total,0)) from @tmp where noa=@noa and noq=@noq
+			insert into @tmp(gno,noa,noq,cno,acomp,[money],tax,total)values('1',@noa,@noq,@cno,@acomp,@money,@tax,@total)
+		end
 		fetch next from cursor_table
 		into @noa,@noq,@cno,@acomp,@binvono,@einvono
 	end
