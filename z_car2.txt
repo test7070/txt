@@ -1621,6 +1621,7 @@ declare @t_inmoney int
 declare @t_carownerno nvarchar(20)
 declare @x_total int
 declare @x_count int
+declare @unpay int
 
 set @count=1
 declare @t_carno nvarchar(20)
@@ -1634,7 +1635,7 @@ set @t_carownerno='ZZZZ'
 set @x_total =0
 set @x_count =0
 set @t_pagecount=1
-
+set @unpay=0
 
 declare cursor_table cursor for 
 select * from @tmp order by carownerno,carno,mon,gno,datea,noq
@@ -1692,11 +1693,29 @@ while(@@FETCH_STATUS <> -1)
 			set @t_carno=@carno
 			set @count=@count+1
 			set @t_pagecount=@t_pagecount+1
-			set @t_total=isnull(@outmoney,0)-isnull(@inmoney,0)
+			set @unpay=0
+			
+			--求得開始月份之前的未付金額
+			set @cmd=" 
+			set @unpay =isnull((select
+			sum(a.total-a.payed) unpay 
+			from vcc"+left(@t_bmon,3)+" a left join car2 b on 
+			(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
+			then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
+			(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end) =b.noa 
+			left join carbrand d on b.carbrandno=d.noa 
+			left join carOwner e on a.custno=e.noa 
+			where left(a.custno,1)='H' and (left(a.carno,6) < '"+@t_bmon+"') 
+			and (case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
+			then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
+			(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end) = '"+@carno+"'),0)"
+			execute sp_executesql @cmd,N'@unpay float OUTPUT', @unpay OUTPUT
+			
+			set @t_total=isnull(@outmoney,0)-isnull(@inmoney,0)+@unpay
 			
 			--印出車牌和車主
 			insert into @tmpa
-			select @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
+			select @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney+@unpay,@inmoney,@t_total,@count,''
 			set @count=@count+1
 			set @t_pagecount=@t_pagecount+1
 			set @t_outmoney=@t_outmoney+@outmoney
@@ -1718,14 +1737,14 @@ while(@@FETCH_STATUS <> -1)
 				if(@gno='2')
 				begin
 					insert into @tmpa
-					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@t_outmoney,@t_inmoney,@t_total,@count,''
+					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@t_outmoney+@unpay,@t_inmoney,@t_total,@count,''
 					set @count=@count+1
 					set @t_pagecount=@t_pagecount+1
 				end
 				else if(@gno='3')
 				begin
 					insert into @tmpa
-					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
+					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney+@unpay,@inmoney,@t_total,@count,''
 					set @count=@count+1
 					set @t_pagecount=@t_pagecount+1
 				end
@@ -1738,7 +1757,7 @@ while(@@FETCH_STATUS <> -1)
 						end
 					else
 						begin
-							if(@gno='4')--20130119改成最後一個月cara的金額合計(檢查是否結轉正確)
+							if(@gno='4')--20130119改成最後一個月cara的金額合計(檢查是否結轉正確)--20130312應加入VCC資料會造成金額不正確所以拿掉
 							begin
 								insert into @tmpa
 								select @gno,@noa,@noq,'',@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
@@ -2069,7 +2088,7 @@ begin
 	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
 	(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end)carno 
 	,a.custno carownerno,a.comp carowner,b.indate,b.carbrandno,d.brand,b.caryear,e.mobile,'' caritemno,(case when CHARINDEX('請款',a.memo)>0 then '*請款' else '*發票稅費' end) caritem 
-	,left(a.carno,6) mon,a.carno,a.memo memo,a.total outmoney ,0 inmoney,0 
+	,left(a.carno,6) mon,a.carno,a.memo memo,a.total outmoney ,a.payed inmoney,0 
 	from vcc"+left(@t_bmon,3)+" a left join car2 b on 
 	(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
 	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
@@ -2143,6 +2162,7 @@ declare @t_inmoney int
 declare @t_carownerno nvarchar(20)
 declare @x_total int
 declare @x_count int
+declare @unpay int
 
 set @count=1
 declare @t_carno nvarchar(20)
@@ -2156,6 +2176,7 @@ set @t_carownerno='ZZZZ'
 set @x_total =0
 set @x_count =0
 set @t_pagecount=1
+set @unpay=0
 
 declare cursor_table cursor for 
 select * from @tmp order by carownerno,carno,mon,gno,datea,noq
@@ -2227,7 +2248,25 @@ while(@@FETCH_STATUS <> -1)
 			set @t_carno=@carno
 			set @count=@count+1
 			set @t_pagecount=@t_pagecount+1
-			set @t_total=isnull(@outmoney,0)-isnull(@inmoney,0)
+			set @unpay=0
+			
+			--求得開始月份之前的未付金額
+			set @cmd=" 
+			set @unpay =isnull((select
+			sum(a.total-a.payed) unpay 
+			from vcc"+left(@t_bmon,3)+" a left join car2 b on 
+			(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
+			then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
+			(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end) =b.noa 
+			left join carbrand d on b.carbrandno=d.noa 
+			left join carOwner e on a.custno=e.noa 
+			where left(a.custno,1)='H' and (left(a.carno,6) < '"+@t_bmon+"') 
+			and (case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
+			then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
+			(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end) = '"+@carno+"'),0)"
+			execute sp_executesql @cmd,N'@unpay float OUTPUT', @unpay OUTPUT
+			
+			set @t_total=isnull(@outmoney,0)-isnull(@inmoney,0)+@unpay
 			
 			if(@t_pagecount%@pageCount=1 and @t_pagecount!=1)
 			begin
@@ -2238,7 +2277,7 @@ while(@@FETCH_STATUS <> -1)
 			
 			--印出車牌和車主
 			insert into @tmpa
-			select @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
+			select @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney+@unpay,@inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
 			set @count=@count+1
 			set @t_pagecount=@t_pagecount+1
 			set @t_outmoney=@t_outmoney+@outmoney
@@ -2260,14 +2299,14 @@ while(@@FETCH_STATUS <> -1)
 				if(@gno='2')
 				begin
 					insert into @tmpa
-					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@t_outmoney,@t_inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
+					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@t_outmoney+@unpay,@t_inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
 					set @count=@count+1
 					set @t_pagecount=@t_pagecount+1
 				end
 				else if(@gno='3')
 				begin
 					insert into @tmpa
-					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
+					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney+@unpay,@inmoney,@t_total,@count,'',(@t_pagecount/@pageCount)+1
 					set @count=@count+1
 					set @t_pagecount=@t_pagecount+1
 				end
@@ -2843,7 +2882,7 @@ begin
 	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
 	(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end)carno 
 	,a.custno carownerno,a.comp carowner,b.indate,b.carbrandno,d.brand,b.caryear,e.mobile,'' caritemno,(case when CHARINDEX('請款',a.memo)>0 then '*請款' else '*發票稅費' end) caritem 
-	,left(a.carno,6) mon,a.carno,a.memo memo,a.total outmoney ,0 inmoney,0 
+	,left(a.carno,6) mon,a.carno,a.memo memo,a.total outmoney ,a.payed inmoney,0 
 	from vcc"+left(@t_bmon,3)+" a left join car2 b on 
 	(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
 	then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
@@ -2908,6 +2947,7 @@ declare @t_inmoney int
 declare @t_carownerno nvarchar(20)
 declare @x_total int
 declare @x_count int
+declare @unpay int
 
 set @count=1
 declare @t_carno nvarchar(20)
@@ -2921,7 +2961,7 @@ set @t_carownerno='ZZZZ'
 set @x_total =0
 set @x_count =0
 set @t_pagecount=1
-
+set @unpay=0
 
 declare cursor_table cursor for 
 select * from @tmp order by carownerno,carno,mon,gno,datea,noq
@@ -2979,11 +3019,29 @@ while(@@FETCH_STATUS <> -1)
 			set @t_carno=@carno
 			set @count=@count+1
 			set @t_pagecount=@t_pagecount+1
-			set @t_total=isnull(@outmoney,0)-isnull(@inmoney,0)
+			set @unpay=0
+			
+			--求得開始月份之前的未付金額
+			set @cmd=" 
+			set @unpay =isnull((select
+			sum(a.total-a.payed) unpay 
+			from vcc"+left(@t_bmon,3)+" a left join car2 b on 
+			(case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
+			then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
+			(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end) =b.noa 
+			left join carbrand d on b.carbrandno=d.noa 
+			left join carOwner e on a.custno=e.noa 
+			where left(a.custno,1)='H' and (left(a.carno,6) < '"+@t_bmon+"') 
+			and (case when (select count(*) from car2 where noa=substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0
+			then substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))else
+			(select top 1 carno from cara c where mon<=left(a.carno,6) and a.custno=c.carownerno order by mon desc,carno)end) = '"+@carno+"'),0)"
+			execute sp_executesql @cmd,N'@unpay float OUTPUT', @unpay OUTPUT
+			
+			set @t_total=isnull(@outmoney,0)-isnull(@inmoney,0)+@unpay
 			
 			--印出車牌和車主
 			insert into @tmpa
-			select @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
+			select @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney+@unpay,@inmoney,@t_total,@count,''
 			set @count=@count+1
 			set @t_pagecount=@t_pagecount+1
 			set @t_outmoney=@t_outmoney+@outmoney
@@ -3006,14 +3064,14 @@ while(@@FETCH_STATUS <> -1)
 				if(@gno='2')
 				begin
 					insert into @tmpa
-					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@t_outmoney,@t_inmoney,@t_total,@count,''
+					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@t_outmoney+@unpay,@t_inmoney,@t_total,@count,''
 					set @count=@count+1
 					set @t_pagecount=@t_pagecount+1
 				end
 				else if(@gno='3')
 				begin
 					insert into @tmpa
-					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@t_total,@count,''
+					select @gno,@noa,@noq,@carno,@carownerno,'',@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney+@unpay,@inmoney,@t_total,@count,''
 					set @count=@count+1
 					set @t_pagecount=@t_pagecount+1
 				end
