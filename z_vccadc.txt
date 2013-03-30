@@ -1100,3 +1100,273 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mayinterest),1)),4,12)) mayinterest,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastdeinter),1)),4,12)) lastdeinter
 from @tmp;
+
+z_vccadc09:--z_vccadc09
+declare @t_accy nvarchar(10)
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @i int 
+declare @countrecord int
+declare @acomp nvarchar(50)
+declare @custno nvarchar(10)
+declare @money float
+set @t_accy = '[11]'
+set @t_bmon = case when '#non'=[1] then @t_accy+'/01' else [1] end 
+set @t_emon = case when '#non'=[2] then @t_accy+'/12' else [2] end 
+set @i = 0
+set @countrecord = 0
+set @acomp = ''
+set @custno = ''
+set @money = 0
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	noa nvarchar(20),
+	acomp nvarchar(50),
+	ticketno nvarchar(10),
+	custno nvarchar(10),
+	comp nvarchar(100),
+	taxrates float,
+	money float,
+	tax float
+)
+declare @tmpa table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	orderby int,
+	acomp nvarchar(50),
+	ticketno nvarchar(10),
+	custno nvarchar(10),
+	comp nvarchar(100),
+	taxrates float,
+	money float,
+	tax float
+)
+declare @tmpb table(
+	acomp nvarchar(50),
+	custno nvarchar(10),
+	comp nvarchar(100),
+	money float
+)
+declare @result table(
+	gno nvarchar(1),
+	idno int identity(1,1),
+	acomp nvarchar(90),
+	money float,
+	tax float
+)
+insert into @tmp
+	select '0',a.noa,c.nick,b.noq,
+	case when a.productno = 'N01' then '0000' 
+	when a.productno = 'N011' then '0000' else a.custno end,
+	case when (a.productno = 'N011') or (a.productno = 'N03') then a.product
+	when (a.productno = 'N01') then (case when a.memo != '' then a.memo else a.product end)
+	else (case when (h.buyer is not null) and (CHARINDEX('運輸部',d.comp) > 0)  then d.comp + '-' + h.buyer else d.comp end) end,
+	isnull(e.taxrate,(
+	select f.taxrate from custroutines f 
+	left join custroutine h on h.noa = f.noa
+	where (f.custno = a.custno) and (f.cno = '') and (a.datea between f.bdate and f.edate) and h.productno = 'N02'))
+	,a.money,a.tax
+	from vcca a
+	left join vccars b on (a.noa between binvono and einvono)
+	left join acomp c on (a.acomp = c.acomp)
+	left join cust d on (a.custno = d.noa)
+	left join custroutines e on ((a.custno = e.custno) and (a.cno = e.cno)) and (a.datea between e.bdate and e.edate)
+	left join custo g on g.mon =  left(a.datea,6)
+	left join custos h on (g.noa =  h.noa) and ((a.buyerno = h.buyerno) or (a.buyer = h.buyer) )
+	where (left(a.datea,6) between @t_bmon and @t_emon) and (a.taxtype != '6')
+---折讓單
+insert into @tmp
+	select '0',a.noa + '-1',c.nick,'0',
+	case when a.productno = 'N01' then '0000' 
+	when a.productno = 'N011' then '0000' else g.custno end,d.comp,
+	isnull(e.taxrate,(select taxrate from custroutines f where (g.custno = f.custno) and (f.cno = '') and (b.datea between f.bdate and f.edate)))
+	,(a.total)*(-1),''
+	from vccbs a
+	left join vccb b on a.noa = b.noa
+	left join vcca g on a.invono = g.noa
+	left join acomp c on (g.acomp = c.acomp)
+	left join cust d on (g.custno = d.noa)
+	left join custroutines e on ((g.custno = e.custno) and (g.cno = e.cno) and (b.datea between e.bdate and e.edate))
+	where (left(b.datea,6) between @t_bmon and @t_emon)
+--計算每間公司的每個人一整年總計(調整稅率用)
+insert into @tmpb
+	select b.nick,a.custno,a.comp,sum(a.money)
+	from vcca a
+	left join acomp b on (a.acomp = b.acomp)
+	where (left(a.datea,3) between left(@t_bmon,3) and left(@t_emon,3)) and (taxtype != '6')
+	group by b.nick,a.custno,a.comp
+---超過3000萬+1
+select @countrecord = COUNT(*) from @tmp
+while(@i < @countrecord)
+begin
+	select @acomp = acomp from @tmp where idno = @i
+	select @custno = custno from @tmp where idno = @i
+	select @money = money from @tmpb where ((acomp = @acomp) and (custno = @custno))
+	update @tmp set taxrates += 1 where @money > 30000000 and idno = @i
+	set @i +=1
+end
+---調整稅率
+update @tmp set taxrates = '5' where custno = '0000' 
+update @tmp set taxrates = '8' where (CHARINDEX('運輸部',comp) > 0)
+update @tmp set taxrates = '100' where comp = '佣金收入'  or (taxrates is null)
+
+update @tmp set tax = round((money*taxrates)/100,0) where custno != '0000'
+insert into @tmpa 
+	select '0',0,acomp,ticketno,custno,comp,taxrates,sum(money),
+	case when custno != '0000' then round((sum(money)*taxrates)/100,0)
+	else SUM(tax) end tax
+	from @tmp 
+	group by ticketno,acomp,taxrates,custno,comp 
+	order by acomp,ticketno 
+update @tmpa set gno = 9 where gno = 0 
+insert into @tmpa(gno,orderby,acomp,money,tax)
+	select '0',0,acomp,sum(money),sum(tax) from @tmpa
+	where gno = 9
+	group by acomp
+delete from @tmpa where gno = 9
+insert into @result
+	select gno,acomp,money,tax from @tmpa
+	order by money desc,tax desc
+insert into @result
+	select '1','',SUM(money),sum(tax) from @tmpa
+	where gno = 0
+select
+	gno,idno,acomp,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax
+from @result order by gno,idno;
+
+z_vccadc10:--z_vccadc10
+declare @t_accy nvarchar(10)
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @i int 
+declare @countrecord int
+declare @acomp nvarchar(50)
+declare @custno nvarchar(10)
+declare @money float
+set @t_accy = '[11]'
+set @t_bmon = case when '#non'=[1] then @t_accy+'/01' else [1] end 
+set @t_emon = case when '#non'=[2] then @t_accy+'/12' else [2] end 
+set @i = 0
+set @countrecord = 0
+set @acomp = ''
+set @custno = ''
+set @money = 0
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	noa nvarchar(20),
+	acomp nvarchar(50),
+	ticketno nvarchar(10),
+	custno nvarchar(20),
+	comp nvarchar(100),
+	taxrates float,
+	money float,
+	tax float
+)
+declare @tmpa table(
+	gno nvarchar(1),
+	custno nvarchar(20),
+	comp nvarchar(100),
+	money float,
+	tax float
+)
+declare @tmpb table(
+	acomp nvarchar(50),
+	custno nvarchar(20),
+	comp nvarchar(100),
+	money float
+)
+declare @result table(
+	gno nvarchar(1),
+	idno int identity(1,1),
+	custno nvarchar(20),
+	comp nvarchar(100),
+	money float,
+	tax float
+)
+insert into @tmp
+	select '0',a.noa,c.nick,b.noq,
+	case when a.productno = 'N01' then '0000' 
+	when a.productno = 'N011' then '0000' else a.custno end,
+	case when (a.productno = 'N011') or (a.productno = 'N03') then a.product
+	when (a.productno = 'N01') then (case when a.memo != '' then a.memo else a.product end) else d.comp end,
+	isnull(e.taxrate,(
+	select f.taxrate from custroutines f 
+	left join custroutine h on h.noa = f.noa
+	where (f.custno = a.custno) and (f.cno = '') and (a.datea between f.bdate and f.edate) and h.productno = 'N02'))
+	,a.money,a.tax
+	from vcca a
+	left join vccars b on (a.noa between binvono and einvono)
+	left join acomp c on (a.acomp = c.acomp)
+	left join cust d on (a.custno = d.noa)
+	left join custroutines e on ((a.custno = e.custno) and (a.cno = e.cno)) and (a.datea between e.bdate and e.edate)
+	where (left(a.datea,6) between @t_bmon and @t_emon) and (a.taxtype != '6')
+---折讓單
+insert into @tmp
+	select '0',a.noa + '-1',c.nick,'0',
+	case when a.productno = 'N01' then '0000' 
+	when a.productno = 'N011' then '0000' else g.custno end,d.comp,
+	isnull(e.taxrate,(select taxrate from custroutines f where (g.custno = f.custno) and (f.cno = '') and (b.datea between f.bdate and f.edate)))
+	,(a.total)*(-1),''
+	from vccbs a
+	left join vccb b on a.noa = b.noa
+	left join vcca g on a.invono = g.noa
+	left join acomp c on (g.acomp = c.acomp)
+	left join cust d on (g.custno = d.noa)
+	left join custroutines e on ((g.custno = e.custno) and (g.cno = e.cno) and (b.datea between e.bdate and e.edate))
+	where (left(b.datea,6) between @t_bmon and @t_emon)
+--計算每間公司的每個人一整年總計(調整稅率用)
+insert into @tmpb
+	select b.nick,a.custno,a.comp,sum(a.money)
+	from vcca a
+	left join acomp b on (a.acomp = b.acomp)
+	where (left(a.datea,3) between left(@t_bmon,3) and left(@t_emon,3)) and (taxtype != '6')
+	group by b.nick,a.custno,a.comp
+---超過3000萬+1
+select @countrecord = COUNT(*) from @tmp
+while(@i < @countrecord)
+begin
+	select @acomp = acomp from @tmp where idno = @i
+	select @custno = custno from @tmp where idno = @i
+	select @money = money from @tmpb where ((acomp = @acomp) and (custno = @custno))
+	update @tmp set taxrates += 1 where @money > 30000000 and idno = @i
+	set @i +=1
+end
+---調整稅率
+update @tmp set taxrates = '5' where custno = '0000' 
+update @tmp set taxrates = '8' where (CHARINDEX('運輸部',comp) > 0) 
+update @tmp set taxrates = '100' where comp = '佣金收入'  or (taxrates is null)
+update @tmp set tax = round((money*taxrates)/100,0) where custno != '0000'
+insert into @tmpa
+	select '9',custno,comp,SUM(money),
+	case when custno != '0000' then round((sum(money)*taxrates)/100,0)
+	else SUM(tax) end tax
+	from @tmp
+	group by custno,comp,acomp,ticketno,taxrates
+	order by custno
+insert into @tmpa(gno,custno,comp,money,tax)
+	select '0',custno,'資售',SUM(money),SUM(tax)
+	from @tmpa
+	where custno = '0000'
+	group by custno
+insert into @tmpa(gno,custno,comp,money,tax)
+	select '0',custno,comp,SUM(money),SUM(tax)
+	from @tmpa
+	where custno != '0000'
+	group by custno,comp
+delete from @tmpa where gno = 9
+insert into @result
+	select gno,custno,comp,money,tax from @tmpa
+	order by money desc,tax desc
+insert into @result(gno,money,tax)
+	select '1',SUM(money),SUM(tax)
+	from @tmpa
+	where gno = 0
+select
+	gno,idno,custno,comp,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax
+from @result order by gno,idno;
