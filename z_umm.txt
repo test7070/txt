@@ -365,69 +365,31 @@ set @t_escno = case when '#non' = [12] then CHAR(255) else [12] end
 set @t_bcustno = case when '#non' = [5] then '' else [5] end
 set @t_ecustno = case when '#non' = [6] then CHAR(255) else [6] end
 set @t_xmon = case when '#non' = [13] then '' else [13] end
-declare @tmpa table(
-		gno nvarchar(1),
-		n nvarchar(20),
-		datea nvarchar(10),
-		mon nvarchar(10),
-		custno nvarchar(20),
-		comp nvarchar(50),
-		money1 float,--前期未收
-		tax float,--稅額
-		money3 float,--本期應收
-		money4 float,--已收
-		total float,--應收總計
-		textopay float,--預收餘額
-		noa nvarchar(20),
-		cno nvarchar(20)
-)
-insert into @tmpa 
-select '0' gno,'',b.datea,c.mon,b.custno,case when LEN(d.nick)>0 then d.nick else LEFT(b.comp,4) end,c.unpay,c.tax,b.sale,b.total,c.payed-c.unpay,b.opay-b.unopay,b.noa,c.cno 
-from umms a 
-left join umm b on a.noa = b.noa 
-left join trd102 c on a.vccno = c.noa
-left join cust d on b.custno = d.noa
-union 
-select '0' gno,'',b.datea,c.mon,b.custno,case when LEN(d.nick)>0 then d.nick else LEFT(b.comp,4) end
-,c.unpay,c.tax,b.sale,b.total,c.payed-c.unpay,b.opay-b.unopay,b.noa,c.cno 
-from umms a 
-left join umm b on a.noa = b.noa 
-left join vcc102 c on a.vccno = c.noa 
-left join cust d on b.custno = d.noa
-union 
-select '0' gno,'',b.datea,c.mon,b.custno,case when LEN(d.nick)>0 then d.nick else LEFT(b.comp,4) end
-,case when c.total <0 then c.total end,0,b.sale,b.total,c.total,b.opay-b.unopay,b.noa,c.cno 
-from umms a 
-left join umm b on a.noa = b.noa 
-left join cara c on a.vccno = c.noa 
-left join cust d on b.custno = d.noa
 
-
-declare @tmp table(
-		gno nvarchar(1),
-		mon nvarchar(10),
-		custno nvarchar(20),
-		comp nvarchar(50),
-		money1 float,--前期未收
-		tax float,--稅額
-		money3 float,--本期應收
-		money4 float,--已收
-		total float,--應收總計
-		textopay float--預收餘額
-)
-insert into @tmp
-select '0'gno,mon,custno,comp,sum(money1),sum(tax),sum(money3),sum(money4),sum(total),sum(textopay)
-from @tmpa
-where (cno between @t_bscno and @t_escno) and
-(custno between  @t_bcustno and @t_ecustno) and
-(LEN(@t_xmon) = 0 or @t_xmon = mon)
-group by mon,custno,comp
-select gno,
-ROW_NUMBER()over(order by mon,custno)as n,mon,custno,comp,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) money1,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money3),1)),4,12)) money3,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money4),1)),4,12)) money4,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,textopay),1)),4,12)) textopay
-from @tmp;
+select '0'gno,a.custno,b.nick,a.cno,c.nick
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,payed),1)),4,12)) payed
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay
+from(
+	select custno,cno,SUM(isnull(money,0))money,SUM(isnull(total,0))total,SUM(isnull(payed,0))payed,SUM(isnull(unpay,0))unpay from (
+		--trd
+		select custno,cno,isnull((select SUM(unpay) from view_trd[10] b where a.custno=b.custno and mon<@t_xmon),0)money,sum(total)total,sum(payed)payed,SUM(unpay)unpay from view_trd[10] a
+		where (case when len(mon)=0 then left(datea,6) else mon end )=@t_xmon   group by custno,cno
+		union all
+		--vcc
+		select custno,cno,isnull((select SUM(unpay) from view_vcc[10] b where a.custno=b.custno and mon<@t_xmon),0)money,SUM(total)total,sum(payed)payed,SUM(unpay)unpay from view_vcc[10] a 
+		where (case when len(mon)=0 then left(datea,6) else mon end )=@t_xmon and  (left(kind,4)!='健勞勞退') group by custno,cno
+		union all
+		--cara
+		select a.custno,a.cno,a.money,a.total,a.payed,a.unpay from(
+			select custno,cno,SUM(isnull(money,0))money,SUM(isnull(total,0))total,SUM(isnull(payed,0))payed,SUM(isnull(unpay,0))unpay from(
+				select a.carownerno custno,c.cardealno cno,
+				(select outmoney-inmoney from caras b where a.noa=b.noa and caritemno='001')money,
+				(select sum(outmoney)  from caras b where a.noa=b.noa and caritemno!='001')total,
+				(select sum(inmoney)  from caras b where a.noa=b.noa and caritemno!='001')payed,
+				a.total unpay from cara a left join car2 c on a.carno=c.noa where a.mon=@t_xmon 
+			)tmp group by custno,cno
+		)a
+	)tmpb group by custno,cno)a 
+left join cust b on a.custno=b.noa left join acomp c on a.cno=c.noa order by custno;
