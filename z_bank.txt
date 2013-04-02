@@ -119,93 +119,108 @@ set @t_bdate = case when '#non'=[2] then '' else [2] end
 set @t_edate = case when '#non'=[3] then char(255) else [3] end
 set @t_baccno = case when '#non'=[4] then '' else [4] end
 set @t_eaccno = case when '#non'=[5] then char(255) else [5] end
-declare @result table(
+
+declare @tmp table(
 	gno nvarchar(1),
 	idno int identity(0,1),
-	accc1 nvarchar(10),
-	accc2 nvarchar(10),
-	accc3 nvarchar(25),
-	accc4 nvarchar(12),
-	accc5 nvarchar(25),
-	accc6 nvarchar(86),
-	accc7 nvarchar(340),
-	accc8 float,
-	zno nvarchar(20),
-	ver varchar(50),
-	noq nvarchar(3),
-	part nvarchar(18),
-	coin nvarchar(30),
-	floata float,
-	n int,
-	dmoney float,
-	cmoney float,
-	totMoney float
+	accuname nvarchar(90),
+	account nvarchar(50),
+	datea nvarchar(10),
+	lastmoney float,
+	inmoney float,
+	outmoney float,
+	todaytotal float,
+	memo nvarchar(200)
 )
-insert into @result
+declare @tmpa table(  -----放置搜尋日期區間內有的帳戶
+	accuname nvarchar(200),
+	account nvarchar(50),
+	lastmoney float
+)
+insert into @tmpa
+	select 
+		distinct(accc6),'',0
+	from acccs[1]
+	where (LEFT(accc5,4) = '1112') and 
+		  (accc2 between @t_bdate and @t_edate) and
+		  (accc5 between @t_baccno and @t_eaccno)
+update @tmpa set account = case when PATINDEX('%[0-9]%',accuname) = 0 then '' else right(accuname,len(accuname) - PATINDEX('%[0-9]%',accuname)+1) end
+update @tmpa set accuname = case when PATINDEX('%[0-9]%',accuname) = 0 then accuname else left(accuname,PATINDEX('%[0-9]%',accuname)-1) end
+update @tmpa set lastmoney = (select (SUM(ISNULL(dmoney,0)) - SUM(ISNULL(cmoney,0))) from acccs102_1 where (accc2 < @t_bdate) and right(accc6,len(account)) = account)
+insert into @tmp
 	select
-	'0' gno,accc1,accc2,accc3,accc4,accc5,isnull(b.acc2,accc6),accc7,accc8,zno,ver,noq,part,coin,floata,
-	case when LEFT(accc5,4) = '1112' then '1' else '-1' end n,
-	dmoney,cmoney,0
-	from acccs[1] a
-	left join acc[1] b on a.accc5 = b.acc1
-	where (accc5 between @t_baccno and @t_eaccno) and 
+		'0',
+		case when PATINDEX('%[0-9]%',accc6) = 0 then accc6 else left(accc6,PATINDEX('%[0-9]%',accc6)-1) end accuname,
+		case when PATINDEX('%[0-9]%',accc6) = 0 then '' else right(accc6,len(accc6) - PATINDEX('%[0-9]%',accc6)+1) end account,
+		accc2,0,dmoney,cmoney,0,accc7
+	from acccs[1]
+	where (LEFT(accc5,4) = '1112') and 
 		  (accc2 between @t_bdate and @t_edate) and
-		  LEFT(accc5,4) = '1112'
-	order by accc5
-insert into @result(accc5,gno,accc6)
-	select distinct(accc5),'1',isnull(b.acc2,accc6) from acccs[1] a
-	left join acc[1] b on a.accc5 = b.acc1
-	where (accc5 between @t_baccno and @t_eaccno) and 
-		  (accc2 < @t_bdate) and
-		  LEFT(accc5,4) = '1112'
-	union
-	select distinct(accc5),'1',isnull(b.acc2,accc6) from acccs[1] a
-	left join acc[1] b on a.accc5 = b.acc1
-	where (accc5 between @t_baccno and @t_eaccno) and 
-		  (accc2 between @t_bdate and @t_edate) and
-		  LEFT(accc5,4) = '1112'
-insert into @result(gno,accc5,accc7,dmoney,cmoney)
-	select 0,accc5,'<center>上期結餘</center>',SUM(dmoney),sum(cmoney) from acccs[1]
-	where (accc2 < @t_bdate) and (accc5 between @t_baccno and @t_eaccno) and LEFT(accc5,4) = '1112'
-	group by accc5
-
+		  (accc5 between @t_baccno and @t_eaccno)
+	order by accuname,accc2,cmoney,dmoney
+declare @account nvarchar(50)
+declare @last_account nvarchar(50)
+declare @datea nvarchar(10)
+declare @last_datea nvarchar(10)
+declare @inmoney float
+declare @outmoney float
+declare @lastmoney float
 declare @idno int
-declare @dmoney float
-declare @cmoney float
-declare @total float
-declare @accc5 nvarchar(15)
-declare @old_accc5 nvarchar(15)
-set @idno = 0
-set @dmoney = 0
-set @cmoney = 0
-set @total = 0
-set @accc5 = ''
-set @old_accc5 = ''
+set @last_account = ''
+set @last_datea = ''
+set @lastmoney = 0
 declare cursor_table cursor for
-	select idno,accc5,dmoney,cmoney from @result
-	where gno = 0
-	order by accc5,accc2
+	select idno,account,datea,inmoney,outmoney from @tmp
 open cursor_table
 fetch next from cursor_table
-into @idno,@accc5,@dmoney,@cmoney
+into @idno,@account,@datea,@inmoney,@outmoney
 while(@@FETCH_STATUS <> -1)
 begin
-	if(@accc5 != @old_accc5) set @total = 0
-	set @total = @total + @dmoney - @cmoney
-	update @result set totMoney = @total where idno = @idno
-	set @old_accc5 = @accc5
+	if(@account = @last_account and @datea = @last_datea)
+	begin
+		set @lastmoney = (@lastmoney + @inmoney) - @outmoney
+	end
+	else if(@account != @last_account)
+	begin
+		if(@last_account != '' and @last_datea != '')
+			update @tmp set todaytotal = @lastmoney where idno = @idno-1
+		select @lastmoney = lastmoney from @tmpa where account = @account
+		update @tmp set lastmoney = @lastmoney where idno = @idno
+		if((select count(account) from @tmp where account = @account and datea = @datea) = 1)
+			update @tmp set todaytotal = (lastmoney + inmoney) - outmoney where idno = @idno
+		set @last_account = @account
+		set @last_datea = @datea
+		set @lastmoney = (@lastmoney + @inmoney) - @outmoney
+	end
+	else if(@account = @last_account and @datea != @last_datea)
+	begin
+		update @tmp set todaytotal = @lastmoney where idno = @idno-1
+		update @tmp set lastmoney = @lastmoney where idno = @idno
+		if((select count(account) from @tmp where account = @account and datea = @datea) = 1)
+			update @tmp set todaytotal = (lastmoney + inmoney) - outmoney where idno = @idno
+		set @last_datea = @datea
+		set @lastmoney = (@lastmoney + @inmoney) - @outmoney
+	end
 	fetch next from cursor_table
-	into @idno,@accc5,@dmoney,@cmoney
+	into @idno,@account,@datea,@inmoney,@outmoney
 end
 close cursor_table
 deallocate cursor_table
-insert into @result(gno,accc1,accc5,accc7,dmoney,cmoney,totMoney)
-	select '0','99',accc5,'<center>合　　　　　計</center>',SUM(dmoney),SUM(cmoney),SUM(dmoney)-SUM(cmoney)
-	from @result
-	group by accc5
-select *
-,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,isnull(dmoney,0)),1)),4,12)) dm1
-,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,isnull(cmoney,0)),1)),4,12)) cm1
-,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,isnull(totmoney,0)),1)),4,12)) tot1
-from @result
-order by accc5,gno desc,accc1,accc2;
+insert into @tmp(gno,lastmoney,inmoney,outmoney,todaytotal)
+	select '1',SUM(lastmoney),SUM(inmoney),SUM(outmoney),SUM(todaytotal)
+	from @tmp
+	
+select
+	gno,accuname,account,datea,
+	case when lastmoney = 0 then '' else 
+		(case when lastmoney < 0 then '(' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,(lastmoney*-1)),1)),4,12)) + ')'
+			else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) end)
+		end lastmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmoney),1)),4,12)) inmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmoney),1)),4,12)) outmoney,
+	case when todaytotal = 0 then '' else 
+		(case when todaytotal < 0 then '(' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,(todaytotal*-1)),1)),4,12)) + ')'
+			else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,todaytotal),1)),4,12)) end)
+		end todaytotal,
+	memo
+from @tmp;
