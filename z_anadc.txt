@@ -1,67 +1,3 @@
-z_anadc1:--z_anadc1
-	SET QUOTED_IDENTIFIER OFF
-	declare @t_bdate nvarchar(10)
-	declare @t_edate nvarchar(10)
-	declare @t_mon nvarchar(10)
-	declare @t_bcustno nvarchar(20)
-	declare @t_ecustno nvarchar(20)
-	declare @t_bpartno nvarchar(20)
-	declare @t_epartno nvarchar(20)
-	declare @t_bsssno nvarchar(20)
-	declare @t_esssno nvarchar(20)
-
-	set @t_bdate = case when '#non'=[2] then '' else [2] end
-	set @t_edate = case when '#non'=[3] then char(255) else [3] end
-	set @t_mon = case when '#non'=[4] then '' else [4] end
-	set @t_bcustno = case when '#non'=[5] then '' else [5] end
-	set @t_ecustno = case when '#non'=[6] then CHAR(255) else [6] end
-	set @t_bpartno = case when '#non'=[7] then '' else [7] end
-	set @t_epartno = case when '#non'=[8] then char(255) else [8] end
-	set @t_bsssno = case when '#non'=[9] then '' else [9] end
-	set @t_esssno = case when '#non'=[10] then char(255) else [10] end
---*****************************************************************************************
-	declare @cmd nvarchar(max)
-	declare @result table(
-		gno nvarchar(1),
-		recno int identity(1,1),
-		custno nvarchar(20),
-		comp nvarchar(50),
-		total float
-	)
-	
-	set @cmd="
-	select * from ( 
-		--目前cara單據作業每個車主的貢獻(不含舊車牌帳且不含上期欠款與收款) 
-		select '0'gno,a.carownerno custno,b.namea comp,a.total from ( 
-		select b.carownerno,sum(a.outmoney)total 
-		from caras a left join car2 b on a.carno=b.noa and b.carownerno!='' 
-		where a.caritemno!='001' and a.outmoney!=0 and (datea between '"+@t_bdate+"' and '"+@t_edate+"') group by b.carownerno )a 
-		left join carOwner b on a.carownerno=b.noa
-		where a.carownerno!=''
-		union all 
-		--目前vcc每個客戶的貢獻(排除健勞勞退) 
-		select '0'gno,a.custno,b.comp,a.total from ( 
-		select custno,SUM(total)total from view_vcc"+left(@t_edate,3)+" where (left(kind,4)!='健勞勞退') and (datea between '"+@t_bdate+"' and '"+@t_edate+"') group by custno)a 
-		left join cust b on a.custno=b.noa 
-		where a.custno!=''
-		union all 
-		--目前trans每個客戶的貢獻 
-		select '0'gno,a.custno,b.comp,a.total from ( 
-		select custno,sum(total2) total from view_trans"+left(@t_edate,3)+" where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by custno)a 
-		left join cust b on a.custno=b.noa 
-	)result where custno between '"+@t_bcustno+"' and '"+@t_ecustno+"' order by total desc"
-	
-	insert into @result 
-	EXECUTE sp_executesql @cmd
-	
-	--插入合計
-	insert into @result 
-	select '1','','',sum(total) from @result
-
-	select gno,recno,custno,comp
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
-	from @result;
---*****************************************************************************************	
 z_anadc2:--z_anadc2
 	SET QUOTED_IDENTIFIER OFF
 	declare @t_bdate nvarchar(10)
@@ -73,6 +9,7 @@ z_anadc2:--z_anadc2
 	declare @t_epartno nvarchar(20)
 	declare @t_bsssno nvarchar(20)
 	declare @t_esssno nvarchar(20)
+	declare @details nvarchar(20)
 
 	set @t_bdate = case when '#non'=[2] then '' else [2] end
 	set @t_edate = case when '#non'=[3] then char(255) else [3] end
@@ -83,11 +20,14 @@ z_anadc2:--z_anadc2
 	set @t_epartno = case when '#non'=[8] then char(255) else [8] end
 	set @t_bsssno = case when '#non'=[9] then '' else [9] end
 	set @t_esssno = case when '#non'=[10] then char(255) else [10] end
+	set @details = case when '#non'=[13] then '' else [13] end
 --*****************************************************************************************	
 	declare @cmd nvarchar(max)
 	declare @result table(
 		gno nvarchar(1),
 		recno int identity(1,1),
+		partno nvarchar(20),
+		part nvarchar(50),
 		custno nvarchar(20),
 		comp nvarchar(50),
 		total float
@@ -95,7 +35,7 @@ z_anadc2:--z_anadc2
 	set @cmd="
 	select * from ( 
 		--目前cara單據作業每個車主的貢獻(不含舊車牌帳且不含上期欠款與收款) 
-		select '0'gno,a.carownerno custno,b.namea comp,a.total from ( 
+		select '0'gno,'07'partno,'監理部'part,a.carownerno custno,b.namea comp,a.total from ( 
 		select b.carownerno,sum(a.outmoney)total 
 		from caras a left join car2 b on a.carno=b.noa and b.carownerno!='' 
 		where a.caritemno!='001' and a.outmoney!=0 and (datea between '"+@t_bdate+"' and '"+@t_edate+"') group by b.carownerno )a 
@@ -103,28 +43,30 @@ z_anadc2:--z_anadc2
 		where a.carownerno!=''
 		union all 
 		--目前vcc每個客戶的貢獻(排除健勞勞退) 
-		select '0'gno,a.custno,b.comp,a.total from ( 
-		select custno,SUM(total)total from view_vcc"+left(@t_edate,3)+" where (left(kind,4)!='健勞勞退') and (datea between '"+@t_bdate+"' and '"+@t_edate+"') group by custno)a 
+		select '0'gno,a.partno,a.part,a.custno,b.comp,a.total from ( 
+		select partno,part,custno,SUM(total)total from view_vcc"+left(@t_edate,3)+" where (left(kind,4)!='健勞勞退') and (datea between '"+@t_bdate+"' and '"+@t_edate+"') group by partno,part,custno)a 
 		left join cust b on a.custno=b.noa 
 		where a.custno!=''
 		union all 
 		--目前trans每個客戶的貢獻 
-		select '0'gno,a.custno,b.comp,a.total from ( 
-		select custno,sum(total2) total from view_trans"+left(@t_edate,3)+" where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by custno)a 
+		select '0'gno,'08'partno,'運輸部'part,a.custno,b.comp,a.total from ( 
+		select custno,sum(total) total from view_trans"+left(@t_edate,3)+" where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by custno)a 
 		left join cust b on a.custno=b.noa 
-	)result where custno between '"+@t_bcustno+"' and '"+@t_ecustno+"' order by total desc"
+	)result where (custno between '"+@t_bcustno+"' and '"+@t_ecustno+"') and (partno between '"+@t_bpartno+"' and '"+@t_epartno+"') order by total desc"
 	
 	insert into @result
 	EXECUTE sp_executesql @cmd
 	
 	--插入合計
 	insert into @result 
-	select '1','','',sum(total) from @result
+	select '1','','','','',sum(total) from @result
 
 	--插入明細
 	declare @t_result table( 
 		gno nvarchar(1), 
-		recno int, 
+		recno int,
+		partno nvarchar(20),
+		part nvarchar(50), 
 		custno nvarchar(20), 
 		comp nvarchar(50), 
 		datea nvarchar(10),
@@ -136,6 +78,8 @@ z_anadc2:--z_anadc2
 	
 	declare @gno nvarchar(1) 
 	declare @recno int
+	declare @partno nvarchar(20)
+	declare @part nvarchar(50)
 	declare @custno nvarchar(20)
 	declare @comp nvarchar(50)
 	declare @total float
@@ -144,268 +88,47 @@ z_anadc2:--z_anadc2
 	select * from @result
 	open cursor_table
 	fetch next from cursor_table
-	into @gno,@recno,@custno,@comp,@total
+	into @gno,@recno,@partno,@part,@custno,@comp,@total
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if(@gno='0')
 		begin
 			insert into @t_result
-			select '1',@recno,@custno,@comp,'','','',@total,''
+			select '1',@recno,@partno,@part,@custno,@comp,'','','',@total,''
 			
-			set @cmd="select * from(
-				--caras
-				select '0'gno,@recno recno,@custno custno,''comp,a.datea,a.caritemno,(a.carno+a.caritem)item,a.outmoney,a.memo from caras a left join car2 b
-				on a.carno=b.noa where b.carownerno=@custno and a.caritemno!='001' and a.outmoney!=0 and (datea between '"+@t_bdate+"' and '"+@t_edate+"')
-				union all
-				--vcc
-				select '0'gno,@recno recno,@custno custno,''comp,a.datea,b.productno,b.product,b.total,b.memo from view_vcc"+left(@t_edate,3)+" a left join view_vccs"+left(@t_edate,3)+" b on a.noa=b.noa
-				where a.custno=@custno and left(a.kind,4)!='健勞勞退' and (a.datea between '"+@t_bdate+"' and '"+@t_edate+"')
-				union all
-				--trans
-				select '0'gno,@recno recno,@custno custno,''comp,trandate,uccno,carno+'-'+product+'('+straddr+')',total2,po+memo from view_trans"+left(@t_edate,3)+"
-				where custno=@custno and (trandate between '"+@t_bdate+"' and '"+@t_edate+"')
-			)t_result order by datea"
-			insert into @t_result
-			EXECUTE sp_executesql @cmd,@params=N'@recno int,@custno nvarchar(20)',@recno=@recno,@custno=@custno
-			
+			if(@details='明細')
+			begin
+				set @cmd="select * from(
+					--caras
+					select '0'gno,@recno recno,'07'partno,'監理部'part,@custno custno,''comp,a.datea,a.caritemno,(a.carno+a.caritem)item,a.outmoney,a.memo from caras a left join car2 b
+					on a.carno=b.noa where b.carownerno=@custno and a.caritemno!='001' and a.outmoney!=0 and (datea between '"+@t_bdate+"' and '"+@t_edate+"')
+					union all
+					--vcc
+					select '0'gno,@recno recno,partno,part,@custno custno,''comp,a.datea,b.productno,b.product,b.total,b.memo from view_vcc"+left(@t_edate,3)+" a left join view_vccs"+left(@t_edate,3)+" b on a.noa=b.noa
+					where a.custno=@custno and left(a.kind,4)!='健勞勞退' and (a.datea between '"+@t_bdate+"' and '"+@t_edate+"')
+					union all
+					--trans
+					select '0'gno,@recno recno,'08'partno,'運輸部'part,@custno custno,''comp,trandate,uccno,carno+'-'+product+'('+straddr+')',total,po+memo from view_trans"+left(@t_edate,3)+"
+					where custno=@custno and (trandate between '"+@t_bdate+"' and '"+@t_edate+"')
+				)t_result where partno=@partno order by datea"
+				insert into @t_result
+				EXECUTE sp_executesql @cmd,@params=N'@recno int,@custno nvarchar(20),@partno nvarchar(20)',@recno=@recno,@custno=@custno,@partno=@partno
+			end
 		end
 		else
 		begin
 			insert into @t_result
-			select '2',@recno,@custno,@comp,'','','',@total,''
+			select '2',@recno,@partno,@part,@custno,@comp,'','','',@total,''
 		end
 		
 		fetch next from cursor_table
-		into @gno,@recno,@custno,@comp,@total
+		into @gno,@recno,@partno,@part,@custno,@comp,@total
 	end
 	close cursor_table
 	deallocate cursor_table
 
-	select gno,recno,custno,comp,datea,itno,item,memo
+	select gno,recno,partno,part,custno,comp,datea,itno,item,memo
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total 
-	from @t_result;
-	
---trans車牌與交運日(知道當天哪台車運輸哪天東西)
---select '0'gno,@recno recno,@custno custno,''comp,trandate,
---(select uccno+',' from trans[1] b where a.carno=b.carno and a.trandate=b.trandate and custno=@custno FOR XML PATH('')),
---(select product+',' from trans[1] b where a.carno=b.carno and a.trandate=b.trandate and custno=@custno FOR XML PATH('')),
---sum(total2),(select memo+',' from trans[1] b where a.carno=b.carno and a.trandate=b.trandate and custno=@custno FOR XML PATH(''))
--- from trans[1] a
---where custno=@custno and (trandate between @t_bdate and @t_edate) 
---group by trandate,carno
-	
---*****************************************************************************************
-z_anadc3:--z_anadc3
-	SET QUOTED_IDENTIFIER OFF
-	declare @t_bdate nvarchar(10)
-	declare @t_edate nvarchar(10)
-	declare @t_mon nvarchar(10)
-	declare @t_bcustno nvarchar(20)
-	declare @t_ecustno nvarchar(20)
-	declare @t_bpartno nvarchar(20)
-	declare @t_epartno nvarchar(20)
-	declare @t_bsssno nvarchar(20)
-	declare @t_esssno nvarchar(20)
-
-	set @t_bdate = case when '#non'=[2] then '' else [2] end
-	set @t_edate = case when '#non'=[3] then char(255) else [3] end
-	set @t_mon = case when '#non'=[4] then '' else [4] end
-	set @t_bcustno = case when '#non'=[5] then '' else [5] end
-	set @t_ecustno = case when '#non'=[6] then CHAR(255) else [6] end
-	set @t_bpartno = case when '#non'=[7] then '' else [7] end
-	set @t_epartno = case when '#non'=[8] then char(255) else [8] end
-	set @t_bsssno = case when '#non'=[9] then '' else [9] end
-	set @t_esssno = case when '#non'=[10] then char(255) else [10] end
---*****************************************************************************************	
-	declare @cmd nvarchar(max)
-	declare @result table(
-		sssno nvarchar(20),
-		namea nvarchar(50),
-		total float
-	)
-	--cara
-	insert into @result
-	select a.sssno,b.namea,a.total from (
-	select sssno,sum(outmoney)total
-	from cara a left join caras b on a.noa=b.noa
-	where b.caritemno!='001' and b.outmoney!=0 
-	and (sssno between @t_bsssno and @t_esssno) and (b.datea between @t_bdate and @t_edate) and a.carownerno!=''
-	group by sssno)a left join sss b on a.sssno=b.noa
-	
-	--vcc(目前先根據客戶主檔內的業務來做業績歸屬，若有兩人業務則分攤，如果客戶業務沒有業務，則以vcc內的業務或收款人做業績)
-	declare @tmp table(
-		sssno nvarchar(20),
-		total float
-	)--暫存每個業務金額
-	
-	insert into @tmp
-	select noa,0 from sss
-	
-	declare @vccno nvarchar(20)--vcc的salesno
-	declare @vccno2 nvarchar(20)--vcc的salesno2
-	declare @custno nvarchar(20)--cust的salesno
-	declare @custno2 nvarchar(20)--cust的salesno2
-	declare @total float
-	
-	set @cmd="
-	declare cursor_table cursor for
-	select a.salesno,a.salesno2,b.salesno,b.salesno2,a.total
-	from view_vcc"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
-	where (left(kind,4)!='健勞勞退') and (datea between '"+@t_bdate+"' and '"+@t_edate+"') and a.custno!=''"
-	
-	EXECUTE sp_executesql @cmd
-	
-	open cursor_table
-	fetch next from cursor_table
-	into @vccno,@vccno2,@custno,@custno2,@total
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
-		begin
-			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
-			begin
-				--業務1
-				update @tmp
-				set total=total+round((@total/2),0)
-				where sssno=@custno
-				--業務2
-				update @tmp
-				set total=total+round((@total/2),0)
-				where sssno=@custno2
-			end
-			else if(LEN(@custno)>0)--只填第一個業務
-			begin
-				--業務1
-				update @tmp
-				set total=total+@total
-				where sssno=@custno
-			end
-			else--只填第二個業務
-			begin
-				--業務2
-				update @tmp
-				set total=total+@total
-				where sssno=@custno2
-			end
-		end
-		else--客戶主檔沒有填寫業務
-		begin
-			if(LEN(@vccno)>0)--vcc業務有值
-			begin
-				update @tmp
-				set total=total+@total
-				where sssno=@vccno
-			end
-			else if(LEN(@vccno2)>0)--vcc業務無值，以收款人
-			begin
-				update @tmp
-				set total=total+@total
-				where sssno=@vccno2
-			end
-		end
-		fetch next from cursor_table
-		into @vccno,@vccno2,@custno,@custno2,@total
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	
-	--tran(不計算外務人員績效，直接以客戶主檔的業務)
-	set @cmd="declare cursor_table cursor for
-	select b.salesno,b.salesno2,total2 from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
-	where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!=''"
-	EXECUTE sp_executesql @cmd
-	
-	open cursor_table
-	fetch next from cursor_table
-	into @custno,@custno2,@total
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
-		begin
-			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
-			begin
-				--業務1
-				update @tmp
-				set total=total+round((@total/2),0)
-				where sssno=@custno
-				--業務2
-				update @tmp
-				set total=total+round((@total/2),0)
-				where sssno=@custno2
-			end
-			else if(LEN(@custno)>0)--只填第一個業務
-			begin
-				--業務1
-				update @tmp
-				set total=total+@total
-				where sssno=@custno
-			end
-			else--只填第二個業務
-			begin
-				--業務2
-				update @tmp
-				set total=total+@total
-				where sssno=@custno2
-			end
-		end
-		
-		fetch next from cursor_table
-		into @custno,@custno2,@total
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	--清除業績為0的員工或不再員工範圍內員工
-	delete @tmp
-	where total=0 --or (sssno not between @t_bsssno and @t_esssno)
-	
-	--結果插入輸出table
-	declare @sssno nvarchar(20)
-	declare @namea nvarchar(50)
-	
-	declare cursor_table cursor for
-	select a.sssno,b.namea,a.total from @tmp a left join sss b on a.sssno=b.noa
-	open cursor_table
-	fetch next from cursor_table
-	into @sssno,@namea,@total
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if((select COUNT(*) from @result where sssno=@sssno)>0) --輸出已存在員工
-		begin
-			update @result
-			set total=total+@total
-			where sssno=@sssno
-		end
-		else
-		begin
-			insert into @result
-			select @sssno,@namea,@total
-		end
-		fetch next from cursor_table
-		into @sssno,@namea,@total
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	--排名並輸出
-	declare @t_result table(
-		gno nvarchar(1),
-		recno int identity(1,1),
-		sssno nvarchar(20),
-		namea nvarchar(50),
-		total float
-	)
-	insert into @t_result
-	select '0',sssno,namea,total from @result
-	order by total desc
-	
-	--插入合計
-	insert into @t_result 
-	select '1','','',sum(total) from @t_result
-
-	select gno,recno,sssno,namea
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
 	from @t_result;
 --*****************************************************************************************
 z_anadc4:--z_anadc4
@@ -419,6 +142,7 @@ z_anadc4:--z_anadc4
 	declare @t_epartno nvarchar(20)
 	declare @t_bsssno nvarchar(20)
 	declare @t_esssno nvarchar(20)
+	declare @details nvarchar(20)
 
 	set @t_bdate = case when '#non'=[2] then '' else [2] end
 	set @t_edate = case when '#non'=[3] then char(255) else [3] end
@@ -429,21 +153,24 @@ z_anadc4:--z_anadc4
 	set @t_epartno = case when '#non'=[8] then char(255) else [8] end
 	set @t_bsssno = case when '#non'=[9] then '' else [9] end
 	set @t_esssno = case when '#non'=[10] then char(255) else [10] end
+	set @details = case when '#non'=[13] then '' else [13] end
 --*****************************************************************************************
 	declare @cmd nvarchar(max)	
 	declare @result table(
+		partno nvarchar(20),
+		part nvarchar(50),
 		sssno nvarchar(20),
 		namea nvarchar(50),
 		total float
 	)
 	--cara
 	insert into @result
-	select a.sssno,b.namea,a.total from (
+	select b.partno,b.part,a.sssno,b.namea,a.total from (
 	select sssno,sum(outmoney)total
 	from cara a left join caras b on a.noa=b.noa
 	where b.caritemno!='001' and b.outmoney!=0 
 	and (sssno between @t_bsssno and @t_esssno) and (b.datea between @t_bdate and @t_edate) and a.carownerno!=''
-	group by sssno)a left join sss b on a.sssno=b.noa
+	group by sssno)a left join sss b on a.sssno=b.noa where b.partno between @t_bpartno and @t_epartno
 	
 	--vcc(目前先根據客戶主檔內的業務來做業績歸屬，若有兩人業務則分攤，如果客戶業務沒有業務，則以vcc內的業務或收款人做業績)
 	declare @tmp table(
@@ -525,7 +252,7 @@ z_anadc4:--z_anadc4
 	--tran(不計算外務人員績效，直接以客戶主檔的業務)
 	set @cmd="
 	declare cursor_table cursor for
-	select b.salesno,b.salesno2,total2 from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
+	select b.salesno,b.salesno2,total from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
 	where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!=''"
 	EXECUTE sp_executesql @cmd
 	
@@ -574,14 +301,17 @@ z_anadc4:--z_anadc4
 	where total=0 --or (sssno not between @t_bsssno and @t_esssno)
 	
 	--結果插入輸出table
+	declare @partno nvarchar(20)
+	declare @part nvarchar(50)
 	declare @sssno nvarchar(20)
 	declare @namea nvarchar(50)
 	
 	declare cursor_table cursor for
-	select a.sssno,b.namea,a.total from @tmp a left join sss b on a.sssno=b.noa
+	select b.partno,b.part,a.sssno,b.namea,a.total from @tmp a left join sss b on a.sssno=b.noa
+	where b.partno between @t_bpartno and @t_epartno
 	open cursor_table
 	fetch next from cursor_table
-	into @sssno,@namea,@total
+	into @partno,@part,@sssno,@namea,@total
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if((select COUNT(*) from @result where sssno=@sssno)>0) --輸出已存在員工
@@ -593,10 +323,10 @@ z_anadc4:--z_anadc4
 		else
 		begin
 			insert into @result
-			select @sssno,@namea,@total
+			select @partno,@part,@sssno,@namea,@total
 		end
 		fetch next from cursor_table
-		into @sssno,@namea,@total
+		into @partno,@part,@sssno,@namea,@total
 	end
 	close cursor_table
 	deallocate cursor_table
@@ -605,193 +335,202 @@ z_anadc4:--z_anadc4
 	declare @t_result table(
 		gno nvarchar(1),
 		recno int identity(1,1),
+		partno nvarchar(20),
+		part nvarchar(50),
 		sssno nvarchar(20),
 		namea nvarchar(50),
 		total float
 	)
 	insert into @t_result
-	select '0',sssno,namea,total from @result
+	select '0',partno,part,sssno,namea,total from @result
 	order by total desc
 	
 	--插入合計
 	insert into @t_result 
-	select '1','','',sum(total) from @t_result
+	select '1','','','','',sum(total) from @t_result
 
-	
-	--插入每個員工與公司的業績
-	declare @tmpa table(
-		sssno nvarchar(20),
-		custno nvarchar(20),
-		total float
-	)
-	insert into @tmpa
-	select a.noa,b.noa,0 from sss a,cust b
-	
-	declare @xcustno nvarchar(20)
-	
-	set @cmd="
-	declare cursor_table cursor for
-	select a.custno,a.salesno,a.salesno2,b.salesno,b.salesno2,a.total
-	from view_vcc"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
-	where (left(kind,4)!='健勞勞退') and (datea between '"+@t_bdate+"' and '"+@t_edate+"')"
-	EXECUTE sp_executesql @cmd
-	
-	open cursor_table
-	fetch next from cursor_table
-	into @xcustno,@vccno,@vccno2,@custno,@custno2,@total
-	while(@@FETCH_STATUS <> -1)
+	if(@details='明細')
 	begin
-		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
-		begin
-			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
-			begin
-				--業務1
-				update @tmpa
-				set total=total+round((@total/2),0)
-				where sssno=@custno and custno=@xcustno
-				--業務2
-				update @tmpa
-				set total=total+round((@total/2),0)
-				where sssno=@custno2 and custno=@xcustno
-			end
-			else if(LEN(@custno)>0)--只填第一個業務
-			begin
-				--業務1
-				update @tmpa
-				set total=total+@total
-				where sssno=@custno and custno=@xcustno
-			end
-			else--只填第二個業務
-			begin
-				--業務2
-				update @tmpa
-				set total=total+@total
-				where sssno=@custno2 and custno=@xcustno
-			end
-		end
-		else--客戶主檔沒有填寫業務
-		begin
-			if(LEN(@vccno)>0)--vcc業務有值
-			begin
-				update @tmpa
-				set total=total+@total
-				where sssno=@vccno and custno=@xcustno
-			end
-			else if(LEN(@vccno2)>0)--vcc業務無值，以收款人
-			begin
-				update @tmpa
-				set total=total+@total
-				where sssno=@vccno2 and custno=@xcustno
-			end
-		end
+		--插入每個員工與公司的業績
+		declare @tmpa table(
+			sssno nvarchar(20),
+			custno nvarchar(20),
+			total float
+		)
+		insert into @tmpa
+		select a.noa,b.noa,0 from sss a,cust b
+		
+		declare @xcustno nvarchar(20)
+		
+		set @cmd="
+		declare cursor_table cursor for
+		select a.custno,a.salesno,a.salesno2,b.salesno,b.salesno2,a.total
+		from view_vcc"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
+		where (left(kind,4)!='健勞勞退') and (datea between '"+@t_bdate+"' and '"+@t_edate+"')"
+		EXECUTE sp_executesql @cmd
+		
+		open cursor_table
 		fetch next from cursor_table
 		into @xcustno,@vccno,@vccno2,@custno,@custno2,@total
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	set @cmd="
-	declare cursor_table cursor for
-	select a.custno,b.salesno,b.salesno2,sum(total2)total2 from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
-	where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by a.custno,b.salesno,b.salesno2"
-	EXECUTE sp_executesql @cmd
-	
-	open cursor_table
-	fetch next from cursor_table
-	into @xcustno,@custno,@custno2,@total
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+		while(@@FETCH_STATUS <> -1)
 		begin
-			if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+			if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
 			begin
-				--業務1
-				update @tmpa
-				set total=total+round((@total/2),0)
-				where sssno=@custno and custno=@xcustno
-				--業務2
-				update @tmpa
-				set total=total+round((@total/2),0)
-				where sssno=@custno2 and custno=@xcustno
+				if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+				begin
+					--業務1
+					update @tmpa
+					set total=total+round((@total/2),0)
+					where sssno=@custno and custno=@xcustno
+					--業務2
+					update @tmpa
+					set total=total+round((@total/2),0)
+					where sssno=@custno2 and custno=@xcustno
+				end
+				else if(LEN(@custno)>0)--只填第一個業務
+				begin
+					--業務1
+					update @tmpa
+					set total=total+@total
+					where sssno=@custno and custno=@xcustno
+				end
+				else--只填第二個業務
+				begin
+					--業務2
+					update @tmpa
+					set total=total+@total
+					where sssno=@custno2 and custno=@xcustno
+				end
 			end
-			else if(LEN(@custno)>0)--只填第一個業務
+			else--客戶主檔沒有填寫業務
 			begin
-				--業務1
-				update @tmpa
-				set total=total+@total
-				where sssno=@custno and custno=@xcustno
+				if(LEN(@vccno)>0)--vcc業務有值
+				begin
+					update @tmpa
+					set total=total+@total
+					where sssno=@vccno and custno=@xcustno
+				end
+				else if(LEN(@vccno2)>0)--vcc業務無值，以收款人
+				begin
+					update @tmpa
+					set total=total+@total
+					where sssno=@vccno2 and custno=@xcustno
+				end
 			end
-			else--只填第二個業務
-			begin
-				--業務2
-				update @tmpa
-				set total=total+@total
-				where sssno=@custno2 and custno=@xcustno
-			end
+			fetch next from cursor_table
+			into @xcustno,@vccno,@vccno2,@custno,@custno2,@total
 		end
+		close cursor_table
+		deallocate cursor_table
 		
+		set @cmd="
+		declare cursor_table cursor for
+		select a.custno,b.salesno,b.salesno2,sum(total)total from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
+		where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by a.custno,b.salesno,b.salesno2"
+		EXECUTE sp_executesql @cmd
+		
+		open cursor_table
 		fetch next from cursor_table
 		into @xcustno,@custno,@custno2,@total
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if(LEN(@custno)>0 or LEN(@custno2)>0)--客戶主檔業務有值
+			begin
+				if(LEN(@custno)>0 and LEN(@custno2)>0) --兩個業務都有填
+				begin
+					--業務1
+					update @tmpa
+					set total=total+round((@total/2),0)
+					where sssno=@custno and custno=@xcustno
+					--業務2
+					update @tmpa
+					set total=total+round((@total/2),0)
+					where sssno=@custno2 and custno=@xcustno
+				end
+				else if(LEN(@custno)>0)--只填第一個業務
+				begin
+					--業務1
+					update @tmpa
+					set total=total+@total
+					where sssno=@custno and custno=@xcustno
+				end
+				else--只填第二個業務
+				begin
+					--業務2
+					update @tmpa
+					set total=total+@total
+					where sssno=@custno2 and custno=@xcustno
+				end
+			end
+			
+			fetch next from cursor_table
+			into @xcustno,@custno,@custno2,@total
+		end
+		close cursor_table
+		deallocate cursor_table
+		
+		--清除業績為0的員工或不再員工範圍內員工
+		delete @tmpa
+		where total=0 --or (sssno not between @t_bsssno and @t_esssno)
 	end
-	close cursor_table
-	deallocate cursor_table
-	
-	--清除業績為0的員工或不再員工範圍內員工
-	delete @tmpa
-	where total=0 --or (sssno not between @t_bsssno and @t_esssno)
-	
 	
 	--插入明細
 	declare @x_result table( 
 		gno nvarchar(1), 
 		recno int, 
+		partno nvarchar(20), 
+		part nvarchar(50),
 		sssno nvarchar(20), 
 		namea nvarchar(50), 
 		custno nvarchar(20), 
 		comp nvarchar(50), 
-		total float
+		total float,
+		xcount int identity(1,1)
 	)
 	
 	declare @gno nvarchar(1) 
 	declare @recno int
 	
 	declare cursor_table cursor for
-	select gno,recno,sssno,namea,total from @t_result
+	select gno,recno,partno,part,sssno,namea,total from @t_result
 	open cursor_table
 	fetch next from cursor_table
-	into @gno,@recno,@sssno,@namea,@total
+	into @gno,@recno,@partno,@part,@sssno,@namea,@total
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if(@gno=0)
 		begin
 			insert into @x_result
-			select '1',@recno,@sssno,@namea,'','',@total
+			select '1',@recno,@partno,@part,@sssno,@namea,'','',@total
 			
-			insert into @x_result
-			select * from (
-			select '0'gno,@recno recno,@sssno sssno,@namea namea,a.custno custno,b.namea comp,a.total total from (
-			select carownerno custno ,sum(outmoney) total from cara a left join caras b on a.noa=b.noa
-			where b.caritemno!='001' and b.outmoney!=0 and (a.sssno=@sssno) and (b.datea between @t_bdate and @t_edate)
-			group by carownerno)a left join carOwner b on a.custno=b.noa
-			union all
-			select '0'gno,@recno recno,@sssno sssno,@namea namea,a.custno custno,b.comp comp,a.total total from @tmpa a left join cust b on a.custno=b.noa
-			where sssno=@sssno)x_result order by custno
+			if(@details='明細')
+			begin
+				insert into @x_result
+				select * from (
+				select '0'gno,@recno recno,@partno partno,@part part,@sssno sssno,@namea namea,a.custno custno,b.namea comp,a.total total from (
+				select carownerno custno ,sum(outmoney) total from cara a left join caras b on a.noa=b.noa
+				where b.caritemno!='001' and b.outmoney!=0 and (a.sssno=@sssno) and (b.datea between @t_bdate and @t_edate)
+				group by carownerno)a left join carOwner b on a.custno=b.noa
+				union all
+				select '0'gno,@recno recno,@partno partno,@part part,@sssno sssno,@namea namea,a.custno custno,case when len(b.nick)=0 then left(b.comp,4) else b.nick end comp,a.total total from @tmpa a left join cust b on a.custno=b.noa
+				where sssno=@sssno)x_result order by custno
+			end
 		end
 		else
 		begin
 			insert into @x_result
-			select '2',@recno,@sssno,@namea,'','',@total
+			select '2',@recno,@partno,@part,@sssno,@namea,'','',@total
 		end
 		
 		fetch next from cursor_table
-		into @gno,@recno,@sssno,@namea,@total
+		into @gno,@recno,@partno,@part,@sssno,@namea,@total
 	end
 	close cursor_table
 	deallocate cursor_table
 	
-	select gno,recno,sssno,namea,custno,comp
+	select gno,recno,partno,part,sssno,namea,custno,comp
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
-	from @x_result;
+	from @x_result order by xcount;
 --*****************************************************************************************
 z_anadc5:--z_anadc5
 	SET QUOTED_IDENTIFIER OFF
@@ -840,7 +579,7 @@ z_anadc5:--z_anadc5
 	union all 
 	--目前trans每個客戶的貢獻 
 	select '08'partno,a.custno,b.comp,a.total from ( 
-	select custno,sum(total2) total from view_trans"+left(@t_edate,3)+" where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by custno)a 
+	select custno,sum(total) total from view_trans"+left(@t_edate,3)+" where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!='' group by custno)a 
 	left join cust b on a.custno=b.noa 
 	)result order by custno --where custno between '"+@t_bcustno+"' and '"+@t_ecustno+"'"
 	
@@ -1083,7 +822,7 @@ SET QUOTED_IDENTIFIER OFF
 		union all 
 		--目前trans每個客戶的貢獻 
 		select '08'partno,a.custno,b.nick,a.total from ( 
-		select custno,sum(total2) total from view_trans"+@x_year+" where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!='' group by custno)a 
+		select custno,sum(total) total from view_trans"+@x_year+" where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!='' group by custno)a 
 		left join cust b on a.custno=b.noa 
 		)result order by custno --where custno between '"+@t_bcustno+"' and '"+@t_ecustno+"'"
 		insert into @result 
@@ -1430,7 +1169,7 @@ z_anadc7:--z_anadc7
 	--tran(不計算外務人員績效，直接以客戶主檔的業務)
 	set @cmd="
 	declare cursor_table cursor for
-	select b.salesno,b.salesno2,total2 from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
+	select b.salesno,b.salesno2,total from view_trans"+left(@t_edate,3)+" a left join cust b on a.custno=b.noa
 	where (trandate between '"+@t_bdate+"' and '"+@t_edate+"') and custno!=''"
 	
 	EXECUTE sp_executesql @cmd
@@ -1807,7 +1546,7 @@ z_anadc8:--z_anadc8
 		--tran(不計算外務人員績效，直接以客戶主檔的業務)
 		set @cmd="		
 		declare cursor_table cursor for
-		select b.salesno,b.salesno2,total2 from view_trans"+@x_year+" a left join cust b on a.custno=b.noa
+		select b.salesno,b.salesno2,total from view_trans"+@x_year+" a left join cust b on a.custno=b.noa
 		where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!=''"
 		
 		EXECUTE sp_executesql @cmd
@@ -2146,7 +1885,7 @@ SET QUOTED_IDENTIFIER OFF
 		union all 
 		--目前trans每個客戶的貢獻 
 		select '08'partno,a.custno,a.total from ( 
-		select custno,sum(total2) total from view_trans"+@t_byear+" where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!='' group by custno)a 
+		select custno,sum(total) total from view_trans"+@t_byear+" where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!='' group by custno)a 
 		left join cust b on a.custno=b.noa 
 		)result order by custno --where custno between @t_bcustno and @t_ecustno "
 	
@@ -2272,7 +2011,7 @@ SET QUOTED_IDENTIFIER OFF
 		union all 
 		--目前trans每個客戶的貢獻 
 		select '08'partno,a.custno,a.total from ( 
-		select custno,sum(total2) total from view_trans"+@t_eyear+" where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!='' group by custno)a 
+		select custno,sum(total) total from view_trans"+@t_eyear+" where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!='' group by custno)a 
 		left join cust b on a.custno=b.noa 
 		)result order by custno --where custno between @t_bcustno and @t_ecustno "
 	
@@ -2564,7 +2303,7 @@ z_anadc10:--z_anadc10
 		--tran(不計算外務人員績效，直接以客戶主檔的業務)
 		set @cmd="
 		declare cursor_table cursor for
-		select b.salesno,b.salesno2,total2 from view_trans"+@t_byear+" a left join cust b on a.custno=b.noa
+		select b.salesno,b.salesno2,total from view_trans"+@t_byear+" a left join cust b on a.custno=b.noa
 		where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!=''"
 		EXECUTE sp_executesql @cmd
 		
@@ -2792,7 +2531,7 @@ z_anadc10:--z_anadc10
 		--tran(不計算外務人員績效，直接以客戶主檔的業務)
 		set @cmd="
 		declare cursor_table cursor for
-		select b.salesno,b.salesno2,total2 from view_trans"+@t_eyear+" a left join cust b on a.custno=b.noa
+		select b.salesno,b.salesno2,total from view_trans"+@t_eyear+" a left join cust b on a.custno=b.noa
 		where (trandate between '"+@t_mon+"/01' and '"+@t_mon+"/31') and custno!=''"
 		EXECUTE sp_executesql @cmd
 		
