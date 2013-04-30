@@ -163,12 +163,16 @@ declare @t_btrandate nvarchar(10)
 declare @t_etrandate nvarchar(10)
 declare @t_bcustno nvarchar(20)
 declare @t_ecustno nvarchar(20)
+declare @t_baddrno nvarchar(50)
+declare @t_eaddrno nvarchar(50)
 declare @t_whatprice int
 set @t_accy = '[1]'
 set @t_btrandate = case when '#non'=[4] then '' else [4] end
 set @t_etrandate = case when '#non'=[5] then CHAR(255) else [5] end
 set @t_bcustno = case when '#non'=[8] then '' else [8] end
 set @t_ecustno = case when '#non'=[9] then CHAR(255) else [9] end
+set @t_baddrno = case when '#non'=[10] then '' else [10] end
+set @t_eaddrno = case when '#non'=[11] then CHAR(255) else [11] end
 set @t_whatprice = case when '收' = [13] then '0' else '1' end ---收為0 發為1
 declare @datetmp table(
 	gno nvarchar(1),
@@ -180,7 +184,8 @@ declare @datetmp table(
 	inprice1 float,
 	inprice2 float,
 	outprice1 float,
-	outprice2 float
+	outprice2 float,
+	memo nvarchar(200)
 )
 declare @tmp table(
 	gno nvarchar(1),
@@ -196,7 +201,7 @@ declare @tmp table(
 	memo nvarchar(max)
 )
 insert into @datetmp
-	select '0',b.custno,b.addrno,isnull(a.datea,'000/01/01'),'',a.inprice1,a.inprice2,a.outprice1,a.outprice2
+	select '0',b.custno,b.addrno,isnull(a.datea,'000/01/01'),'',a.inprice1,a.inprice2,a.outprice1,a.outprice2,memo
 	from trancommis a
 	left join trancommi b on a.noa = b.noa
 	order by b.custno,b.addrno,a.datea
@@ -208,6 +213,14 @@ declare @bdate_before nvarchar(10)
 declare @custno nvarchar(35)
 declare @addrno nvarchar(200)
 declare @bdate nvarchar(10)
+declare @bdate_tmp nvarchar(10)
+declare @year_tmp nvarchar(10)
+declare @mon_tmp nvarchar(10)
+declare @day_tmp nvarchar(10)
+set @bdate_tmp = ''
+set @year_tmp = ''
+set @mon_tmp = ''
+set @day_tmp = ''
 declare cursor_table cursor for
 	select idno,custno,addrno,bdate  from @datetmp
 open cursor_table
@@ -221,35 +234,64 @@ begin
 		update @datetmp set edate = '999/12/31' where idno = @idno
 	else
 	begin
-		update @datetmp set edate = (select bdate from @datetmp where (custno = @custno) and (addrno = @addrno) and (idno = @idno+1)) where idno = @idno
+		set @bdate_tmp = (select bdate from @datetmp where (custno = @custno) and (addrno = @addrno) and (idno = @idno+1))
+		set @year_tmp = left(@bdate_tmp,3)
+		set @mon_tmp = substring(@bdate_tmp,5,2)
+		set @day_tmp = right(@bdate_tmp,2)
+		if(cast(@day_tmp as int) <=1)
+		begin
+			if(cast(@mon_tmp as int) = '01')
+			begin
+				set @year_tmp = RIGHT(REPLICATE('0', 3) + CAST( (cast(@year_tmp as int) -1) as NVARCHAR), 3)
+				set @mon_tmp = '12'
+				set @day_tmp = '31'
+			end
+			else
+			begin
+				set @mon_tmp = RIGHT(REPLICATE('0', 2) + CAST( (cast(@mon_tmp as int) -1) as NVARCHAR), 2)
+				set @day_tmp = '31'
+			end
+		end
+		else
+			set @day_tmp = RIGHT(REPLICATE('0', 2) + CAST( (cast(@day_tmp as int) -1) as NVARCHAR), 2)
+		set @bdate_tmp = @year_tmp + '/' + @mon_tmp + '/' + @day_tmp
+		update @datetmp set edate = @bdate_tmp where idno = @idno
 	end
 	fetch next from cursor_table
 	into @idno,@custno,@addrno,@bdate
 end
 close cursor_table
 deallocate cursor_table
-insert into @tmp 
-	select '0',c.trandate,'', 
-	case when e.isoutside = 1 then '外車' else '公司車' end,b.custno,b.comp,b.nick, 
-	case when @t_whatprice = 0 then sum(isnull(c.mount,0)) when @t_whatprice = 1 then sum(isnull(c.mount2,0)) end, 
+
+insert into @tmp
+	select '0',a.trandate,'', 
+	case when b.isoutside = 1 then '外車' else '公司車' end,a.custno,a.comp,a.nick, 
+	case when @t_whatprice = 0 then sum(isnull(a.inmount,0)) when @t_whatprice = 1 then sum(isnull(a.outmount,0)) end, 
 	case when @t_whatprice = 0 then 
-	case when e.isoutside = 1 then d.inprice2 else d.inprice1 end 
+	case when b.isoutside = 1 then c.inprice2 else c.inprice1 end 
 	when @t_whatprice = 1 then 
-	case when e.isoutside = 1 then d.outprice2 else d.outprice1 end
-	end,'',a.memo 
-	from trancommis a 
-	left join trancommi b on a.noa = b.noa 
-	left join view_trans[1] c on (b.custno = c.custno) and (b.addrno = c.straddrno)
-	left join @datetmp d on (b.custno = d.custno) and (b.addrno = d.addrno) and (c.trandate between d.bdate and d.edate)
-	left join calctypes e on c.calctype = cast(e.noa as nvarchar) +  cast(e.noq as nvarchar)
-	where (b.custno between @t_bcustno and @t_ecustno) and
-			 (d.bdate >= @t_btrandate and d.bdate <= @t_etrandate) and
-			 (c.trandate between @t_btrandate and @t_etrandate)
-	group by c.trandate,b.custno,b.comp,b.nick,c.calctype,d.inprice2,d.inprice1,d.outprice1,d.outprice2,a.memo,e.isoutside
+	case when b.isoutside = 1 then c.outprice2 else c.outprice1 end
+	end,'',c.memo 
+	from view_trans[1] a
+	left join calctypes b on a.calctype = cast(b.noa as nvarchar) +  cast(b.noq as nvarchar)
+	left join @datetmp c on (a.custno = c.custno) and (a.straddrno = c.addrno) and (a.trandate between c.bdate and c.edate)
+	where (c.custno between @t_bcustno and @t_ecustno) 
+			--and (c.bdate >= @t_btrandate and c.bdate <= @t_etrandate) 
+			and (a.trandate between @t_btrandate and @t_etrandate) 
+			and (c.addrno between @t_baddrno and @t_eaddrno)
+		group by a.trandate,a.custno,a.comp,a.nick,a.calctype,c.inprice1,c.inprice2,c.outprice1,c.outprice2,b.isoutside,c.memo
 update @tmp set total = round((mount * price),2) 
 insert into @tmp(gno,custno,comp,nick,mount,price,total) 
 	select '1',custno,comp,nick,SUM(mount),SUM(price),SUM(total) 
-	from @tmp 
+	from @tmp where whatcar='外車'
+	group by custno,comp,nick 
+insert into @tmp(gno,custno,comp,nick,mount,price,total) 
+	select '2',custno,comp,nick,SUM(mount),SUM(price),SUM(total) 
+	from @tmp where whatcar='公司車'
+	group by custno,comp,nick 
+insert into @tmp(gno,custno,comp,nick,mount,price,total) 
+	select '3',custno,comp,nick,SUM(mount),SUM(price),SUM(total) 
+	from @tmp where gno = '0'
 	group by custno,comp,nick 
 update @tmp set type = (case when @t_whatprice = 0 then '收' when @t_whatprice = 1 then '發' end) 
 select gno,datea,type,whatcar,comp,nick,
@@ -264,12 +306,16 @@ declare @t_btrandate nvarchar(10)
 declare @t_etrandate nvarchar(10)
 declare @t_bcustno nvarchar(20)
 declare @t_ecustno nvarchar(20)
+declare @t_baddrno nvarchar(50)
+declare @t_eaddrno nvarchar(50)
 declare @t_whatprice int
 set @t_accy = '[1]'
 set @t_btrandate = case when '#non'=[4] then '' else [4] end
 set @t_etrandate = case when '#non'=[5] then CHAR(255) else [5] end
 set @t_bcustno = case when '#non'=[8] then '' else [8] end
 set @t_ecustno = case when '#non'=[9] then CHAR(255) else [9] end
+set @t_baddrno = case when '#non'=[10] then '' else [10] end
+set @t_eaddrno = case when '#non'=[11] then CHAR(255) else [11] end
 set @t_whatprice = case when '收' = [13] then '0' else '1' end ---收為0 發為1
 declare @datetmp table(
 	gno nvarchar(1),
@@ -306,6 +352,14 @@ declare @bdate_before nvarchar(10)
 declare @custno nvarchar(35)
 declare @addrno nvarchar(200)
 declare @bdate nvarchar(10)
+declare @bdate_tmp nvarchar(10)
+declare @year_tmp nvarchar(10)
+declare @mon_tmp nvarchar(10)
+declare @day_tmp nvarchar(10)
+set @bdate_tmp = ''
+set @year_tmp = ''
+set @mon_tmp = ''
+set @day_tmp = ''
 declare cursor_table cursor for
 	select idno,custno,addrno,bdate  from @datetmp
 open cursor_table
@@ -319,7 +373,28 @@ begin
 		update @datetmp set edate = '999/12/31' where idno = @idno
 	else
 	begin
-		update @datetmp set edate = (select bdate from @datetmp where (custno = @custno) and (addrno = @addrno) and (idno = @idno+1)) where idno = @idno
+		set @bdate_tmp = (select bdate from @datetmp where (custno = @custno) and (addrno = @addrno) and (idno = @idno+1))
+		set @year_tmp = left(@bdate_tmp,3)
+		set @mon_tmp = substring(@bdate_tmp,5,2)
+		set @day_tmp = right(@bdate_tmp,2)
+		if(cast(@day_tmp as int) <=1)
+		begin
+			if(cast(@mon_tmp as int) = '01')
+			begin
+				set @year_tmp = RIGHT(REPLICATE('0', 3) + CAST( (cast(@year_tmp as int) -1) as NVARCHAR), 3)
+				set @mon_tmp = '12'
+				set @day_tmp = '31'
+			end
+			else
+			begin
+				set @mon_tmp = RIGHT(REPLICATE('0', 2) + CAST( (cast(@mon_tmp as int) -1) as NVARCHAR), 2)
+				set @day_tmp = '31'
+			end
+		end
+		else
+			set @day_tmp = RIGHT(REPLICATE('0', 2) + CAST( (cast(@day_tmp as int) -1) as NVARCHAR), 2)
+		set @bdate_tmp = @year_tmp + '/' + @mon_tmp + '/' + @day_tmp
+		update @datetmp set edate = @bdate_tmp where idno = @idno
 	end
 	fetch next from cursor_table
 	into @idno,@custno,@addrno,@bdate
@@ -327,27 +402,25 @@ end
 close cursor_table
 deallocate cursor_table
 insert into @tmp
-	select '','',
-		case when e.isoutside = 1 then '外車' else '公司車' end,b.custno,b.comp,b.nick,
-			case when @t_whatprice = 0 then sum(isnull(c.mount,0)) when @t_whatprice = 1 then sum(isnull(c.mount2,0)) end,
-			case when @t_whatprice = 0 then
-				case when e.isoutside = 1 then d.inprice2 else d.inprice1 end
-			when @t_whatprice = 1 then
-				case when e.isoutside = 1 then d.outprice2 else d.outprice1 end
-			end,''
-	from trancommis a
-	left join trancommi b on a.noa = b.noa
-	left join view_trans[1] c on (b.custno = c.custno) and (b.addrno = c.straddrno)
-	left join @datetmp d on (b.custno = d.custno) and (b.addrno = d.addrno) and (c.trandate between d.bdate and d.edate)
-	left join calctypes e on c.calctype = cast(e.noa as nvarchar) +  cast(e.noq as nvarchar)
-	where (b.custno between @t_bcustno and @t_ecustno) and 
-			 (d.bdate >= @t_btrandate and d.bdate <= @t_etrandate) and
-			 (c.trandate between @t_btrandate and @t_etrandate)
-	group by c.trandate,b.custno,b.comp,b.nick,c.calctype,d.inprice1,d.inprice2,d.outprice1,d.outprice2,e.isoutside
+	select '','', 
+	case when b.isoutside = 1 then '外車' else '公司車' end,a.custno,a.comp,a.nick, 
+	case when @t_whatprice = 0 then sum(isnull(a.inmount,0)) when @t_whatprice = 1 then sum(isnull(a.outmount,0)) end, 
+	case when @t_whatprice = 0 then 
+	case when b.isoutside = 1 then c.inprice2 else c.inprice1 end 
+	when @t_whatprice = 1 then 
+	case when b.isoutside = 1 then c.outprice2 else c.outprice1 end
+	end,''
+	from view_trans[1] a
+	left join calctypes b on a.calctype = cast(b.noa as nvarchar) +  cast(b.noq as nvarchar)
+	left join @datetmp c on (a.custno = c.custno) and (a.straddrno = c.addrno) and (a.trandate between c.bdate and c.edate)
+	where (c.custno between @t_bcustno and @t_ecustno) 
+			--and (c.bdate >= @t_btrandate and c.bdate <= @t_etrandate) 
+			and (a.trandate between @t_btrandate and @t_etrandate) 
+			and (c.addrno between @t_baddrno and @t_eaddrno)
+		group by a.trandate,a.custno,a.comp,a.nick,a.calctype,c.inprice1,c.inprice2,c.outprice1,c.outprice2,b.isoutside
 update @tmp set total = round((mount * price),2)
-
 insert into @tmp
-select '0' gno,type,whatcar,custno,comp,nick,SUM(mount),SUM(price),SUM(total)
+	select '0' gno,type,whatcar,custno,comp,nick,SUM(mount),SUM(price),SUM(total)
 from @tmp
 group by type,whatcar,custno,comp,nick
 insert into @tmp(gno,whatcar,custno,mount,price,total)
