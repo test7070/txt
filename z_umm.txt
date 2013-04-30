@@ -110,21 +110,23 @@ set @t_esmon = case when '#non' = [14] then '' else [14] end
 set @t_xpart = case when '#non' = [2] then '' else [2] end
 --********************************************************************************
 declare @tmp table( 
-gno nvarchar(1), 
-custno nvarchar(20), 
-ccomp nvarchar(50), 
-cno nvarchar(20), 
-acomp nvarchar(50), 
-money float, 
-total float, 
-payed float, 
-unpay float,
-partno nvarchar(20),
-part nvarchar(50) 
+	gno nvarchar(1), 
+	custno nvarchar(20), 
+	ccomp nvarchar(50), 
+	cno nvarchar(20), 
+	acomp nvarchar(50), 
+	money float, 
+	total float, 
+	payed float, 
+	unpay float,
+	partno nvarchar(20),
+	part nvarchar(50),
+	opay float
 ) 
 
 insert into @tmp
-select '0'gno,a.custno,b.nick ccomp,a.cno,c.nick acomp,money,total,payed,unpay,partno,part
+select '0'gno,a.custno,b.nick ccomp,a.cno,c.nick acomp,money,total,payed,unpay,partno,part,
+isnull((select topay from (select custno,SUM(opay-unopay) topay from umm where custno=a.custno and left(datea,6) between @t_bsmon and @t_esmon group by custno)tmp),0)
 from(
 	select custno,cno,SUM(isnull(money,0))money,SUM(isnull(total,0))total,SUM(isnull(payed,0))payed,SUM(isnull(unpay,0))unpay,partno,part from (
 		--trd
@@ -150,14 +152,37 @@ left join cust b on a.custno=b.noa left join acomp c on a.cno=c.noa
 where (a.cno between @t_bscno and @t_escno) and (a.custno between @t_bcustno and @t_ecustno)and(len(@t_xpart) = 0 or @t_xpart = part)
 order by custno
 
+declare @custno nvarchar(50) 
+declare @t_custno nvarchar(50)
+set @t_custno='XXXXXZZZZZZ'
+
+declare cursor_table cursor for 
+select custno from @tmp 
+open cursor_table 
+fetch next from cursor_table 
+into @custno
+while(@@FETCH_STATUS <> -1) 
+begin 	
+	if(@t_custno=@custno)
+		update @tmp set opay = null where current of cursor_table
+	
+	set @t_custno=@custno
+
+	fetch next from cursor_table 
+	into @custno
+end 
+close cursor_table 
+deallocate cursor_table 
+
 insert into @tmp
-select '1'gno,'','','','',sum(money),sum(total),sum(payed),sum(unpay),'','' from @tmp
+select '1'gno,'','','','',sum(money),sum(total),sum(payed),sum(unpay),'','',SUM(opay) from @tmp
 
 select gno,custno,replace(ccomp,' ','')+'('+replace(custno,' ','')+')' ccomp,cno,acomp acomp 
 ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money
 ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
 ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,payed),1)),4,12)) payed
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay,
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,opay),1)),4,12)) opay,
 partno,part from @tmp;
 
 ----------------------------------------------------------------------------------
@@ -400,6 +425,28 @@ into @noa,@noq,@opay,@unopay
 end
 close cursor_table
 deallocate cursor_table
+
+declare @t_opay float 
+set @t_opay=0
+
+declare cursor_table cursor for 
+select noa,opay,unopay from @tmp 
+open cursor_table 
+fetch next from cursor_table 
+into @noa,@opay,@unopay 
+while(@@FETCH_STATUS <> -1) 
+begin 
+	set @t_opay=@t_opay+@opay-@unopay
+	
+	update @tmp 
+	set textopay = @t_opay  where current of cursor_table
+
+	fetch next from cursor_table 
+	into @noa,@opay,@unopay 
+end 
+close cursor_table 
+deallocate cursor_table 
+
 
 insert into @tmp 
 select '1' gno,'','',CHAR(255),'','',custno,'',SUM(money),SUM(chgs),SUM(paysales),'','','',0, 
