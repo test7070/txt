@@ -164,70 +164,146 @@ z_tire3:--z_tire3
 	------------------------------------------------------------------------------------------------------------------
 	declare @tmp table(
 		gno nvarchar(3),
+		n nvarchar(3),
+		p nvarchar(3),
+		noa nvarchar(30),
+		noq nvarchar(20),
 		productno nvarchar(20),
 		product  nvarchar(40),
 		datea nvarchar(10),
+		mon nvarchar(20),
 		typea nvarchar(10),
 		memo nvarchar(20),
 		price float,
 		mount float,
+		totmount float,
 		[money] float,
 		inmoney float,
 		outmoney float
 	)
 	insert  into  @tmp
-	select  '0',a.productno,b.namea,'','A','期初',0,SUM(a.mount),SUM(a.[money]),0,0
-	from(
-		select a.productno,sum(isnull(a.mount,0)) mount,sum(isnull(a.[money],0)) [money]
-		from fixins a
-		left join fixin b on a.noa=b.noa
-		where len(ISNULL(a.tireno,''))=0 
-		and (b.mon<@t_bmon)
-		and (a.productno between @t_bproductno and @t_eproductno)
-		group  by a.productno
-		union  all
-		select a.productno,sum(-isnull(a.mount,0)) mount,sum(-isnull(a.[money],0)) [money]
-		from fixouts a
-		left join fixout b on a.noa=b.noa
-		where len(ISNULL(a.tireno,''))=0 
-		and (b.mon<@t_bmon)
-		and (a.productno between @t_bproductno and @t_eproductno)
-		group  by a.productno)  a
-	left join fixucc b  on  a.productno=b.noa
-	group  by  a.productno,b.namea
-	
-	insert  into  @tmp
-	select '0',a.productno,a.product,b.indate,'A','進貨',a.price,a.mount,a.[money],a.[money],0
+	select '0','','0.2',b.noa,a.noq,a.productno,a.product,b.indate,b.mon,'B','進貨',a.price,a.mount,0,a.[money],a.[money],0
 	from fixins a
 	left join fixin b on a.noa=b.noa
 	where len(ISNULL(a.tireno,''))=0 
-	and (b.mon between @t_bmon and @t_emon)
+	and (b.mon <= @t_emon)
 	and (a.productno between @t_bproductno and @t_eproductno)
 	
 	insert  into  @tmp
-	select '0',a.productno,a.product,b.outdate,'B','領料',a.price,a.mount,a.[money],0,a.[money]
+	select '0','','0.2',b.noa,a.noq,a.productno,a.product,b.outdate,b.mon,'C','領料',a.price,a.mount,0,a.[money],0,a.[money]
 	from fixouts a
 	left join fixout b on a.noa=b.noa
 	where len(ISNULL(a.tireno,''))=0 
-	and (b.mon between @t_bmon and @t_emon)
+	and (b.mon <= @t_emon)
 	and (a.productno between @t_bproductno and @t_eproductno)
-	---------------------------------------------------------------------------------
-	insert  into  @tmp
-	select  '1',a.productno,b.namea,'','','小計 ',0
-	,sum(case when a.typea='A' then mount  else -mount  end)
-	,sum(case when a.typea='A' then a.[money] else -a.[money]  end)
-	,SUM(ISNULL(inmoney,0))
-	,SUM(ISNULL(outmoney,0))
-	from  @tmp a
-	left  join fixucc  b  on  a.productno=b.noa
-	where  gno='0'
-	group  by  a.productno,b.namea
 	
-	insert  into  @tmp
-	select  '2',CHAR(255),'','','','合計',0,SUM(ISNULL(mount,0)),SUM(ISNULL([money],0)),SUM(ISNULL(inmoney,0)),SUM(ISNULL(outmoney,0))
-	from @tmp where gno='1'
-	update @tmp set price=null where price=0
+	insert into @tmp
+	select '0','','0.2',noa,'001',noa,namea,isnull(begindate,''),LEFT(begindate,6),'D','期初',inprice,isnull(beginmount,0),0,beginmoney,0,0
+	from fixucc
+	where len(beginmoney) > 0  and len(begindate)>0 and
+	(noa between @t_bproductno and @t_eproductno)
 	
+	--------------------------------------------------------------------------
+	declare @productno nvarchar(20)
+	declare @product nvarchar(60)
+	declare @noa nvarchar(30)
+	declare @noq nvarchar(20)
+	declare @mount float
+	declare @totmount float
+	declare @datea nvarchar(20)
+	declare @typea nvarchar(30)
+	declare @memo nvarchar(50)
+	declare @price float
+	declare @money float
+	declare @inmoney float
+	declare @outmoney float
+    declare @mon nvarchar(20)
+    declare @n nvarchar(3)
+	-----------------------------------------------------------------------------
+	declare @bmount float
+	declare cursor_table cursor for
+	select productno from @tmp group by productno
+	open cursor_table
+	fetch next from cursor_table
+	into @productno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @totmount = 0 
+		set @bmount = 0
+		declare cursor_table2 cursor for
+		select noa,noq,product,typea,datea,mon,isnull(mount,0) from @tmp where productno=@productno  order by productno,datea,typea,noa,noq
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa,@noq,@product,@typea,@datea,@mon,@mount
+		while(@@FETCH_STATUS <> -1)
+		begin
+			
+			if(@typea='D')
+				set @totmount = @mount
+			else
+			begin
+				set @totmount = @totmount + case when @typea='C' then -@mount else @mount end
+			end
+			update @tmp set totmount=@totmount where noa=@noa and noq=@noq
+			if(@mon < @t_bmon)
+			begin
+				set @bmount=@totmount
+			end
+			fetch next from cursor_table2
+			into @noa,@noq,@product,@typea,@datea,@mon,@mount
+		end
+		close cursor_table2
+		deallocate cursor_table2	
+		insert into @tmp(gno,p,typea,productno,product,noa,memo,totmount)values('1','0.3','',@productno,@product,'庫存量','小計',isnull(@totmount,0))
+
+		insert into @tmp(gno,p,typea,productno,product,noa,memo,totmount)values('0','0.1','',@productno,@product,'前期存量','前期',isnull(@bmount,0))
+
+		fetch next from cursor_table
+		into @productno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	delete @tmp where mon < @t_bmon
+	-------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select productno,max(price),sum([money]),sum(inmoney),sum(outmoney) from @tmp group by productno
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@price,@money,@inmoney,@outmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set [money] = totmount *@price,inmoney = @inmoney,outmoney = @outmoney,price = @price
+		where productno = @productno and gno = 1
+
+		fetch next from cursor_table
+		into @productno,@price,@money,@inmoney,@outmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------
+	declare cursor_table cursor for
+	select productno,count(*) from @tmp group by productno
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@n
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set n = @n 
+		where productno = @productno 
+		fetch next from cursor_table
+		into @productno,@n
+	end
+	close cursor_table
+	deallocate cursor_table
+	delete @tmp where n = 2 and totmount = 0
+	
+-----------------------------------------------------------------------------------------
+	insert into @tmp
+	select '2','','0.4','','',CHAR(255),CHAR(255),CHAR(255),CHAR(255),'','合計',0,0,0,0,SUM(inmoney),SUM(outmoney)
+	from @tmp 
+	where gno = 1
+	update @tmp set price=null where price=0 
 	if @t_bmon=@t_emon
 		set @cmd = '帳款月份：'+@t_bmon
 	else
@@ -238,12 +314,13 @@ z_tire3:--z_tire3
 	,product pn
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price),1)),4,12)) cprice
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) cmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,totmount),1)),4,12)) totmount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) cmoney
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[inmoney]),1)),4,12)) cm1
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[outmoney]),1)),4,12)) cm2
-	from  @tmp order by productno,gno,datea,typea;
-	
-	
+	from  @tmp 
+	order by productno,p,datea,typea,noa,noq;
+	------------------------------------------------------------------------------------------
 z_tire2:--z_tire2
 	declare @cmd nvarchar(max)
 	declare @t_accy nvarchar(10)

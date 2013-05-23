@@ -68,7 +68,7 @@
 	" left join chk2 b on a.noa=b.noa"+
 	" left join acc"+@t_accy+" c on b.accl=c.acc1 "+
 	" left join gqb d on a.checkno=d.gqbno"+
-	" where isnull(a.sel,0)=1 and ISNULL(d.enda,'')!='Y' "+
+	" where isnull(a.sel,0)=1 and (case when d.enda='Y' then d.enda else 'N' end)!='Y' "+
 	" and (ISNULL(d.indate,'') <= @t_eydate)"+
 	" and (len(@t_acc1)=0 or @t_acc1=isnull(b.accl,''))"
 	insert into @tmp2
@@ -76,6 +76,7 @@
 	,@t_eydate=@t_eydate,@t_acc1=@t_acc1
 	
 	declare @tmp table(
+		sel int,
 		gno nvarchar(10),
 		pno nvarchar(10),
 		noa nvarchar(20),
@@ -89,7 +90,7 @@
 	)
 	
 	insert into @tmp
-	select '0','1','',acc1,acc2,'','期初',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),0
+	select null,'0','1','',acc1,acc2,'','期初',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),0
 	from(
 		select acc1,acc2,dmoney,cmoney
 		from @tmp1 
@@ -101,20 +102,25 @@
 	group by acc1,acc2
 	
 	insert into @tmp
-	select '0','2',accno,acc1,acc2,datea,memo,dmoney,cmoney,0
+	select null,'0','2',accno,acc1,acc2,datea,memo,dmoney,cmoney,0
 	from @tmp1
 	where datea >= right(@t_bydate,5)
 	
 	insert into @tmp
-	select '0','3',gqbno,acc1,acc2,right(indate,5),'收票 '+memo,[money],0,0
+	select null,'0','3',gqbno,acc1,acc2,right(indate,5),'收票 '+memo,[money],0,0
 	from @tmp2
 	where indate >=@t_bydate
 	-------------------------------------------------------------------------------
+	insert into @tmp
+	select ROW_NUMBER()over(order by acc1,datea,pno),gno,pno,noa,acc1,acc2,datea,memo,dmoney,cmoney,total from @tmp
+	delete @tmp where sel is null
+	
 	declare @acc1 nvarchar(20)
 	declare @noa nvarchar(20)
 	declare @dmoney float
 	declare @cmoney float
 	declare @total float
+	declare @sel int
 	
 	declare cursor_table cursor for
 	select acc1 from @tmp group by acc1
@@ -125,17 +131,17 @@
 	begin
 		set @total = 0
 		declare cursor_table2 cursor for
-		select noa,dmoney,cmoney from @tmp where acc1=@acc1 order by acc1,datea,pno
+		select sel,noa,dmoney,cmoney from @tmp where acc1=@acc1 order by acc1,datea,pno
 		open cursor_table2
 		fetch next from cursor_table2
-		into @noa,@dmoney,@cmoney
+		into @sel,@noa,@dmoney,@cmoney
 		while(@@FETCH_STATUS <> -1)
 		begin
 			set @total = @total + @dmoney - @cmoney
-			update @tmp set total=@total where acc1=@acc1 and noa=@noa
+			update @tmp set total=@total where sel=@sel
 			
 			fetch next from cursor_table2
-			into @noa,@dmoney,@cmoney
+			into @sel,@noa,@dmoney,@cmoney
 		end
 		close cursor_table2
 		deallocate cursor_table2
@@ -147,7 +153,7 @@
 	deallocate cursor_table
 	
 	insert into @tmp
-	select '1','3','',acc1,acc2,char(255),'',0,0,0 from @tmp group by acc1,acc2
+	select null,'1','3','',acc1,acc2,char(255),'',0,0,0 from @tmp group by acc1,acc2
 	select * 
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(dmoney,0)),1)),4,12)) dm
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(cmoney,0)),1)),4,12)) cm
@@ -248,7 +254,7 @@ set @cmd =
 " , case when typea='1' then 1 else 0 end pcount1"+ 
 " , case when typea='2' then 1 else 0 end pcount2,memo"+ 
 " from gqb a"+ 
-" where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status=enda) "+ 
+" where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end) "+ 
 " and (isnull(datea,'') between @t_bdate and @t_edate) "+ 
 " and (isnull(indate,'') between @t_bindate and @t_eindate)"+ 
 " and (isnull(bankno,'') between @t_bbankno and @t_ebankno)"+ 
@@ -385,7 +391,7 @@ z_gqb3:--z_gqb3
 	select '0' gno,noa,gqbno,datea,udate,indate,tdate,typea
 	,account,bankno,bank,tbankno,tbank,compno,comp,memo,[money],1 pcount
 	from gqb
-	where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status= enda) 
+	where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status= case when enda='Y' then enda else 'N' end) 
 		and (isnull(datea,'') between @t_bdate and @t_edate) 
 		and (isnull(indate,'') between @t_bindate and @t_eindate)
 		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
@@ -515,7 +521,7 @@ z_gqb5:--z_gqb5
 		,case when typea ='1' then 1 else 0 end pcount1
 		,case when typea ='3' then 1 else 0 end pcount2
 	from gqb
-	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=isnull(enda,0))
+	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)
 	      and (isnull(datea,'') between @t_bdate and @t_edate) 
 		and (isnull(indate,'') between @t_bindate and @t_eindate)
 		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
@@ -651,7 +657,7 @@ select '0' gno,a.noa,a.gqbno,a.datea,a.udate,a.indate,a.tdate,a.typea,a.account,
 ,case when typea ='4' then 1 else 0 end pcount2 
 from gqb a
 left join view_cust_tgg b on a.compno = b.noa
-where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) and (len(@t_status)=0 or @t_status=isnull(a.enda,0)) and 
+where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) and 
 (isnull(a.datea,0) between @t_bdate and @t_edate) and (isnull(a.indate,0) between @t_bindate and @t_eindate) and
  (isnull(a.bankno,0) between @t_bbankno and @t_ebankno) and 
 (a.typea ='2' or a.typea ='4') 
@@ -762,15 +768,28 @@ z_gqb8:--z_gqb8開票明細表
 			memo nvarchar(200)
 	)
 	insert into @tmp
-	select '0' gno,RANK()over(order by gqbno ) as n,noa,gqbno,bank,account,indate,money,isnull(tcomp,'')+space(1)+isnull(memo,'')
+	select '0' gno,RANK()over(order by gqbno ) as n,noa,gqbno,bank,account,indate,money,
+	case when LEN(left(memo,CHARINDEX(' ',memo)))=0 and len(SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))) = 0 then tcomp 
+		 when len(isnull(tcomp,'')) = 0 then memo
+		 when LEN(left(memo,CHARINDEX(' ',memo)))>0 or len(SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))) > 0 then 
+			(case when tcomp=left(memo,CHARINDEX(' ',memo)) and tcomp = SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp
+			      when len(left(memo,CHARINDEX(' ',memo))) = 0 then (case when tcomp = SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp else tcomp+SPACE(1)+SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))end)
+			      when len(SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))) = 0 then (case when tcomp=left(memo,CHARINDEX(' ',memo)) then tcomp else tcomp+SPACE(1)+left(memo,CHARINDEX(' ',memo)) end) 
+				  when tcomp = left(memo,CHARINDEX(' ',memo)) and tcomp != SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp + SPACE(1) + SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))
+				  when tcomp != left(memo,CHARINDEX(' ',memo)) and tcomp = SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp + SPACE(1) + left(memo,CHARINDEX(' ',memo))
+			 else (tcomp+SPACE(1)+left(memo,CHARINDEX(' ',memo))+SPACE(1)+SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)))
+			      end
+			 )
+			 end
+		  
 	from gqb
-	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=isnull(enda,0)) 
+	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end) 
 		and (isnull(datea,'') between @t_bdate and @t_edate) 
 		and (isnull(indate,'') between @t_bindate and @t_eindate)
 		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
 		and (ISNULL(gqbno,'') between @t_bgqbno and @t_egqbno)
 		and (typea = '2' or typea='4')
-	
+-------------------------------------------------------------------------------------
 	insert into @tmp
 	select '1' gno,'','','','','','',sum(moneys),''
 	from @tmp
@@ -778,7 +797,7 @@ z_gqb8:--z_gqb8開票明細表
 	if len(@t_bdate)>0
 		set @cmd='開票日期：'+@t_bdate+'～'+@t_edate
 	else if len(@t_bindate)>0
-		set @cmd='到期日期：'+@t_bdate+'～'+@t_edate
+		set @cmd='到期日期：'+@t_bindate+'～'+@t_eindate
 	else
 		set @cmd=''
 	select @cmd titlea,gno,n,noa,gqbno,bank,account,indate,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) moneys,memo
