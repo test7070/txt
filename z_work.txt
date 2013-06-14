@@ -1,33 +1,306 @@
 z_work1:--z_work1
-declare @t_btggno nvarchar(20)
-declare @t_etggno nvarchar(20)
-set @t_btggno = case when '#non' = [5] then '' else [5] end
-set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
 declare @tmp table(
 	gno nvarchar(1),
-	tggno nvarchar(30),
-	comp nvarchar(90),
+	datea nvarchar(10),
+	mechno nvarchar(30),
+	mechs nvarchar(50),
+	activation float,
+	borntime float,
+	inmount float,
+	errmount float,
+	chgmo float,
+	fault float,
+	delay float,
+	waittime float,
+	waitfedtime float,
+	lacksss float,
+	workmount float
+)
+insert into @tmp(gno,datea,mechno,mechs,borntime,inmount,errmount,chgmo,
+					   fault,delay,waittime,waitfedtime,lacksss,workmount)
+	select
+		'0',b.datea,a.noa,a.mech,isnull(c.borntime,0),isnull(b.inmount,0),isnull(b.errmount,0),
+		isnull(c.chgtime,0),isnull(c.faulttime,0),isnull(c.delaytime,0),isnull(c.waittime,0),
+		isnull(c.waitfedtime,0),isnull(c.lacksss,0),isnull(c.hours,0)
+	from mech a 
+	left join (
+		select
+			b.datea,b.mechno,b.mech,sum(a.mount) inmount,sum(a.errmount) errmount
+		from workbs[1] a
+		left join workb[1] b on a.noa = b.noa
+		group by b.datea,b.mechno,b.mech
+	) b on (a.noa = b.mechno)
+	left join (
+		select b.datea,a.mechno,sum(a.borntime) borntime,sum(a.chgtime) chgtime,sum(a.faulttime) faulttime,
+				 sum(a.delaytime) delaytime,sum(a.waittime) waittime,sum(a.waitfedtime) waitfedtime,
+				 sum(a.lacksss) lacksss,sum(c.hours) hours
+		from cuws[1] a
+		left join cuw[1] b on a.noa = b.noa
+		left join cuwt[1] c on (b.noa = c.noa) and (a.mechno = c.mechno) 
+		group by b.datea,a.mechno
+	) c on (a.noa = c.mechno) and (c.datea = b.datea)
+	where b.datea between @t_bdate and @t_edate
+	order by b.datea
+update @tmp set activation = case when borntime > 0 then (borntime-(chgmo+fault+delay+waittime+waitfedtime+lacksss))/borntime
+										 else 0 end
+insert into @tmp
+	select '1',datea,'','',sum(activation),sum(borntime),sum(inmount),sum(errmount),
+			 sum(chgmo),sum(fault),sum(delay),sum(waittime),sum(waitfedtime),sum(lacksss),
+			 sum(workmount)
+	from @tmp
+	group by datea
+select
+	gno,datea,mechno,mechs,activation,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,borntime),1)),4,12)) borntime,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),4,12)) errmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgmo),1)),4,12)) chgmo,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,fault),1)),4,12)) fault,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,delay),1)),4,12)) delay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,waittime),1)),4,12)) waittime,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,waitfedtime),1)),4,12)) waitfedtime,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lacksss),1)),4,12)) lacksss,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,workmount),1)),4,12)) workmount
+from @tmp order by datea,gno,mechno;
+--------------------------------------------------------------------------------------------------------
+z_work2:--z_work2
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstationno = case when '#non' = [7] then '' else [7] end
+set @t_estationno = case when '#non' = [8] then CHAR(255) else [8] end
+declare @tmp table(
+	gno nvarchar(1),
+	stationno nvarchar(10),
+	stations nvarchar(90),
+	datea nvarchar(10),
+	noa nvarchar(30),
 	productno nvarchar(30),
 	products nvarchar(90),
-	workmount float,
-	workcmount float,
-	total float
+	mount float,
+	unit nvarchar(10),
+	hours float,
+	diffdate int, ---實際開工日與應完工日的差
+	dayhtotal float, ---日小計
+	dayhs float, ---標準日工時
+	difftime float --負荷差異
+)
+insert into @tmp
+select
+	'0',a.stationno,a.station,a.datea,a.noa,a.productno,a.product,a.mount,a.unit,a.hours,
+	DATEDIFF(day,CONVERT(datetime,(cast((left(a.cuadate,3)+1911) as nvarchar)+right(a.cuadate,6))),
+				CONVERT(datetime,(cast((left(a.uindate,3)+1911) as nvarchar)+right(a.uindate,6)))) diffdate,
+	0,b.hours,0
+from work[1] a
+left join station b on a.stationno = b.noa
+where (a.datea between @t_bdate and @t_edate) and (a.station between @t_bstationno and @t_estationno)
+update @tmp set dayhtotal = ceiling((hours/diffdate)*100)/100 where diffdate != 0
+update @tmp set difftime = dayhs-dayhtotal
+select * from @tmp order by stationno,stations,datea,noa;
+--------------------------------------------------------------------------------------------------------
+z_work3:--z_work3
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	datea nvarchar(10),
+	station nvarchar(90),
+	productno nvarchar(30),
+	products nvarchar(90),
+	unit nvarchar(12),
+	amount float,
+	ainmount float,
+	p_inmount float,
+	armount float,
+	p_rmount float,
+	cuadate nvarchar(10),
+	workdate nvarchar(10),
+	uindate nvarchar(10),
+	enddate nvarchar(10),
+	ordeno nvarchar(30)
+)
+insert into @tmp
+select
+	'0',a.noa,a.datea,a.station,a.productno,a.product,a.unit,a.mount,
+	a.inmount,case when a.mount >0 then round((a.inmount/a.mount)*100,2) else 0 end,
+	a.rmount,case when a.mount >0 then round((a.rmount/a.mount)*100,2) else 0 end,
+	a.cuadate,a.workdate,a.uindate,a.enddate,a.ordeno
+from work[1] a
+where (len(@t_noa) = 0 or a.noa = @t_noa) and (a.datea between @t_bdate and @t_edate)
+select * from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_work4:--z_work4
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+declare @tmp table(
+	gno nvarchar(1),
+	bnoa nvarchar(30),
+	bdatea nvarchar(10),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	bprocess nvarchar(50),
+	bmount float,
+	bunit nvarchar(12),
+	anoq nvarchar(3),
+	aproduct nvarchar(90),
+	amount float,
+	agmount float,
+	acuadate nvarchar(10),
+	aworkdate nvarchar(10),
+	auindate nvarchar(10),
+	aenddate nvarchar(10)
+)
+insert into @tmp
+select 
+	'0',b.noa,b.datea,b.productno,b.product,b.process,b.mount,b.unit,
+	a.noq,a.product,a.mount,a.gmount,b.cuadate,b.workdate,b.uindate,b.enddate
+from works[1] a
+left join work[1] b on a.noa = b.noa
+where (len(@t_noa) = 0 or b.noa = @t_noa) and (b.datea between @t_bdate and @t_edate)
+order by b.process,a.noq,b.datea,b.product
+select * from @tmp;
+------------------------------------------------------------------------------------------------------
+z_work5:--z_work5
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstoreno nvarchar(20)
+declare @t_estoreno nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstoreno = case when '#non' = [9] then '' else [9] end
+set @t_estoreno = case when '#non' = [10] then CHAR(255) else [10] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then CHAR(255) else [12] end
+declare @tmp table(
+		gno nvarchar(1),
+		n nvarchar(3),
+		noa nvarchar(20),
+		noq nvarchar(30),
+		datea nvarchar(20),
+		storeno nvarchar(30),
+		store nvarchar(40),
+		productno nvarchar(20),
+		product nvarchar(50),
+		unit nvarchar(20),
+		mount float,
+		weightb float,
+		born float,
+		bweight float
+)
+insert into @tmp
+select '0' gno,'0.1',a.noa,b.noq,a.datea,a.storeno,a.store,b.productno,b.product,
+b.unit,b.mount,b.weight,b.born,b.bweight
+from workb[1] a
+left join workbs[1] b on a.noa = b.noa
+where (a.datea between @t_bdate and @t_edate) and
+(a.storeno between @t_bstoreno and @t_estoreno) and
+(b.productno between @t_bproductno and @t_eproductno)
+
+insert into @tmp
+select '1' gno,'0.2','','',datea,'','',productno,MAX(product),'',SUM(mount),SUM(weightb),SUM(born),SUM(bweight)
+from @tmp
+group by datea,productno
+
+
+insert into @tmp
+select '2' gno,'0.3','','',CHAR(255),'','',productno,MAX(product),'',SUM(mount),SUM(weightb),SUM(born),SUM(bweight)
+from @tmp
+where gno = 1
+group by productno
+
+select gno,n,noa,noq,datea,storeno,store,productno,product,unit,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,weightb),1)),4,12)) weightb,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,born),1)),4,12)) born,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bweight),1)),4,12)) bweight
+from @tmp
+order by datea,n;
+--------------------------------------------------------------------------------------------------------
+z_work6:--z_work6
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then char(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+declare @tmp table(
+		gno nvarchar(1),
+		productno nvarchar(20),
+		product nvarchar(50),
+		mount float,
+		unit nvarchar(20),
+		inmount float,
+		rmount float,
+		errmount float
+)
+insert into @tmp
+select '0' gno,a.productno,MAX(a.product),SUM(a.mount),MAX(a.unit),SUM(a.inmount),
+		SUM(a.rmount),SUM(a.errmount)
+from work[1] a
+where (a.datea between @t_bdate and @t_edate) and 
+(a.productno between @t_bproductno and @t_eproductno)
+group by a.productno
+
+select gno,productno,product,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,unit,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,rmount),1)),4,12)) rmount,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),4,12)) errmount
+from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_work7:--z_work7
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then char(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(35),
+	datea nvarchar(10),
+	stationno nvarchar(30),
+	stations nvarchar(50),
+	productno nvarchar(30),
+	products nvarchar(90),
+	mount float,
+	unit nvarchar(12),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	ordeno nvarchar(30),
+	nick nvarchar(50)
 )
 insert into @tmp
 	select
-		'0',b.tggno,b.comp,a.productno,a.product,isnull(sum(a.mount),0),isnull(sum(c.mount),0),0
-	from works[1] a
-	left join work[1] b on a.noa = b.noa
-	left join (
-		select b.workno,b.productno,sum(a.mount) mount from workcs[1] a 
-		left join workc[1] b on a.noa = b.noa
-		group by b.workno,b.productno
-	) c on b.noa = c.workno
-	where b.tggno between @t_btggno and @t_etggno
-	group by b.tggno,b.comp,a.productno,a.product
-update @tmp set total = workmount-workcmount
-insert into @tmp(gno,tggno,comp,workmount,workcmount,total)
-	select '1',tggno,comp,sum(workmount),sum(workcmount),sum(total)
-	from @tmp
-	group by tggno,comp
-select * from @tmp;
+		'0',a.noa,a.datea,a.stationno,a.station,a.productno,a.product,a.mount,a.unit,a.cuadate,a.uindate,a.ordeno,c.nick
+	from work[1] a
+	left join orde[1] b on a.ordeno = b.noa
+	left join cust c on b.custno = c.noa
+	where (a.datea between @t_bdate and @t_edate) and (a.productno between @t_bproductno and @t_eproductno)
+select
+	gno,noa,datea,stationno,stations,productno,products,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+	unit,cuadate,uindate,ordeno,nick
+from @tmp;
