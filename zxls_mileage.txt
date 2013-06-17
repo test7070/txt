@@ -1,0 +1,161 @@
+zxls_mileage:--zxls_mileage	
+	SET QUOTED_IDENTIFIER OFF 
+	declare @cmd nvarchar(max) 
+	declare @a nvarchar(max)
+	declare @b nvarchar(max)
+	declare @c nvarchar(max)
+	declare @d nvarchar(max)
+	declare @e nvarchar(max)
+	declare @f nvarchar(max)
+	declare @g nvarchar(max)
+
+	declare @tmp table(
+		pno int,
+		noa nvarchar(20),
+		datea nvarchar(10),
+		fixadate nvarchar(10),
+		timea nvarchar(10),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		cmoney float,
+		cacc1 nvarchar(20),
+		cacc2 nvarchar(40),
+		memo nvarchar(max)
+	)
+	declare @tmps table(
+		pno int,
+		noa nvarchar(20),
+		noq nvarchar(10),
+		wtype nvarchar(10),
+		productno nvarchar(20),
+		product nvarchar(40),
+		mount float,
+		price float,
+		[money] float
+	)
+	declare @carno nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @miles float
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(20)
+	
+	declare @cacc1 nvarchar(20)
+	declare @cacc2 nvarchar(40)
+	declare @cmoney float
+	declare @mount float
+	
+	declare @price float
+	set @price = 2 --單價固定
+	
+	declare @tggno nvarchar(20)
+	declare @tgg nvarchar(40)
+	declare @nick nvarchar(20)
+	select @tggno = 'AA01',@tgg='',@nick=''
+	select @tgg=comp,@nick=nick from tgg where noa=@tggno
+	
+	declare @count int
+	set @count = 1
+	declare cursor_table cursor for
+	select a,b,c,d,e,f,g from ztmpxls order by cast(s as int)
+	open cursor_table
+	fetch next from cursor_table
+	into @a,@b,@c,@d,@e,@f,@g
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@a)>0)
+		begin
+			begin try
+				set @datea = right('000'+cast(YEAR(CAST(@b as date))-1911 as nvarchar),3)+'/'+right('00'+cast(Month(CAST(@b as date)) as nvarchar),2)+'/'+right('00'+cast(Day(CAST(@b as date)) as nvarchar),2)
+				select @carno=@a,@driverno='',@driver=''			
+				
+				select @cacc1='5850.02',@cacc2='',@mount=CAST(@e as float)
+				set @cmd="select @cacc2=acc2 from acc"+LEFT(@datea,3)+"_1 where acc1=@cacc1"
+				execute sp_executesql @cmd,N'@cacc1 nvarchar(20),@cacc2 nvarchar(40) output'
+				,@cacc1=@cacc1,@cacc2=@cacc2 output
+				set @cmoney=round(@mount*@price,0)
+				
+				set @cmd = "select @driverno=driverno,@driver=driver from view_trans"+left(@datea,3)+" where datea=@datea and carno=@carno"
+				execute sp_executesql @cmd,N'@driverno nvarchar(20) output,@driver nvarchar(20) output,@datea nvarchar(10),@carno nvarchar(20)'
+					,@driverno=@driverno output,@driver=@driver output,@datea=@datea,@carno=@carno
+				if(LEN(ISNULL(@driverno,''))=0)
+				begin
+					select @driverno=a.driverno,@driver=b.namea from car2 a 
+					left join driver b on a.driverno=b.noa
+					where a.carno=@carno
+				end
+				
+				insert into @tmp(pno,datea,fixadate,carno,driverno,driver,cmoney,cacc1,cacc2)
+				values(@count,@datea,@datea,@carno,@driverno,@driver,@cmoney,@cacc1,@cacc2)
+				insert into @tmps(pno,wtype,productno,product,mount,price,[money])
+				values(@count,'B','A23-001','輪胎服務-里程數',@mount,@price,@cmoney)
+				
+				
+			end try
+			begin catch
+				--select ERROR_LINE(), ERROR_MESSAGE()
+			end catch
+		end
+		
+		set @count = @count + 1
+		fetch next from cursor_table
+		into @a,@b,@c,@d,@e,@f,@g
+	end
+	close cursor_table
+	deallocate cursor_table
+	---------------------------------------------------------------------
+	declare @pno int
+	--declare @datea nvarchar(10)
+	declare @curMaxNoa nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @string nvarchar(max)
+	set @string = '0123456789ABCDEFGHIJKLMN'
+	declare @num int
+	
+	declare cursor_table cursor for
+	select pno,datea from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @pno,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		select @noa = MAX(noa) 
+		from(select noa from fixa where LEFT(noa,9)='DA'+replace(@datea,'/','')
+		union all
+		select noa from @tmp where LEFT(noa,9)='DA'+replace(@datea,'/','')) as a
+		
+		if(LEN(ISNULL(@noa,''))=0)
+		begin
+			set @noq='001'
+		end
+		else
+		begin
+			set @noq = right(@noa,3)
+			if(right(@noq,2)='99')
+			begin
+				set @noq = Substring(@string,Charindex(LEFT(@noq,1),@string)+1,1)+'00'
+			end
+			else
+			begin
+				set @noq = LEFT(@noq,1) + right('00'+CAST(CAST(right(@noq,2) as int)+1 as nvarchar),2)
+			end
+		end
+		set @noa = 'DA'+replace(@datea,'/','')+@noq
+		update @tmp set noa= @noa where pno=@pno
+		update @tmps set noa= @noa,noq='001' where pno=@pno
+
+		fetch next from cursor_table
+		into @pno,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	
+	----------------------------------------------------------------------
+	insert into fixa(noa,datea,fixadate,tggno,tgg,nick,carno,driverno,driver,mon,wmoney,cmoney,cacc1,cacc2,[money],tax,discount,total)
+	select noa,datea,fixadate,@tggno,@tgg,@nick,carno,driverno,driver,LEFT(datea,6)
+	,0,cmoney,cacc1,cacc2,cmoney,0,0,cmoney from @tmp
+	insert into fixas(noa,noq,wtype,productno,product,mount,price,[money])
+	select noa,noq,wtype,productno,product,mount,price,[money]
+	from @tmps;
