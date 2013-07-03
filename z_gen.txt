@@ -1160,3 +1160,121 @@ select gno,pno,product,unit,mon,datea,item,memo
 
 from @tmp order by pno,mon,gno,datea,item;
 --*********************************************************************************************
+z_gen6:--z_gen6
+declare @bordeno nvarchar(30) 
+declare @eordeno nvarchar(30) 
+
+set @bordeno = case when '#non'=[6] then '' else [6] end
+set @eordeno = case when '#non'=[7] then char(255) else [7] end
+
+declare @end table(
+	recno int identity(0,1),
+	gno nvarchar(50),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	productno nvarchar(50),
+	product nvarchar(50),
+	mount float,
+	total float,
+	inmount float,--入庫
+	cost float--領料成本
+)
+
+insert into @end
+select '0',ob.noa,ob.no2,ob.productno,ob.product,ob.mount,ob.total,0,0
+from view_orde102 oa left join view_ordes102 ob on oa.noa=ob.noa 
+where oa.noa between @bordeno and @eordeno
+
+--更新入庫數量
+update a
+set inmount=c.mount
+from @end a
+left JOIN view_work102 b on a.ordeno=b.ordeno and a.no2=b.no2 and a.productno=b.productno
+left JOIN (
+select workno,productno,SUM(mount)mount from(
+select workno,productno,mount from view_workbs102 union all select workno,productno,mount from view_workds102
+)tmp group by workno,productno
+)c on b.noa=c.workno and a.productno=c.productno
+
+-----------------------------------------------------------------------------------------------
+declare @t_productno nvarchar(50)
+declare @t_ordeno nvarchar(50) 
+declare @t_no2 nvarchar(50)
+declare @t_cost nvarchar(50)
+
+declare @tmp table(
+	ordeno nvarchar(50),
+	no2 nvarchar(20),
+	workno nvarchar(20),
+	productno nvarchar(50),
+	parent nvarchar(50)
+)
+
+declare cursor_table cursor for
+select ordeno,no2,productno from @end
+open cursor_table
+fetch next from cursor_table
+into @t_ordeno,@t_no2,@t_productno
+while(@@FETCH_STATUS <> -1)
+begin
+	
+	insert into @tmp
+	select ob.noa,ob.no2,w.noa,ob.productno,'root' 
+	from view_orde102 oa left join view_ordes102 ob on oa.noa=ob.noa 
+	left join view_work102 w on ob.noa=w.ordeno and ob.no2=w.no2 and ob.productno=w.productno
+	where oa.noa=@t_ordeno and ob.no2=@t_no2 and ob.productno=@t_productno
+	
+	insert into @tmp
+	select a.ordeno,a.no2,a.noa,b.productno,a.productno from view_work102 a left join view_works102 b on a.noa=b.noa
+	where a.ordeno=@t_ordeno
+	
+	
+	BEGIN TRY
+	--遞迴
+	WITH OrdersTable (ordeno,no2,workno,productno,noa,Level,sortCol,price) as
+	(
+	 Select a.ordeno,a.no2,a.workno,a.productno,a.parent,0, CONVERT(nvarchar(128),a.productno)
+	 ,(select cost from workpick102('999/99/99') fu where fu.workno=a.workno and fu.productno=a.productno)
+	 from @tmp a
+	 where parent='root'
+	 UNION ALL
+	 SELECT a.ordeno,a.no2,a.workno,a.productno,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128),OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno))
+	 ,(select cost+outmoney from workpick102('999/99/99') fu where fu.workno=a.workno and fu.productno=a.productno)--原料+委外金額
+	 FROM @tmp a, OrdersTable 
+	 WHERE a.parent=OrdersTable.productno 
+
+	)
+	
+	--Select ordeno,no2,workno,REPLICATE('       ',Level) + productno productno, Level, SortCol,price From OrdersTable order by sortCol
+	
+	Select  @t_cost=sum(price) From OrdersTable
+	
+	END TRY
+	BEGIN CATCH
+	 select @t_cost=null
+	END CATCH
+	
+	update @end
+	set cost=@t_cost
+	where ordeno=@t_ordeno and no2=@t_no2 and productno=@t_productno
+	
+	delete @tmp
+	
+
+	fetch next from cursor_table
+	into @t_ordeno,@t_no2,@t_productno
+end
+close cursor_table
+deallocate cursor_table
+
+
+select gno,ordeno,no2,productno pno,product
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount-inmount),1)),0,30)) unmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(cost,0)),1)),4,12)) cost
+from @end order by ordeno
+
+;
+----*******************************************************************************************
