@@ -4,7 +4,7 @@ SET QUOTED_IDENTIFIER OFF
 	declare @pagecount int
 	declare @t_bxnoa nvarchar(20)
 	declare @t_exnoa nvarchar(20)
-	set @pageCount = 9
+	set @pageCount = 11
 	set @t_bxnoa = case when '#non'=[1] then '' else [1] end
 	set @t_exnoa = case when '#non'=[2] then CHAR(255) else [2] end
 		declare @tmp table(
@@ -27,12 +27,13 @@ SET QUOTED_IDENTIFIER OFF
 		indate nvarchar(10),
 		accno nvarchar(31),
 		w nvarchar(20),
+		n nvarchar(20),
 		recno int,
 		currecno int,
 		curpage int,
 		totpage int
 	)
-	set @cmd =	"select a.*,ROW_NUMBER()over(order by gno),0,0,0"+
+	set @cmd =	"select a.*,ROW_NUMBER()over(PARTITION BY a.noa order by a.noa,a.noq),ROW_NUMBER()over(order by gno),0,0,0"+
 				" from("+
 				" select '0' gno,a.noa,b.noq,a.datea,a.mon,a.custno,a.comp,a.unpay,b.acc2,b.money,b.chgs,"+
 				"b.paysale,b.checkno,b.account,b.bankno,b.bank,b.indate,a.accno,a.worker"+
@@ -69,6 +70,28 @@ declare @noa nvarchar(30)
 	close cursor_table
 	deallocate cursor_table
 	
+	declare @zpno nvarchar(30)
+	declare @count1 int 
+	declare @count2 int 
+	declare cursor_table cursor for 
+	select noa,max(accno) accno,max(w),count(*) count1,(count(*)/@pageCount+1)*@pageCount count2 from @tmp group by noa
+	open cursor_table 
+	fetch next from cursor_table 
+	into @noa,@accno,@w,@count1,@count2 
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+		while(@count1<@count2) and not(@count1 % @pagecount = 0) 
+		begin 
+			insert into @tmp (gno,noa,noq,n,accno,w,currecno)VALUES('0',@noa,CHAR(255),'',@accno,@w,@count1+1) 
+			set @count1=@count1+1 
+		end 
+		fetch next from cursor_table 
+		into @noa,@accno,@w,@count1,@count2 
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+	
+	
 	declare cursor_table cursor for
 	select noa,max(currecno) from @tmp group by noa
 	open cursor_table
@@ -76,7 +99,7 @@ declare @noa nvarchar(30)
 	into @noa,@currecno
 	while(@@FETCH_STATUS <> -1)
 	begin
-		update @tmp set totpage = (@currecno-@currecno%@pagecount)/@pagecount+1 where noa=@noa
+		update @tmp set totpage = (@currecno-@currecno%@pagecount)/@pagecount where noa=@noa
 		fetch next from cursor_table
 		into @noa,@currecno
 	end
@@ -97,28 +120,7 @@ declare @noa nvarchar(30)
 	close cursor_table
 	deallocate cursor_table
 
-	declare cursor_table cursor for
-	select noa,accno,w,curpage,@pagecount-[count]%@pagecount,([count]-[count]%@pagecount)/@pagecount+1
-	from(select noa,max(accno) accno,max(w) w,COUNT(1) [count], max(curpage) curpage from @tmp group by noa) a
-	where not[count]%@pagecount=0
-	open cursor_table
-	fetch next from cursor_table
-	into @noa,@accno,@w,@curpage,@count,@totpage
-	while(@@FETCH_STATUS <> -1)
-	begin
-		set @t_count = @count
-		while(@t_count>0)
-		begin
-			insert into @tmp(gno,noa,noq,accno,w,curpage,totpage)values('0',@noa,CHAR(255),@accno,@w,@curpage,@totpage)
-			set @t_count = @t_count - 1
-		end
-		fetch next from cursor_table
-		into @noa,@accno,@w,@curpage,@count,@totpage
-	end
-	close cursor_table
-	deallocate cursor_table
-
-	select gno,noa,noq,datea,mon,custno,comp,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay,
+	select gno,noa,noq,n,datea,mon,custno,comp,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay,
 	acc2,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgs),1)),4,12)) chgs,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paysale),1)),4,12)) paysale,checkno,account,bankno,bank,indate,accno,w,CONVERT(nvarchar(5),curpage)+'/'+CONVERT(nvarchar(5),totpage) page from @tmp order by noa,noq;
 
