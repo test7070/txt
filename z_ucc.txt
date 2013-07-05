@@ -354,6 +354,8 @@ declare @end table(
 	product2 nvarchar(50),
 	mount2 float,
 	outmount float,
+	scost float,
+	ocost float,
 	cost float
 )
 
@@ -431,7 +433,7 @@ end) outmount,
 --)
 --end
 --)
-0 cost
+0,0,0 cost
 from @work wa left join view_work102 wb on wa.workno=wb.noa left join view_works102 wc on wb.noa=wc.noa
 where wb.productno between @bpno and @epno
 order by wa.workno,wb.productno,wc.productno
@@ -445,6 +447,8 @@ declare @bworkno nvarchar(50)
 declare @t_bworkno nvarchar(50)
 declare @recno nvarchar(50)
 declare @bprice float
+declare @sprice float 
+declare @oprice float
 
 declare @tmp table(
 	workno nvarchar(20),
@@ -473,12 +477,14 @@ begin
 	
 	BEGIN TRY
 	--遞迴
-	WITH OrdersTable (workno,productno,noa,Level,sortCol,price) as
+	WITH OrdersTable (workno,productno,noa,Level,sortCol,price,sprice,opriec) as
 	(
 	 Select a.workno,a.productno,a.parent,0, CONVERT(nvarchar(128),a.productno)
 	 ,--isnull((select c.lastprice from costs c where c.mon='102/06' and c.productno=a.productno),0)*
 	 --*isnull((select sum(case when UPPER(wa.unit)!='KG' then wa.mount else wa.weight end) from view_workas102 wa where wa.datea <=@enddate and  wa.workno=a.workno and wa.productno=a.productno ),0)
-	 (select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
+	 (select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno),
+	(select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno),
+	(select outmoney from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
 	 from @tmp a
 	 where parent=@bparent
 	 UNION ALL
@@ -500,21 +506,23 @@ begin
 	 --+(isnull((select b.price from workc102 b where b.workno=a.workno ),0)
 	 --*(select mount from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
 	 --*(isnull((select (case when UPPER(wc.unit)!='KG' then wc.mount else wc.weight end) from view_workcs102 wc where wc.datea <=@enddate and wc.workno=a.workno and wc.productno=a.productno ),0) ))
+	 ,(select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno),
+	(select outmoney from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno) 
 	 FROM @tmp a, OrdersTable 
 	 WHERE a.parent=OrdersTable.productno 
 
 	)
 	--Select workno,REPLICATE('       ',Level) + productno productno, Level, SortCol,price From OrdersTable order by sortCol
 	
-	Select  @bprice=sum(price) From OrdersTable
+	Select  @bprice=sum(price),@oprice=sum(opriec),@sprice=SUM(sprice) From OrdersTable
 	
 	END TRY
 	BEGIN CATCH
-	 select @bprice=null 
+	 select @bprice=null ,@oprice=null ,@sprice=null 
 	END CATCH
 	
 	update @end
-	set cost=@bprice
+	set cost=@bprice,ocost=@oprice ,scost=@sprice 
 	where workno=@bworkno and productno2=@bproductno
 	
 	delete @tmp
@@ -536,7 +544,7 @@ deallocate cursor_table
 
 
 insert into @end
-select '1',gnoworkno,'','','',null,null,'','',null,null,SUM(cost) from @end group by gnoworkno
+select '1',gnoworkno,'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by gnoworkno
 
 
 select recno,gno,gnoworkno,workno,productno productnoa,product producta
@@ -547,6 +555,8 @@ select recno,gno,gnoworkno,workno,productno productnoa,product producta
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount2),1)),0,30)) mountb
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,outmount),1)),0,30)) outmount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount2-outmount),1)),0,30)) unoutmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,scost),1)),0,30)) scost 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ocost),1)),0,30)) ocost 
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cost),1)),0,30)) cost
 ,@bpno bpno,@epno epno ,@enddate enddate
 from @end order by gnoworkno,gno
