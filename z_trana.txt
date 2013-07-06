@@ -1,3 +1,190 @@
+--z_trana08
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_btrandate nvarchar(10)
+	declare @t_etrandate nvarchar(10)
+	declare @t_carteam nvarchar(max)
+	declare @t_option08 nvarchar(max)
+	
+	set @t_accy = '102'
+	set @t_btrandate = '102/06/01'
+	set @t_etrandate = '102/06/30'
+	set @t_carteam = '01,02,03,04,05'
+	set @t_option08 = 'detail'
+	----------------------------------------------------------------------------------------------
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#carteam')is not null
+	BEGIN
+		set @cmd = 'drop table #carteam'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carteam(
+		noa nvarchar(20)
+	)
+	set @string = @t_carteam
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carteam select @string
+			end
+			break
+		end
+		insert into #carteam select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_trana08')is not null
+	BEGIN
+		set @cmd = 'drop table #z_trana08'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_trana08(
+		rr int,
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		trandate nvarchar(10),
+		custno nvarchar(20),
+		carno nvarchar(20),
+		nick nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carteamno nvarchar(20),
+		
+		inmount float,
+		pton float,
+		mount float,
+		price float,
+		total float,
+		
+		outmount float,
+		pton2 float,
+		mount2 float,
+		price2 float,
+		price3 float,
+		discount float,
+		total2 float,
+		
+		tolls float,
+		
+		memo nvarchar(max)
+	)
+	set @cmd = 
+	" select ROW_NUMBER()over(PARTITION BY isnull(a.carteamno,'') order by isnull(a.carteamno,''),a.trandate,a.noa) "+
+	" ,a.noa,a.noq,a.trandate,a.custno,a.carno,c.nick,a.driverno,a.driver,isnull(a.carteamno,'')"+
+	" ,a.inmount,a.pton,a.mount,a.price,a.total"+
+	" ,a.outmount,a.pton2,a.mount2,a.price2,a.price3,a.discount,a.total2"+
+	" ,a.tolls,a.memo "+
+	" from view_trans"+@t_accy+" a"+
+	" left join #carteam b on a.carteamno=b.noa"+
+	" left join cust c on a.custno=c.noa"+
+	" where b.noa is not null"+
+	" and (a.trandate between @t_btrandate and @t_etrandate)"+
+	" order by isnull(a.carteamno,''),a.trandate,a.noa"	
+
+	insert into #z_trana08(rr,tranno,trannoq,trandate,custno,nick,carno,driverno,driver,carteamno
+	,inmount,pton,mount,price,total
+	,outmount,pton2,mount2,price2,price3,discount,total2
+	,tolls,memo)
+	execute sp_executesql @cmd,N'@t_btrandate nvarchar(10),@t_etrandate nvarchar(10)'
+	,@t_btrandate=@t_btrandate,@t_etrandate=@t_etrandate
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		pno int,
+		carteamno nvarchar(20),
+		carteam nvarchar(20),
+		tmount decimal(12,3),
+		ttotal float,
+		
+		tmount2 decimal(12,3),
+		ttotal2 float,
+		
+		ttolls float,
+		
+		rr int,
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		trandate nvarchar(10),
+		custno nvarchar(20),
+		nick nvarchar(20),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		inmount decimal(12,3),
+		pton decimal(12,3),
+		mount decimal(12,3),
+		price decimal(12,3),
+		total float,
+		
+		outmount decimal(12,3),
+		pton2 decimal(12,3),
+		mount2 decimal(12,3),
+		price2 decimal(12,3),
+		price3 decimal(12,3),
+		discount decimal(12,3),
+		total2 float,
+		tolls float,	
+		memo nvarchar(max)
+	)
+	----------------------------------------------------------------------------------------------
+	insert into @tmp(gno,pno,carteamno,carteam,tmount,ttotal,tmount2,ttotal2,ttolls)
+	select '1',1,isnull(a.carteamno,''),isnull(b.team,''),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.total,0)),SUM(ISNULL(a.mount2,0)),SUM(ISNULL(a.total2,0)),SUM(ISNULL(a.tolls,0))
+	from #z_trana08 a
+	left join carteam b on a.carteamno=b.noa
+	group by isnull(a.carteamno,''),isnull(b.team,'')
+	
+	insert into @tmp(gno,pno,carteamno,tmount,ttotal,tmount2,ttotal2,ttolls)
+	select '3',3,CHAR(255),SUM(ISNULL(tmount,0)),SUM(ISNULL(ttotal,0)),SUM(ISNULL(tmount2,0)),SUM(ISNULL(ttotal2,0)),SUM(ISNULL(ttolls,0))
+	from @tmp	
+	
+	if(@t_option08 = 'detail')
+	begin
+		insert into @tmp(gno,pno,carteamno,carteam,rr
+			,tranno,trannoq,trandate,custno,nick,carno,driverno,driver
+			,inmount,pton,mount,price,total
+			,outmount,pton2,mount2,price2,price3,discount,total2
+			,tolls,memo)
+		select '2',2,isnull(a.carteamno,''),isnull(b.team,''),rr
+			,tranno,trannoq,trandate,custno,nick,carno,driverno,driver
+			,inmount,pton,mount,price,total
+			,outmount,pton2,mount2,price2,price3,discount,total2
+			,tolls,memo
+		from #z_trana08 a
+		left join carteam b on a.carteamno=b.noa
+	end
+	----------------------------------------------------------------------------------------------
+	select *
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(tmount)),1)),4,12))+'.'+RIGHT(CAST(tmount as nvarchar),3) a1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttotal),1)),4,12)) a2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(tmount2)),1)),4,12))+'.'+RIGHT(CAST(tmount2 as nvarchar),3) a3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttotal2),1)),4,12)) a4
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttolls),1)),4,12)) a5
+	
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(inmount)),1)),4,12))+'.'+RIGHT(CAST(inmount as nvarchar),3) b1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(pton)),1)),4,12))+'.'+RIGHT(CAST(pton as nvarchar),3) b2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(mount)),1)),4,12))+'.'+RIGHT(CAST(mount as nvarchar),3) b3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(price)),1)),4,12))+'.'+RIGHT(CAST(price as nvarchar),3) b4
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) b5
+	
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(outmount)),1)),4,12))+'.'+RIGHT(CAST(outmount as nvarchar),3) c1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(pton2)),1)),4,12))+'.'+RIGHT(CAST(pton2 as nvarchar),3) c2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(mount2)),1)),4,12))+'.'+RIGHT(CAST(mount2 as nvarchar),3) c3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(price2)),1)),4,12))+'.'+RIGHT(CAST(price2 as nvarchar),3) c4
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(price3)),1)),4,12))+'.'+RIGHT(CAST(price3 as nvarchar),3) c5
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(discount)),1)),4,12))+'.'+RIGHT(CAST(discount as nvarchar),3) c6
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total2),1)),4,12)) c7
+	
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) d1
+	from @tmp order by carteamno,pno;
+
 ----------------------------------------------------------------------------------------------------
 z_trana07:--z_trana07
 SET QUOTED_IDENTIFIER OFF 
