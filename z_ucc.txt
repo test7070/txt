@@ -330,11 +330,16 @@ z_ucc3:--z_ucc3
 declare @bpno nvarchar(30)
 declare @epno nvarchar(30)
 declare @enddate nvarchar(30)
+declare @bordeno nvarchar(30)
+declare @eordeno nvarchar(30)
 
 set @bpno = case when '#non'=[3] then '' else [3] end
 set @epno = case when '#non'=[4] then char(255) else [4] end
 
 set @enddate=case when '#non'=[6] then '' else [6] end
+
+set @bordeno = case when '#non'=[7] then '' else [7] end
+set @eordeno = case when '#non'=[8] then char(255) else [8] end
 
 --儲存在製品的製令單//避免一個製令被領料或入庫兩次以上
 declare @work table(
@@ -344,6 +349,10 @@ declare @work table(
 declare @end table(
 	recno int identity(0,1),
 	gno nvarchar(50),
+	custno nvarchar(50),
+	compnick nvarchar(50),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
 	gnoworkno nvarchar(50),
 	workno nvarchar(50),
 	productno nvarchar(50),
@@ -363,7 +372,7 @@ declare @end table(
 --插入在截止日之前有領料的製令單
 insert into @work
 select DISTINCT a.noa from view_work102 a left join view_workas102 b on a.noa=b.workno left join view_workcs102 c on a.noa=c.workno
-where (b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)
+where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
 
 
 --刪除在截止日之前已"全部"入庫的製令單
@@ -387,7 +396,7 @@ where b.mount=c.mount)
 
 
 insert into @end
-select '0'gno,wa.workno,wa.workno,wb.productno,wb.product product,wb.mount mount,
+select '0'gno,oe.custno,ct.nick,wb.ordeno,wb.no2,wa.workno,wa.workno,wb.productno,wb.product product,wb.mount mount,
 (case when len(wb.tggno)=0 then 
 isnull((select SUM(b.mount) mount 
 from view_workb102 a left join view_workbs102 b on a.noa=b.noa 
@@ -435,6 +444,7 @@ end) outmount,
 --)
 0,0,0 cost
 from @work wa left join view_work102 wb on wa.workno=wb.noa left join view_works102 wc on wb.noa=wc.noa
+left join view_orde102 oe on wb.ordeno=oe.noa left join cust ct on oe.custno=ct.noa
 where wb.productno between @bpno and @epno
 order by wa.workno,wb.productno,wc.productno
 
@@ -543,11 +553,20 @@ close cursor_table
 deallocate cursor_table
 
 
-insert into @end
-select '1',gnoworkno,'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by gnoworkno
+insert into @end --製令
+select '1',custno,compnick,ordeno,no2,gnoworkno,'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by custno,compnick,ordeno,no2,gnoworkno
+
+insert into @end --訂單
+select '2',custno,compnick,ordeno,char(255),char(255),'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by custno,compnick,ordeno
+
+insert into @end --客戶
+select '3',custno,compnick,char(255),char(255),char(255),'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by custno,compnick
+
+insert into @end --全部
+select '4',char(255),char(255),'','','','','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end
 
 
-select recno,gno,gnoworkno,workno,productno productnoa,product producta
+select recno,gno,custno,compnick,ordeno,no2,gnoworkno,workno,productno productnoa,product producta
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mounta
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount-inmount),1)),0,30)) uninmount
@@ -559,5 +578,5 @@ select recno,gno,gnoworkno,workno,productno productnoa,product producta
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ocost),1)),0,30)) ocost 
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cost),1)),0,30)) cost
 ,@bpno bpno,@epno epno ,@enddate enddate
-from @end order by gnoworkno,gno
+from @end order by custno,ordeno,gnoworkno,gno
 ;
