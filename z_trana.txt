@@ -1,3 +1,819 @@
+z_trana08:--z_trana08
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_btrandate nvarchar(10)
+	declare @t_etrandate nvarchar(10)
+	declare @t_carteam nvarchar(max)
+	declare @t_option08 nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_btrandate = case when '#non'=[4] then '' else [4] end
+	set @t_etrandate = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_carteam = case when '#non'=[15] then CHAR(255) else [15] end
+	set @t_option08 = case when '#non'=[39] then CHAR(255) else [39] end
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#carteam')is not null
+	BEGIN
+		set @cmd = 'drop table #carteam'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carteam(
+		noa nvarchar(20)
+	)
+	set @string = @t_carteam
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carteam select @string
+			end
+			break
+		end
+		insert into #carteam select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @mon nvarchar(10)
+	declare @custno nvarchar(20)
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @plus float
+	declare @minus float
+	declare @curplus float
+	declare @curminus float
+	declare @custplus float
+	declare @custminus float
+	declare @carplus float
+	declare @carminus float
+	declare @diffplus float
+	declare @diffminus float
+	declare @tranno nvarchar(20)
+	declare @trannoq nvarchar(10)
+	
+	declare @fixa float
+	declare @tire float
+	declare @ticket float
+	declare @curfixa float
+	declare @curtire float
+	declare @curticket float
+	declare @carfixa float
+	declare @cartire float
+	declare @carticket float
+	declare @difffixa float
+	declare @difftire float
+	declare @diffticket float
+	
+	declare @bonus float
+	declare @curbonus float
+	declare @carbonus float
+	declare @diffbonus float
+	
+	declare @tax float
+	declare @depreciation float
+	declare @curtax float
+	declare @curdepreciation float
+	declare @cartax float
+	declare @cardepreciation float
+	declare @difftax float
+	declare @diffdepreciation float
+	----------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #z_tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_tmp(
+		isoutside int,
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		datea nvarchar(10),
+		trandate nvarchar(10),
+		carteamno nvarchar(20),
+		carteam nvarchar(20),
+		
+		custno nvarchar(20),
+		custnick nvarchar(20),
+		addrno nvarchar(20),
+		addr nvarchar(40),
+		
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		
+		mount float,
+		price float,
+		total float,
+		
+		mount2 float,
+		price2 float,
+		price3 float,
+		discount float,
+		total2 float,
+		
+		reserve float,
+		tolls float,
+		memo nvarchar(max),
+		
+		custplus float,
+		custminus float,
+		
+		carplus float,
+		carminus float,
+		fixa float,
+		tire float,
+		ticket float,
+		bonus float,
+		tax float,
+		depreciation float,	
+		
+		profit float
+	)
+	create index tranno on #z_tmp(tranno,trannoq)
+	insert into #z_tmp(isoutside,tranno,trannoq,datea,trandate,carteamno,carteam
+		,custno,custnick,addrno,addr
+		,carno,driverno,driver
+		,mount,price,total
+		,mount2,price2,price3,discount,total2
+		,reserve,tolls,memo
+	)
+	select isnull(c.isoutside,0),a.noa,a.noq,a.datea,a.trandate,a.carteamno,b.team
+	,a.custno,a.nick,a.straddrno,a.straddr
+	,a.carno,a.driverno,a.driver
+	,a.mount,a.price,a.total
+	,a.mount2,a.price2,a.price3,a.discount,a.total2
+	,a.reserve,a.tolls,a.memo
+	from view_trans102 a
+	left join carteam b on a.carteamno = b.noa
+	left join calctypes c on a.calctype = c.noa+c.noq
+	where (left(a.trandate,6) between left(@t_btrandate,6) and left(@t_etrandate,6))
+	----------------------------------------------------------------------------------------------
+	--客戶加減項
+	declare @tmp01 table(
+		mon nvarchar(10),
+		custno nvarchar(20),
+		plus float,
+		minus float,
+		custplus float,
+		custminus float
+	)
+	insert into @tmp01(mon,custno,plus,minus)
+	select LEFT(a.datea,6),isnull(a.custno,''),SUM(ISNULL(plusmoney,0)),SUM(ISNULL(minusmoney,0)) 
+	from custchg a
+	where (left(a.acc1,4)!='2195')--排除 代收、付
+	and left(a.datea,6) between left(@t_btrandate,6) and left(@t_etrandate,6)
+	group by LEFT(a.datea,6),isnull(a.custno,'')
+	--收金額合計
+	declare @tmp01_a table(
+		mon nvarchar(10),
+		custno nvarchar(20),
+		total float
+	)
+	insert into @tmp01_a(mon,custno,total)
+	select LEFT(a.trandate,6),isnull(a.custno,''),SUM(ISNULL(total,0)) 
+	from #z_tmp a
+	group by LEFT(a.trandate,6),isnull(a.custno,'') 
+	--依收金額比例分配加減項金額
+	update #z_tmp
+	set custplus = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.plus,0)/ISNULL(c.total,0),0)end
+		,custminus = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.minus,0)/ISNULL(c.total,0),0)end
+	from #z_tmp a
+	inner join @tmp01 b on left(a.trandate,6)=b.mon and a.custno = b.custno 
+	inner join @tmp01_a c on left(a.trandate,6)=c.mon and a.custno = c.custno 
+	----修正誤差,由收入最高的依序補回一次補1,LOOP
+	update @tmp01
+	set custplus = ISNULL(b.custplus,0)
+		,custminus = ISNULL(b.custminus,0)
+	from @tmp01 a
+	inner join (select LEFT(ISNULL(trandate,''),6) mon
+		,ISNULL(custno,'') custno
+		, SUM(ISNULL(custplus,0)) custplus
+		,SUM(ISNULL(custminus,0)) custminus 
+		from #z_tmp 
+		group by LEFT(ISNULL(trandate,''),6),ISNULL(custno,'')) b on a.mon=b.mon and a.custno=b.custno
+	
+	--修正誤差用
+	declare @ztmp01 table(
+		recno int,
+		custno nvarchar(20),
+		mon nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		custplus float,
+		custminus float
+		UNIQUE (recno,custno,mon)
+	)
+	insert into @ztmp01(recno,custno,mon,tranno,trannoq,custplus,custminus)
+	select ROW_NUMBER()over(partition by isnull(custno,''),LEFT(isnull(trandate,''),6) order by isnull(total,0) desc,tranno,trannoq) 
+	,isnull(custno,''),LEFT(isnull(trandate,''),6),tranno,trannoq,isnull(custplus,0),isnull(custminus,0)
+	from #z_tmp
+	
+	declare cursor_table cursor for
+	select mon,custno,custplus-plus,custminus - minus from @tmp01 
+	open cursor_table
+	fetch next from cursor_table
+	into @mon,@custno,@plus,@minus
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @n = 1,@curplus=@plus,@curminus=@minus
+		while(@curplus!=0 or @curminus!=0)
+		begin		
+			if not exists(select tranno from @ztmp01 where custno=@custno and @mon=mon and recno=@n)
+			begin
+				if((@curplus=@plus and @plus!=0) or (@curminus=@minus and @minus!=0))
+				begin
+					--避免LOOP
+					select '資料異常 @ztmp01 01',@custno,@mon,@n
+					return
+				return
+				end
+				set @n = 1
+			end
+			select @tranno=tranno,@trannoq=trannoq,@custplus=custplus,@custminus=custminus 
+			from @ztmp01 where custno=@custno and @mon=mon and recno=@n
+			if(@tranno is null)
+			begin
+				select '資料異常 @ztmp01 02',@custno,@mon,@n
+				return
+			end
+			select @diffplus=0,@diffminus=0 
+			if(@custplus!=0)
+			begin
+				set @diffplus = case when @curplus>0 then -1 when @curplus<0 then 1 else 0 end
+				set @curplus = @curplus + @diffplus
+			end
+			if(@custminus!=0)
+			begin
+				set @diffminus = case when @curminus>0 then -1 when @curminus<0 then 1 else 0 end
+				set @curminus = @curminus + @diffminus
+			end			
+			update #z_tmp set custplus=isnull(custplus,0)+@diffplus
+			,custminus=isnull(custminus,0)+@diffminus 
+			where tranno=@tranno and trannoq=@trannoq
+			
+			set @n = @n + 1
+		end
+		fetch next from cursor_table
+		into @mon,@custno,@plus,@minus
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	--司機加減項
+	declare @tmp02 table(
+		mon nvarchar(10),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		plus float,
+		minus float,
+		carplus float,
+		carminus float
+	)
+	insert into @tmp02(mon,carno,driverno,plus,minus)
+	select LEFT(a.datea,6),isnull(a.carno,''),isnull(a.driverno,''),SUM(ISNULL(plusmoney,0)),SUM(ISNULL(minusmoney,0)) 
+	from carchg a
+	where (left(a.acc1,4)!='2195')--排除 代收、付
+	and left(a.datea,6) between left(@t_btrandate,6) and left(@t_etrandate,6)
+	group by LEFT(a.datea,6),isnull(a.carno,''),isnull(a.driverno,'')
+	--發金額合計
+	declare @tmp02_a table(
+		mon nvarchar(10),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		total2 float
+	)
+	insert into @tmp02_a(mon,carno,driverno,total2)
+	select LEFT(a.trandate,6),isnull(a.carno,''),isnull(a.driverno,''),SUM(ISNULL(total2,0)) 
+	from #z_tmp a
+	group by LEFT(a.trandate,6),isnull(a.carno,''),isnull(a.driverno,'')
+	--依發金額比例分配加減項金額
+	update #z_tmp
+	set carplus = case when ISNULL(c.total2,0)=0 then 0 else round(isnull(a.total2,0)*ISNULL(b.plus,0)/ISNULL(c.total2,0),0)end
+		,carminus = case when ISNULL(c.total2,0)=0 then 0 else round(isnull(a.total2,0)*ISNULL(b.minus,0)/ISNULL(c.total2,0),0)end
+	from #z_tmp a
+	inner join @tmp02 b on left(a.trandate,6)=b.mon and a.carno=b.carno and a.driverno=b.driverno 
+	inner join @tmp02_a c on left(a.trandate,6)=c.mon and a.carno=c.carno and a.driverno=c.driverno 
+	----修正誤差,由發金額最高的依序補回一次補1,LOOP
+	update @tmp02
+	set carplus = ISNULL(b.carplus,0)
+		,carminus = ISNULL(b.carminus,0)
+	from @tmp02 a
+	inner join (select LEFT(ISNULL(trandate,''),6) mon
+		,ISNULL(carno,'') carno
+		,ISNULL(driverno,'') driverno
+		, SUM(ISNULL(carplus,0)) carplus
+		,SUM(ISNULL(carminus,0)) carminus 
+		from #z_tmp 
+		group by LEFT(ISNULL(trandate,''),6),ISNULL(carno,''),ISNULL(driverno,'')) b 
+	on a.mon=b.mon and a.carno=b.carno and a.driverno=b.driverno 
+	
+	--修正誤差用
+	declare @ztmp02 table(
+		recno int,
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		mon nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		carplus float,
+		carminus float
+		UNIQUE (recno,carno,driverno,mon)
+	)
+	insert into @ztmp02(recno,carno,driverno,mon,tranno,trannoq,carplus,carminus)
+	select ROW_NUMBER()over(partition by isnull(carno,''),isnull(driverno,''),LEFT(isnull(trandate,''),6) order by isnull(total2,0) desc,tranno,trannoq) 
+	,isnull(carno,''),isnull(driverno,''),LEFT(isnull(trandate,''),6),tranno,trannoq,isnull(carplus,0),isnull(carminus,0)
+	from #z_tmp
+	
+	declare cursor_table cursor for
+	select mon,carno,driverno,carplus-plus,carminus - minus from @tmp02
+	open cursor_table
+	fetch next from cursor_table
+	into @mon,@carno,@driverno,@plus,@minus
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @n = 1,@curplus=@plus,@curminus=@minus
+		while(@curplus!=0 or @curminus!=0)
+		begin		
+			if not exists(select tranno from @ztmp02 where carno=@carno and driverno=@driverno and @mon=mon and recno=@n)
+			begin
+				if((@curplus=@plus and @plus!=0) or (@curminus=@minus and @minus!=0))
+				begin
+					--避免LOOP
+					select '資料異常 @ztmp02 01',@carno,@driverno,@mon,@n,@curplus,@curminus
+					return
+				return
+				end
+				set @n = 1
+			end
+			select @tranno=tranno,@trannoq=trannoq,@carplus=carplus,@carminus=carminus 
+			from @ztmp02 where carno=@carno and driverno=@driverno and @mon=mon and recno=@n
+			if(@tranno is null)
+			begin
+				select '資料異常 @ztmp02 02',@carno,@driverno,@mon,@n
+				return
+			end
+			select @diffplus=0,@diffminus=0 
+			if(@carplus!=0)
+			begin
+				set @diffplus = case when @curplus>0 then -1 when @curplus<0 then 1 else 0 end
+				set @curplus = @curplus + @diffplus
+			end
+			if(@carminus!=0)
+			begin
+				set @diffminus = case when @curminus>0 then -1 when @curminus<0 then 1 else 0 end
+				set @curminus = @curminus + @diffminus
+			end			
+			update #z_tmp set carplus=isnull(carplus,0)+@diffplus
+			,carminus=isnull(carminus,0)+@diffminus 
+			where tranno=@tranno and trannoq=@trannoq
+			
+			set @n = @n + 1
+		end
+		fetch next from cursor_table
+		into @mon,@carno,@driverno,@plus,@minus
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	--維修、輪胎、罰單
+	declare @tmp03 table(
+		mon nvarchar(10),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		fixa float,
+		tire float,
+		ticket float,
+		carfixa float,
+		cartire float,
+		carticket float
+	)
+	insert into @tmp03(mon,carno,driverno,fixa,tire,ticket)
+	select mon,carno,driverno,SUM(fixa),SUM(tire),SUM(ticket)
+	from(
+		select LEFT(a.fixadate,6) mon,isnull(a.carno,'') carno,isnull(a.driverno,'') driverno
+		,SUM(ISNULL(a.wmoney,0)) fixa,SUM(ISNULL(a.cmoney,0)) tire,0 ticket 
+		from fixa a
+		where left(a.fixadate,6) between left(@t_btrandate,6) and left(@t_etrandate,6)
+		group by LEFT(a.fixadate,6),isnull(a.carno,''),isnull(a.driverno,'')
+		union all
+		select LEFT(a.outdate,6),isnull(a.carno,''),isnull(a.driverno,'')
+		,SUM(ISNULL(a.wmoney,0)),SUM(ISNULL(a.cmoney,0)),0
+		from fixout a
+		where left(a.outdate,6) between left(@t_btrandate,6) and left(@t_etrandate,6)
+		group by LEFT(a.outdate,6),isnull(a.carno,''),isnull(a.driverno,'')
+		union all
+		select LEFT(a.datea,6),isnull(a.carno,''),isnull(a.driverno,'')
+		,0,0,sum(isnull(a.comppay,0)) 
+		from carborr a
+		where left(a.datea,6) between left(@t_btrandate,6) and left(@t_etrandate,6)
+		and a.typea='罰單' and isnull(a.comppay,0)!=0
+		group by LEFT(a.datea,6),isnull(a.carno,''),isnull(a.driverno,''))a
+	group by mon,carno,driverno 
+	
+	--收金額合計
+	declare @tmp03_a table(
+		mon nvarchar(10),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		total float
+	)
+	insert into @tmp03_a(mon,carno,driverno,total)
+	select LEFT(a.trandate,6),isnull(a.carno,''),isnull(a.driverno,''),SUM(ISNULL(total,0)) 
+	from #z_tmp a
+	group by LEFT(a.trandate,6),isnull(a.carno,''),isnull(a.driverno,'') 
+	--依收金額比例分配維修、輪胎、罰單
+	update #z_tmp
+	set fixa = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.fixa,0)/ISNULL(c.total,0),0)end
+		,tire = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.tire,0)/ISNULL(c.total,0),0)end
+		,ticket = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.ticket,0)/ISNULL(c.total,0),0)end
+	from #z_tmp a
+	inner join @tmp03 b on left(a.trandate,6)=b.mon and a.carno=b.carno and a.driverno=b.driverno 
+	inner join @tmp03_a c on left(a.trandate,6)=c.mon and a.carno=c.carno and a.driverno=c.driverno 
+	----修正誤差,由收入最高的依序補回一次補1,LOOP
+	update @tmp03
+	set carfixa = ISNULL(b.fixa,0)
+		,cartire = ISNULL(b.tire,0)
+		,carticket = ISNULL(b.ticket,0)
+	from @tmp03 a
+	inner join (select LEFT(ISNULL(trandate,''),6) mon
+		,ISNULL(carno,'') carno
+		,ISNULL(driverno,'') driverno
+		,SUM(ISNULL(fixa,0)) fixa
+		,SUM(ISNULL(tire,0)) tire
+		,SUM(ISNULL(ticket,0)) ticket 
+		from #z_tmp 
+		group by LEFT(ISNULL(trandate,''),6),ISNULL(carno,''),ISNULL(driverno,'')) b 
+		on a.mon=b.mon and a.carno=b.carno and a.driverno=b.driverno
+	
+	--修正誤差用
+	declare @ztmp03 table(
+		recno int,
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		mon nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		fixa float,
+		tire float,
+		ticket float
+		UNIQUE (recno,carno,driverno,mon)
+	)
+	insert into @ztmp03(recno,carno,driverno,mon,tranno,trannoq,fixa,tire,ticket)
+	select ROW_NUMBER()over(partition by isnull(carno,''),isnull(driverno,''),LEFT(isnull(trandate,''),6) order by isnull(total,0) desc,tranno,trannoq) 
+	,isnull(carno,''),isnull(driverno,''),LEFT(isnull(trandate,''),6),tranno,trannoq,isnull(fixa,0),isnull(tire,0),isnull(ticket,0)
+	from #z_tmp
+	
+	declare cursor_table cursor for
+	select mon,carno,driverno,carfixa-fixa,cartire-tire,carticket-ticket from @tmp03 
+	open cursor_table
+	fetch next from cursor_table
+	into @mon,@carno,@driverno,@fixa,@tire,@ticket
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @n = 1,@curfixa=@fixa,@curtire=@tire,@curticket=@ticket
+		while(@curfixa!=0 or @curtire!=0 or @curticket!=0)
+		begin		
+			if not exists(select tranno from @ztmp03 where carno=@carno and driverno=@driverno and mon=@mon and recno=@n)
+			begin
+				if((@curfixa=@fixa and @fixa!=0) or (@curtire=@tire and @tire!=0) or (@curticket=@ticket and @ticket!=0))
+				begin
+					--避免LOOP
+					select '資料異常 @ztmp03 01',@carno,@driverno,@mon,@n
+					return
+				return
+				end
+				set @n = 1
+			end
+			select @tranno=tranno,@trannoq=trannoq,@carfixa=fixa,@cartire=tire,@carticket=ticket
+			from @ztmp03 where carno=@carno and driverno=@driverno and mon=@mon and recno=@n
+			if(@tranno is null)
+			begin
+				select '資料異常 @ztmp03 02',@carno,@driverno,@mon,@n
+				return
+			end
+			select @difffixa=0,@difftire=0,@diffticket=0
+			if(@carfixa!=0)
+			begin
+				set @difffixa = case when @curfixa>0 then -1 when @curfixa<0 then 1 else 0 end
+				set @curfixa = @curfixa + @difffixa
+			end
+			if(@cartire!=0)
+			begin
+				set @difftire = case when @curtire>0 then -1 when @curtire<0 then 1 else 0 end
+				set @curtire = @curtire + @difftire
+			end
+			if(@carticket!=0)
+			begin
+				set @diffticket = case when @curticket>0 then -1 when @curticket<0 then 1 else 0 end
+				set @curticket = @curticket + @diffticket
+			end
+				
+			update #z_tmp set fixa=isnull(fixa,0)+@difffixa
+			,tire=isnull(tire,0)+@difftire
+			,ticket=isnull(ticket,0)+@diffticket
+			where tranno=@tranno and trannoq=@trannoq
+			
+			set @n = @n + 1
+		end
+		fetch next from cursor_table
+		into @mon,@carno,@driverno,@fixa,@tire,@ticket
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	--達成獎金
+	declare @tmp04 table(
+		mon nvarchar(10),
+		driverno nvarchar(20),
+		bonus float,
+		carbonus float
+	)
+	insert into @tmp04(mon,driverno,bonus)
+	select noa,driverno,sum(ISNULL(bonus,0))
+	from carsals
+	where noa between LEFT(@t_btrandate,6) and LEFT(@t_etrandate,6)
+	group by noa,driverno 
+	
+	--發金額合計 (不包含折扣)
+	declare @tmp04_a table(
+		mon nvarchar(10),
+		driverno nvarchar(20),
+		total float
+	)
+	insert into @tmp04_a(mon,driverno,total)
+	select LEFT(a.trandate,6),isnull(a.driverno,''),SUM(round(ISNULL(mount2,0)*(ISNULL(price2,0)+ISNULL(price3,0)),0)) 
+	from #z_tmp a
+	group by LEFT(a.trandate,6),isnull(a.driverno,'') 
+	--依發金額比例分配達成獎金
+	update #z_tmp
+	set bonus = case when ISNULL(c.total,0)=0 then 0 else round(round(ISNULL(a.mount2,0)*(ISNULL(a.price2,0)+ISNULL(a.price3,0)),0)*ISNULL(b.bonus,0)/ISNULL(c.total,0),0)end
+	from #z_tmp a
+	inner join @tmp04 b on left(a.trandate,6)=b.mon and a.driverno=b.driverno 
+	inner join @tmp04_a c on left(a.trandate,6)=c.mon and a.driverno=c.driverno 
+	----修正誤差,由收入最高的依序補回一次補1,LOOP
+	update @tmp04
+	set carbonus = ISNULL(b.bonus,0)
+	from @tmp04 a
+	inner join (select LEFT(ISNULL(trandate,''),6) mon
+		,ISNULL(driverno,'') driverno
+		,SUM(ISNULL(bonus,0)) bonus
+		from #z_tmp 
+		group by LEFT(ISNULL(trandate,''),6),ISNULL(driverno,'')) b 
+		on a.mon=b.mon and a.driverno=b.driverno
+	
+	--修正誤差用
+	declare @ztmp04 table(
+		recno int,
+		driverno nvarchar(20),
+		mon nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		bonus float,
+		UNIQUE (recno,driverno,mon)
+	)
+	insert into @ztmp04(recno,driverno,mon,tranno,trannoq,bonus)
+	select ROW_NUMBER()over(partition by isnull(driverno,''),LEFT(isnull(trandate,''),6) order by round(ISNULL(mount2,0)*(ISNULL(price2,0)+ISNULL(price3,0)),0) desc,tranno,trannoq) 
+	,isnull(driverno,''),LEFT(isnull(trandate,''),6),tranno,trannoq,isnull(bonus,0)
+	from #z_tmp
+	
+	declare cursor_table cursor for
+	select mon,driverno,carbonus-bonus from @tmp04 
+	open cursor_table
+	fetch next from cursor_table
+	into @mon,@driverno,@bonus
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @n = 1,@curbonus=@bonus
+		while(@curbonus!=0)
+		begin		
+			if not exists(select tranno from @ztmp04 where driverno=@driverno and mon=@mon and recno=@n)
+			begin
+				if(@curbonus=@bonus and @bonus!=0)
+				begin
+					--避免LOOP
+					select '資料異常 @ztmp04 01',@driverno,@mon,@n
+					return
+				return
+				end
+				set @n = 1
+			end
+			select @tranno=tranno,@trannoq=trannoq,@carbonus=bonus
+			from @ztmp04 where driverno=@driverno and mon=@mon and recno=@n
+			if(@tranno is null)
+			begin
+				select '資料異常 @ztmp04 02',@driverno,@mon,@n
+				return
+			end
+			select @diffbonus=0
+			if(@carbonus!=0)
+			begin
+				set @diffbonus = case when @curbonus>0 then -1 when @curbonus<0 then 1 else 0 end
+				set @curbonus = @curbonus + @diffbonus
+			end			
+				
+			update #z_tmp set bonus=isnull(bonus,0)+@diffbonus
+			where tranno=@tranno and trannoq=@trannoq
+			
+			set @n = @n + 1
+		end
+		fetch next from cursor_table
+		into @mon,@driverno,@bonus
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	--保牌燃、折舊
+	declare @tmp05 table(
+		mon nvarchar(10),
+		carno nvarchar(20),
+		tax float,
+		depreciation float,
+		cartax float,
+		cardepreciation float
+	)
+	insert into @tmp05(mon,carno,tax,depreciation)
+	select a.mon,isnull(b.carno,''),sum(ISNULL(a.tax,0)),sum(ISNULL(a.depreciation,0))
+	from carts a
+	left join cart b on a.noa=b.noa
+	where a.mon between LEFT(@t_btrandate,6) and LEFT(@t_etrandate,6)
+	group by a.mon,isnull(b.carno,'')
+	
+	--收金額合計
+	declare @tmp05_a table(
+		mon nvarchar(10),
+		carno nvarchar(20),
+		total float
+	)
+	insert into @tmp05_a(mon,carno,total)
+	select LEFT(a.trandate,6),isnull(a.carno,''),SUM(ISNULL(a.total,0)) 
+	from #z_tmp a
+	group by LEFT(a.trandate,6),isnull(a.carno,'')
+	--依收金額比例分配保牌燃、折舊
+	update #z_tmp
+	set tax = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.tax,0)/ISNULL(c.total,0),0)end
+	,depreciation = case when ISNULL(c.total,0)=0 then 0 else round(isnull(a.total,0)*ISNULL(b.depreciation,0)/ISNULL(c.total,0),0)end
+	from #z_tmp a
+	inner join @tmp05 b on left(a.trandate,6)=b.mon and a.carno=b.carno
+	inner join @tmp05_a c on left(a.trandate,6)=c.mon and a.carno=c.carno
+	----修正誤差,由收入最高的依序補回一次補1,LOOP
+	update @tmp05
+	set cartax = ISNULL(b.tax,0),cardepreciation = ISNULL(b.depreciation,0)
+	from @tmp05 a
+	inner join (select LEFT(ISNULL(trandate,''),6) mon
+		,ISNULL(carno,'') carno
+		,SUM(ISNULL(tax,0)) tax
+		,SUM(ISNULL(depreciation,0)) depreciation
+		from #z_tmp 
+		group by LEFT(ISNULL(trandate,''),6),ISNULL(carno,'')) b 
+		on a.mon=b.mon and a.carno=b.carno
+	
+	--修正誤差用
+	declare @ztmp05 table(
+		recno int,
+		carno nvarchar(20),
+		mon nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		tax float,
+		depreciation float,
+		UNIQUE (recno,carno,mon)
+	)
+	insert into @ztmp05(recno,carno,mon,tranno,trannoq,tax,depreciation)
+	select ROW_NUMBER()over(partition by isnull(carno,''),LEFT(isnull(trandate,''),6) order by isnull(total,0) desc,tranno,trannoq) 
+	,isnull(carno,''),LEFT(isnull(trandate,''),6),tranno,trannoq,isnull(tax,0),isnull(depreciation,0)
+	from #z_tmp
+	
+	declare cursor_table cursor for
+	select mon,carno,cartax-tax,cardepreciation-depreciation from @tmp05
+	open cursor_table
+	fetch next from cursor_table
+	into @mon,@carno,@tax,@depreciation
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @n = 1,@curtax=@tax,@curdepreciation=@depreciation
+		while(@curtax!=0 or @curdepreciation!=0)
+		begin		
+			if not exists(select tranno from @ztmp05 where carno=@carno and mon=@mon and recno=@n)
+			begin
+				if((@curtax=@tax and @tax!=0) or (@curdepreciation=@depreciation and @depreciation!=0))
+				begin
+					--避免LOOP
+					select '資料異常 @ztmp05 01',@carno,@mon,@n,@tax,@depreciation
+					return
+				return
+				end
+				set @n = 1
+			end
+			select @tranno=tranno,@trannoq=trannoq,@cartax=tax,@cardepreciation=@depreciation
+			from @ztmp05 where carno=@carno and mon=@mon and recno=@n
+			if(@tranno is null)
+			begin
+				select '資料異常 @ztmp05 02',@carno,@mon,@n
+				return
+			end
+			select @difftax=0,@diffdepreciation=0
+			if(@cartax!=0)
+			begin
+				set @difftax = case when @curtax>0 then -1 when @curtax<0 then 1 else 0 end
+				set @curtax = @curtax + @difftax
+			end			
+			if(@cardepreciation!=0)
+			begin
+				set @diffdepreciation = case when @curdepreciation>0 then -1 when @curdepreciation<0 then 1 else 0 end
+				set @curdepreciation = @curdepreciation + @diffdepreciation
+			end	
+				
+			update #z_tmp set tax=isnull(tax,0)+@difftax,depreciation=ISNULL(depreciation,0)+@diffdepreciation
+			where tranno=@tranno and trannoq=@trannoq
+			
+			set @n = @n + 1
+		end
+		fetch next from cursor_table
+		into @mon,@carno,@tax,@depreciation
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	update #z_tmp set profit = isnull(total,0)-isnull(total2,0)-isnull(reserve,0)-isnull(tolls,0)
+		+isnull(custplus,0)-isnull(custminus,0)-isnull(carplus,0)+isnull(carminus,0)
+		-isnull(fixa,0)-isnull(tire,0)-isnull(ticket,0)-isnull(bonus,0)-isnull(tax,0)-isnull(depreciation,0)
+	
+	delete #z_tmp
+	from #z_tmp a
+	left join #carteam b on a.carteamno = b.noa
+	left join carteam c on a.carteamno = c.noa
+	where b.noa is null or not(a.trandate between @t_btrandate and @t_etrandate)
+	----------------------------------------------------------------------------------------------	
+	declare @tmp table(
+		gno nvarchar(10),
+		recno int,
+		carteamno nvarchar(20),
+		carteam nvarchar(20),
+		trandate nvarchar(10),
+		addrno nvarchar(20),
+		addr nvarchar(40),
+		carno nvarchar(20),
+		driver nvarchar(20),
+		total float,
+		total2 float,
+		reserve float,
+		tolls float,
+		custplus float,
+		custminus float,
+		carplus float,
+		carminus float,
+		fixa float,
+		tire float,
+		ticket float,
+		bonus float,
+		tax float,
+		depreciation float,
+		profit float
+	)
+	insert into @tmp(gno,recno,carteamno,carteam
+		,total,total2,reserve,tolls,custplus,custminus,carplus,carminus
+		,fixa,tire,ticket,bonus,tax,depreciation,profit)
+	select '1',0,carteamno,carteam
+		,sum(isnull(total,0)),sum(isnull(total2,0)),sum(isnull(reserve,0)),sum(isnull(tolls,0))
+		,sum(isnull(custplus,0)),sum(isnull(custminus,0)),sum(isnull(carplus,0)),sum(isnull(carminus,0))
+		,sum(isnull(fixa,0)),sum(isnull(tire,0)),sum(isnull(ticket,0)),sum(isnull(bonus,0))
+		,sum(isnull(tax,0)),sum(isnull(depreciation,0)),sum(isnull(profit,0))
+	from #z_tmp
+	group by carteamno,carteam
+	
+	if(@t_option08 = 'detail' )
+	begin
+		insert into @tmp(gno,recno,carteamno,carteam
+			,trandate,addrno,addr,carno,driver
+			,total,total2,reserve,tolls,custplus,custminus,carplus,carminus
+			,fixa,tire,ticket,bonus,tax,depreciation,profit)
+		select case when profit<0 then '3' else '2' end
+			,ROW_NUMBER()over(partition by carteamno order by carteamno,trandate,addrno,carno)
+			,carteamno,carteam
+			,trandate,addrno,addr,carno,driver
+			,total,total2,reserve,tolls,custplus,custminus,carplus,carminus
+			,fixa,tire,ticket,bonus,tax,depreciation,profit
+		from #z_tmp 
+	end
+	
+	insert into @tmp(gno,recno,carteamno
+		,total,total2,reserve,tolls,custplus,custminus,carplus,carminus
+		,fixa,tire,ticket,bonus,tax,depreciation,profit)
+	select '4',0,CHAR(255)
+		,sum(isnull(total,0)),sum(isnull(total2,0)),sum(isnull(reserve,0)),sum(isnull(tolls,0))
+		,sum(isnull(custplus,0)),sum(isnull(custminus,0)),sum(isnull(carplus,0)),sum(isnull(carminus,0))
+		,sum(isnull(fixa,0)),sum(isnull(tire,0)),sum(isnull(ticket,0)),sum(isnull(bonus,0))
+		,sum(isnull(tax,0)),sum(isnull(depreciation,0)),sum(isnull(profit,0))
+	from #z_tmp
+	
+	select * from @tmp order by carteamno,trandate,addrno,carno;
+
 ----------------------------------------------------------------------------------------------------
 z_trana07:--z_trana07
 SET QUOTED_IDENTIFIER OFF 
