@@ -363,8 +363,10 @@ declare @end table(
 	product2 nvarchar(50),
 	mount2 float,
 	outmount float,
-	scost float,
-	ocost float,
+	acost float,
+	bcost float,
+	ccost float,
+	dcost float,
 	cost float
 )
 
@@ -397,7 +399,7 @@ where b.mount=c.mount)
 
 insert into @end
 select '0'gno,oe.custno,ct.nick,wb.ordeno,wb.no2,wa.workno,wa.workno,wb.productno,wb.product product,wb.mount mount,
-(case when len(wb.tggno)=0 then 
+(case when len(wb.tggno)=0 or left(wb.tggno,1)='Z' then 
 isnull((select SUM(b.mount) mount 
 from view_workb102 a left join view_workbs102 b on a.noa=b.noa 
 where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
@@ -409,7 +411,7 @@ where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
 group by b.workno,b.productno),0)
 end) inmount,
 wc.productno productno2,wc.product product2,wc.mount mount2,
-(case when len(wb.tggno)=0 then 
+(case when len(wb.tggno)=0 or left(wb.tggno,1)='Z' then 
 isnull((select SUM(b.mount) mount 
 from view_worka102 a left join view_workas102 b on a.noa=b.noa 
 where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
@@ -420,123 +422,54 @@ from view_workc102 a left join view_workcs102 b on a.noa=b.noa
 where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
 group by b.workno,b.productno),0)
 end) outmount,
---領料成本
---(case when (select noa from ucc where noa=wc.productno)!='' then -- 原料
 
---(select sum(ucmoney) from (select (case when UPPER(b.unit)!='KG' then b.mount else b.weight end) --每張領料單的數量
---*(select cb.lastprice from cost ca left join costs cb on ca.noa=cb.noa where cb.productno=wc.productno and ca.mon=left(a.datea,6)) ucmoney--當月原料成本
---from view_worka102 a left join view_workas102 b on a.noa=b.noa where a.datea <=@enddate and a.workno=wa.workno and b.productno=wc.productno)ucccost)
-
---else --在製品
---(	--找下一層原料
---	select sum(ucmoney)from(
---		select
---			((case when UPPER(b.unit)!='KG' then b.mount else b.weight end)--每張領料單的數量
---			*(select cb.lastprice from cost ca left join costs cb on ca.noa=cb.noa where cb.productno=b.productno and ca.mon=left(a.datea,6)))
---			+(case when UPPER(b.unit)!='KG' then b.mount else b.weight end)*a.price--委外單價
---		ucmoney
---		from view_workc102 a left join view_workcs102 b on a.noa=b.noa
---		where (case when CHARINDEX('-',a.workno)=0 then a.noa else LEFT(a.workno,CHARINDEX('-',a.workno)-1) end)
---		=LEFT(wc.noa,CHARINDEX('-',wc.noa)-1) and a.productno=wc.productno
---	)tmp
---)
---end
---)
-0,0,0 cost
+(case when len(wb.tggno)=0 or left(wb.tggno,1)='Z' then 
+isnull((select SUM(b.costa) mount 
+from view_worka102 a left join view_workas102 b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0)
+else
+isnull((select SUM(b.costa) mount 
+from view_workc102 a left join view_workcs102 b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0)
+end) acost,
+isnull((select SUM(b.costb) mount 
+from view_workb102 a left join view_workbs102 b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0) bcost,
+isnull((select SUM(b.costc) mount 
+from view_workb102 a left join view_workbs102 b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0) ccost,
+isnull((select SUM(b.costd) mount 
+from view_workd102 a left join view_workds102 b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0) dcost,
+0 cost
 from @work wa left join view_work102 wb on wa.workno=wb.noa left join view_works102 wc on wb.noa=wc.noa
 left join view_orde102 oe on wb.ordeno=oe.noa left join cust ct on oe.custno=ct.noa
 where wb.productno between @bpno and @epno
 order by wa.workno,wb.productno,wc.productno
 
-
+update @end
+set cost=isnull(acost,0)+isnull(bcost,0)+isnull(ccost,0)+isnull(dcost,0)
 --------------------------------------------------------------------
 
-declare @bproductno nvarchar(50)
-declare @bparent nvarchar(50) 
 declare @bworkno nvarchar(50)
 declare @t_bworkno nvarchar(50)
 declare @recno nvarchar(50)
-declare @bprice float
-declare @sprice float 
-declare @oprice float
 
-declare @tmp table(
-	workno nvarchar(20),
-	productno nvarchar(20),
-	parent nvarchar(20)
-)
-set @bparent='root'
 set @t_bworkno='XXXX---XXXX'
 
 declare cursor_table cursor for
-select recno,workno,productno2 from @end --where cost is null
+select recno,workno from @end --where cost is null
 open cursor_table
 fetch next from cursor_table
-into @recno,@bworkno,@bproductno
+into @recno,@bworkno
 while(@@FETCH_STATUS <> -1)
 begin
 
-	insert into @tmp
-	select a.noa,b.productno,a.productno from view_work102 a left join view_works102 b on a.noa=b.noa
-	where (case when CHARINDEX('-',a.noa)=0 then a.noa else LEFT(a.noa,CHARINDEX('-',a.noa)-1) end)
-	=(case when CHARINDEX('-',@bworkno)=0 then @bworkno else LEFT(@bworkno,CHARINDEX('-',@bworkno)-1) end)
-	
-	insert into @tmp
-	select @bworkno,@bproductno,@bparent 
-	
-	
-	BEGIN TRY
-	--遞迴
-	WITH OrdersTable (workno,productno,noa,Level,sortCol,price,sprice,opriec) as
-	(
-	 Select a.workno,a.productno,a.parent,0, CONVERT(nvarchar(128),a.productno)
-	 ,--isnull((select c.lastprice from costs c where c.mon='102/06' and c.productno=a.productno),0)*
-	 --*isnull((select sum(case when UPPER(wa.unit)!='KG' then wa.mount else wa.weight end) from view_workas102 wa where wa.datea <=@enddate and  wa.workno=a.workno and wa.productno=a.productno ),0)
-	 (select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno),
-	(select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno),
-	(select outmoney from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
-	 from @tmp a
-	 where parent=@bparent
-	 UNION ALL
-	 SELECT a.workno,a.productno,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128),OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno))
-	 ,
-	 --原料金額
-	 (
-	 	(select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
-		--isnull((select c.lastprice from costs c where c.mon='102/06' and c.productno=a.productno),0)*
-		 --*(
-			--isnull((select (case when UPPER(wa.unit)!='KG' then wa.mount else wa.weight end) from view_workas102 wa where wa.datea <=@enddate and wa.workno=a.workno and wa.productno=a.productno ),0)
-			--+isnull((select (case when UPPER(wc.unit)!='KG' then wc.mount else wc.weight end) from view_workcs102 wc where wc.datea <=@enddate and wc.workno=a.workno and wc.productno=a.productno ),0)
-		 --)
-	 )
-	 
-	 --委外金額
-	 +(select outmoney from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
-	 
-	 --+(isnull((select b.price from workc102 b where b.workno=a.workno ),0)
-	 --*(select mount from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno)
-	 --*(isnull((select (case when UPPER(wc.unit)!='KG' then wc.mount else wc.weight end) from view_workcs102 wc where wc.datea <=@enddate and wc.workno=a.workno and wc.productno=a.productno ),0) ))
-	 ,(select cost from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno),
-	(select outmoney from workpick102(@enddate) fu where fu.workno=a.workno and fu.productno=a.productno) 
-	 FROM @tmp a, OrdersTable 
-	 WHERE a.parent=OrdersTable.productno 
-
-	)
-	--Select workno,REPLICATE('       ',Level) + productno productno, Level, SortCol,price From OrdersTable order by sortCol
-	
-	Select  @bprice=sum(price),@oprice=sum(opriec),@sprice=SUM(sprice) From OrdersTable
-	
-	END TRY
-	BEGIN CATCH
-	 select @bprice=null ,@oprice=null ,@sprice=null 
-	END CATCH
-	
-	update @end
-	set cost=@bprice,ocost=@oprice ,scost=@sprice 
-	where workno=@bworkno and productno2=@bproductno
-	
-	delete @tmp
-	
 	if(@t_bworkno=@bworkno)
 	begin
 		update @end
@@ -547,23 +480,23 @@ begin
 	set @t_bworkno=@bworkno
 	
 	fetch next from cursor_table
-	into @recno,@bworkno,@bproductno
+	into @recno,@bworkno
 end
 close cursor_table
 deallocate cursor_table
 
 
 insert into @end --製令
-select '1',custno,compnick,ordeno,no2,gnoworkno,'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by custno,compnick,ordeno,no2,gnoworkno
+select '1',custno,compnick,ordeno,no2,gnoworkno,'','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end group by custno,compnick,ordeno,no2,gnoworkno
 
 insert into @end --訂單
-select '2',custno,compnick,ordeno,char(255),char(255),'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by custno,compnick,ordeno
+select '2',custno,compnick,ordeno,char(255),char(255),'','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end group by custno,compnick,ordeno
 
 insert into @end --客戶
-select '3',custno,compnick,char(255),char(255),char(255),'','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end group by custno,compnick
+select '3',custno,compnick,char(255),char(255),char(255),'','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end group by custno,compnick
 
 insert into @end --全部
-select '4',char(255),char(255),'','','','','','',null,null,'','',null,null,SUM(scost),SUM(ocost),SUM(cost) from @end
+select '4',char(255),char(255),'','','','','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end
 
 
 select recno,gno,custno,compnick,ordeno,no2,gnoworkno,workno,productno productnoa,product producta
@@ -574,8 +507,10 @@ select recno,gno,custno,compnick,ordeno,no2,gnoworkno,workno,productno productno
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount2),1)),0,30)) mountb
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,outmount),1)),0,30)) outmount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount2-outmount),1)),0,30)) unoutmount
-,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,scost),1)),0,30)) scost 
-,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ocost),1)),0,30)) ocost 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,acost),1)),0,30)) acost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bcost),1)),0,30)) bcost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ccost),1)),0,30)) ccost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dcost),1)),0,30)) dcost 
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cost),1)),0,30)) cost
 ,@bpno bpno,@epno epno ,@enddate enddate
 from @end order by custno,ordeno,gnoworkno,gno
