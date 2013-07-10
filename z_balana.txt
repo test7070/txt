@@ -1,0 +1,115 @@
+z_balana1:--z_balana1
+declare @today nvarchar(10)
+set @today = '102/07/10'
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	custno nvarchar(30),
+	comp nvarchar(90),
+	datea nvarchar(10),
+	endday nvarchar(30),
+	daydiff int,
+	overday nvarchar(15),
+	unpay float,
+	notend float,
+	day60end float,
+	day612120end float,
+	day1212180end float,
+	dayover180end float,
+	total float,
+	maxdate nvarchar(10),
+	mindate nvarchar(10)
+)
+declare @result table(
+	gno nvarchar(1),
+	custno nvarchar(30),
+	comp nvarchar(90),
+	overday nvarchar(15),
+	unpay nvarchar(20),
+	notend nvarchar(20),
+	day60end nvarchar(20),
+	day612120end nvarchar(20),
+	day1212180end nvarchar(20),
+	dayover180end nvarchar(20),
+	total nvarchar(20),
+	maxdate nvarchar(10),
+	mindate nvarchar(10)
+)
+----資料來源
+insert into @tmp
+	select '0',a.noa,a.custno,b.comp,a.datea,
+		case when patindex('%[0-9]%',a.paytype) > 0 then 
+			substring(a.paytype,patindex('%[0-9]%',a.paytype),len(a.paytype)-patindex('%[0-9]%',a.paytype)) 
+		else a.paytype end endday ,0,'',a.unpay,0,0,0,0,0,0,'',''
+	from vcc[1] a
+	left join cust b on a.custno = b.noa
+	where (a.unpay > 0) and (patindex('%[0-9]%',a.paytype) > 0)
+----取得到期日
+update @tmp set overday = cast((cast(left(datea,3) as int) + 1911) as nvarchar) + substring(datea,4,3) + '/01'
+update @tmp set overday = CONVERT(nvarchar(10),DATEADD(ss, -1, DATEADD(m,(cast(endday as int)/30)+1,overday)),111)
+----計算帳齡
+update @tmp set daydiff = DATEDIFF(day,CONVERT(datetime,cast((cast(left(@today,3) as int) + 1911) as nvarchar)+right(@today,6)),CONVERT(datetime,overday))
+----轉換到期日至民國格式
+update @tmp set overday = cast(left(overday,4)-1911 as nvarchar) + right(overday,6)
+----帳齡分析
+update @tmp set notend = unpay where daydiff >= 0
+update @tmp set day60end = unpay where daydiff between -60 and -1
+update @tmp set day612120end = unpay where daydiff between -120 and -61
+update @tmp set day1212180end = unpay where daydiff between -180 and -121
+update @tmp set dayover180end = unpay where daydiff < -180
+
+----金額合計：
+insert into @tmp(gno,unpay,notend,day60end,day612120end,day1212180end,dayover180end,total)
+	select '1',sum(unpay),sum(notend),sum(day60end),sum(day612120end),sum(day1212180end),sum(dayover180end),
+		sum(notend)+sum(day60end)+sum(day612120end)+sum(day1212180end)+sum(dayover180end)
+	from @tmp 
+----金額比例：
+insert into @tmp(gno,unpay,notend,day60end,day612120end,day1212180end,dayover180end)
+	select '2',(unpay/unpay),(notend/unpay),(day60end/unpay),(day612120end/unpay),
+	(day1212180end/unpay),(dayover180end/unpay)
+	from @tmp where gno = 1
+update @tmp set unpay = round(unpay*100,2) where gno = 2
+update @tmp set notend = round(notend*100,2) where gno = 2
+update @tmp set day60end = round(day60end*100,2) where gno = 2
+update @tmp set day612120end = round(day612120end*100,2) where gno = 2
+update @tmp set day1212180end = round(day1212180end*100,2) where gno = 2
+update @tmp set dayover180end = round(dayover180end*100,2) where gno = 2
+update @tmp set total = notend + day60end + day612120end + day1212180end + dayover180end where gno = 2
+----預計壞帳比率:
+insert into @tmp(gno,notend,day60end,day612120end,day1212180end,dayover180end) values('3',0.5,1,5,15,30)
+----估計壞帳金額:
+insert into @tmp(gno,notend,day60end,day612120end,day1212180end,dayover180end)
+	select '4',notend,day60end,day612120end,day1212180end,dayover180end
+	from @tmp where gno = 1
+update @tmp set notend = round(notend * (select notend from @tmp where gno = 3)/100,0) where gno = 4
+update @tmp set day60end = round(day60end * (select day60end from @tmp where gno = 3)/100,0) where gno = 4
+update @tmp set day612120end = round(day612120end * (select day612120end from @tmp where gno = 3)/100,0) where gno = 4
+update @tmp set day1212180end = round(day1212180end * (select day1212180end from @tmp where gno = 3)/100,0) where gno = 4
+update @tmp set dayover180end = round(dayover180end * (select dayover180end from @tmp where gno = 3)/100,0) where gno = 4
+update @tmp set total = notend + day60end + day612120end + day1212180end + dayover180end where gno = 4
+update @tmp set mindate = (select min(overday) from @tmp)
+update @tmp set maxdate = (select max(overday) from @tmp)
+insert into @result
+	select gno,custno,comp,overday,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,notend),1)),4,12)) notend,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,day60end),1)),4,12)) day60end,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,day612120end),1)),4,12)) day612120end,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,day1212180end),1)),4,12)) day1212180end,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,dayover180end),1)),4,12)) dayover180end,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+	maxdate,mindate
+	from @tmp where gno = 0 or gno = 1 or gno = 4
+insert into @result
+	select gno,custno,comp,overday,
+	cast(unpay as nvarchar) + '%',
+	cast(str(notend,5,2) as nvarchar) + '%' ,
+	cast(str(day60end,5,2) as nvarchar) + '%' ,
+	cast(str(day612120end,5,2) as nvarchar) + '%' ,
+	cast(str(day1212180end,5,2) as nvarchar) + '%' ,
+	cast(str(dayover180end,5,2) as nvarchar) + '%' ,
+	cast(str(total,5,2) as nvarchar) + '%',
+	maxdate,mindate
+	from @tmp where gno = 2 or gno = 3
+select *,@today today from @result order by gno,overday,custno;
+--------------------------------------------------------------------------------
