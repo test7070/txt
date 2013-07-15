@@ -1,4 +1,125 @@
-﻿
+﻿z_accc04:--z_accc04 日記帳
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bacc1 nvarchar(10)
+	declare @t_eacc1 nvarchar(10)
+	declare @t_part nvarchar(max)
+	declare @t_option04 nvarchar(max)
+	
+	set @t_bdate = case when '#non'=[14] then '' else [14] end
+	set @t_edate = case when '#non'=[15] then char(255) else [15] end
+	set @t_bacc1 = case when '#non'=[16] then '' else [16] end
+	set @t_eacc1 = case when '#non'=[17] then char(255) else [17] end
+	set @t_part = case when '#non'=[18] then '' else [18] end
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select @string
+			end
+			break
+		end
+		insert into #part select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+	
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and LEFT(@t_edate,3))
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		accy nvarchar(10),
+		datea nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10)
+	)
+	----------------------------------------------------------------------------------------------
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select @accy,@yy+'/'+b.accc2,a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7,a.dmoney,a.cmoney "+
+		" ,a.part,d.part,a.noq"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+		" left join part d on c.noa=d.noa"+
+		" where @yy+'/'+b.accc2 between @t_bdate and @t_edate"+
+		" and a.accc5 between @t_bacc1 and @t_eacc1"
+		insert into @tmp(accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		execute sp_executesql @cmd,N'@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,dmoney),1)),4,17)) dd
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,cmoney),1)),4,17)) cc
+	from(
+	select case when a.recno=1 then '1' when a.recno=b.n then '3' else '2' end gno
+	,a.*
+	from(
+		select ROW_NUMBER()over(partition by a.datea,a.accc3 order by a.datea,a.accc3) recno
+		,a.*
+		from @tmp a)a
+	outer apply (select COUNT(1) n from @tmp where accc3=a.accc3 and datea=a.datea)b
+	union all
+	select '4','','','','','','','','','','',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),'','',''
+	from @tmp) a;
+	
 z_acc:  --z_acc 
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -113,7 +234,7 @@ z_actot1:--z_actot1
 	execute sp_executesql @cmd,N'@t_acclen int',@t_acclen=@t_acclen
 	
 	update #acc
-	set acc2=(select top 1 acc2 from acc102_1 where left(acc1,@t_acclen)=#acc.acc1 order by acc1 )
+	set acc2=(select top 1 acc2 from acc[1] where left(acc1,@t_acclen)=#acc.acc1 order by acc1 )
 	where acc2=''
 
 	set @cmd = 
@@ -667,7 +788,7 @@ primary key (oaccc3,noq,typea)
 insert @result 
 select '0' gno, '1' p, '0' typea, b.accc1,b.accc2,b.accc3,b.accc3,b.accc4,b.accc5,b.accc6,b.accc7,b.accc8,b.zno,b.ver, 
 b.noq,b.part,b.coin,b.floata,b.dmoney,b.cmoney 
-from acccs102_1 b 
+from acccs[1] b 
 where (b.accc1='3' or b.accc1!='3' and @t_chk1='Y') and 
 (b.accc5 between @t_baccno and @t_eaccno) and 
 (isnull(b.part,'') between @t_bpart and @t_epart) and 
