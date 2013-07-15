@@ -145,3 +145,149 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,other),1)),4,12)) other,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,totmoney),1)),4,12)) totmoney
 from @tmp;
+
+z_tb:--z_tb
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	set @t_bdate = case when '#non'=[9] then '' else [9] end
+	set @t_edate = case when '#non'=[10] then char(255) else [10] end
+	set @t_bproductno = case when '#non'=[7] then '' else [7] end
+	set @t_eproductno = case when '#non'=[8] then char(255) else [8] end
+
+	declare @result table(
+		gno nvarchar(1),
+		recno int,
+		productno nvarchar(30),
+		xproduct nvarchar(40),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(40),
+		unit nvarchar(10),
+		mount decimal(16,2),
+		weight decimal(16,2),
+		totmount decimal(18,2),
+		totweight decimal(18,2)
+		primary key (productno,recno) 
+	)
+	insert into @result
+	select
+		'0' gno, ROW_NUMBER()over(order by productno,datea,typea)as recno,R1.*, 0 totmount, 0 totweight
+	from(
+		select noa productno,product xproduct,isnull(datea,'') datea,'01' typea,'期初' typec, 
+		       '' noa,'' comp, unit, start mount, start weight
+		from ucc[1] 
+		where  noa BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate
+		union
+		select noa productno,product xproduct,isnull(datea,'') datea,'02' typea,'盤點' typec, 
+		       noa,'' comp, unit, adjmount mount, adjweight weight
+		from ucces[1]
+		where  noa BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '退' then 'A0' else '10' end typea,case a.typea when '退' then '進退' else '進貨' end typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit, b.mount, b.weight
+		from rc2s[1] b left join rc2[1] a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '退' then '11' else 'B0' end typea,case a.typea when '退' then '出退' else '出貨' end typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit, b.mount, b.weight
+		from vccs[1] b left join vcc[1] a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate
+		union
+		select productno,product xproduct,isnull(datea,'') datea, '12' typea, '入庫' typec,
+		       noa, '' comp, unit, mount, weight
+		from inas[1]
+		where productno BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate
+		union
+		select productno,product xproduct,isnull(datea,'') datea, 'C0' typea, '領料' typec,
+		       noa, '' comp, unit, mount, weight
+		from gets[1]
+		where productno BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate
+		) as R1
+
+	--*****************************************************************************************	
+	declare @recno int
+	declare @productno nvarchar(30)
+	declare @typea nvarchar(10)
+	declare @datea nvarchar(10)
+	declare @mount decimal(18,2)
+	declare @weight decimal(18,2)
+	
+	declare @t_productno nvarchar(30)
+	declare @t_mount decimal(18,2)
+	declare @t_weight decimal(18,2)
+	declare @t_totmount decimal(18,2)
+	declare @t_totweight decimal(18,2)
+	set @t_productno = '@#S(DJ#SH!@'
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	
+	declare cursor_table cursor for
+	select recno,productno,typea,datea,mount,weight from @result order by productno,recno
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@productno,@typea,@datea,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @t_productno!=@productno and @t_productno!='@#S(DJ#SH!@'
+		begin
+			insert into @result
+			select '1' gno,-1 recno,@t_productno,'' xproduct,'' datea,'zz' typea,'小計' typec, 
+				   '' noa,'' comp, '' unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweight
+		end
+		if @t_productno!=@productno
+		begin
+			set @t_productno = @productno
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+		end
+		if  @datea between @t_bdate and @t_edate
+		begin
+			set @t_mount =
+				case 
+				when @typea='01' or @typea='02' then @mount
+				when @typea='10' or @typea='11' or @typea='12' then @t_mount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_mount - @mount
+				end
+			set @t_weight =
+				case 
+				when @typea='01' or @typea='02' then @weight
+				when @typea='10' or @typea='11' or @typea='12' then @t_weight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_weight - @weight
+				end
+		end
+		set @t_totmount =
+			case 
+			when @typea='01' or @typea='02' then @mount
+			when @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+			end
+		set @t_totweight =
+			case 
+			when @typea='01' or @typea='02' then @weight
+			when @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+			end
+		
+		update @result set totmount = @t_totmount, totweight = @t_totweight where productno=@productno and recno=@recno
+
+		fetch next from cursor_table
+		into @recno,@productno,@typea,@datea,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table
+	if @t_productno!='@#S(DJ#SH!@'
+	begin
+		insert into @result
+		select '1' gno,-1 recno,@t_productno,'' xproduct,'' datea,'zz' typea,'小計' typec, 
+			   '' noa,'' comp, '' unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweigh
+	end
+	--*****************************************************************************************	
+	select * from @result where gno='1' or (gno='0' and datea between @t_bdate and @t_edate) order by productno, gno, recno;
