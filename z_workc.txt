@@ -20,11 +20,7 @@ insert into @tmp
 		'0',b.tggno,b.comp,a.productno,a.product,isnull(sum(a.mount),0),isnull(sum(c.mount),0),0
 	from works[1] a
 	left join work[1] b on a.noa = b.noa
-	left join (
-		select b.noa,b.workno,b.productno,sum(a.mount) mount from workcs[1] a 
-		left join workc[1] b on a.noa = b.noa
-		group by b.workno,b.productno,b.noa
-	) c on b.noa = c.workno
+	left join workcs[1] c on b.noa = c.workno
 	where (b.tggno != '') and (b.tggno between @t_btggno and @t_etggno) and (len(@t_noa)=0 or c.noa = @t_noa)
 	group by b.tggno,b.comp,a.productno,a.product
 update @tmp set total = workmount-workcmount
@@ -62,16 +58,28 @@ declare @tmp table(
 )
 insert into @tmp
 	select
-		'0',a.noa,a.datea,a.tgg,a.productno,a.product,b.mount,b.unit,b.inmount,
+		'0',a.noa,a.datea,a.tgg,a.productno,a.product,b.mount,a.unit,b.inmount,
 		case when b.mount >0 then round((b.inmount/b.mount)*100,2) else 0 end,
 		b.cuadate,b.workdate,b.uindate,b.enddate,
 		DATEDIFF(day,CONVERT(datetime,(cast((left(b.cuadate,3)+1911) as nvarchar)+right(b.cuadate,6))),
 					CONVERT(datetime,(cast((left(b.workdate,3)+1911) as nvarchar)+right(b.workdate,6)))) diffdate,
 		b.ordeno,b.station
-	from workc[1] a
+	from (
+		select distinct a.workno,a.noa,b.datea,b.tggno,b.tgg,a.productno,a.product,a.unit from workcs[1] a
+		left join workc[1] b on a.noa = b.noa
+		where isnull(a.workno,'') != ''
+	) a
 	left join work[1] b on a.workno = b.noa
 	where a.tggno between @t_btggno and @t_etggno and (len(@t_noa)=0 or a.noa = @t_noa)
-select * from @tmp;
+update @tmp set cuadate = '未指定' where isnull(cuadate,'') = ''
+update @tmp set workdate = '未指定' where isnull(workdate,'') = ''
+update @tmp set diffdate = '0' where cuadate = '未指定' or workdate = '未指定'
+
+select
+	gno,noa,datea,tgg,productno,products,amount,unit,
+	ainmount,cast(p_inmount as nvarchar) + '%' p_inmount,cuadate,workdate,uindate,enddate,
+	diffdate,ordeno,station
+from @tmp;
 --------------------------------------------------------------------------------------------------------
 z_workc3:--z_workc3
 declare @t_btggno nvarchar(20)
@@ -100,16 +108,19 @@ declare @tmp table(
 	bordeno nvarchar(30)
 )
 insert into @tmp 
-select
-	'0',a.noa,a.datea,a.tgg,b.productno,b.product,b.unit,sum(b.mount),
-	b.inmount,case when b.mount >0 then round((b.inmount/b.mount)*100,2) else 0 end,
-	b.rmount,case when b.mount >0 then round((b.rmount/b.mount)*100,2) else 0 end,
-	b.cuadate,b.workdate,b.uindate,b.enddate,b.ordeno
-from workc[1] a
-left join workcs[1] c on a.noa = c.noa
-left join work[1] b on c.workno = b.noa
-where a.tggno between @t_btggno and @t_etggno and (len(@t_noa)=0 or a.noa = @t_noa)
-group by a.noa,a.datea,a.tgg,b.productno,b.product,b.unit,b.cuadate,b.workdate,b.uindate,b.enddate,b.ordeno,b.inmount,b.rmount,b.mount
+	select
+		'0',a.noa,a.datea,a.tgg,b.productno,b.product,b.unit,sum(b.mount),
+		b.inmount,case when b.mount >0 then round((b.inmount/b.mount)*100,2) else 0 end,
+		b.rmount,case when b.mount >0 then round((b.rmount/b.mount)*100,2) else 0 end,
+		b.cuadate,b.workdate,b.uindate,b.enddate,b.ordeno
+	from (
+			select distinct a.workno,a.noa,b.datea,b.tggno,b.tgg,a.productno,a.product,a.unit from workcs[1] a
+			left join workc[1] b on a.noa = b.noa
+			where isnull(a.workno,'') != ''
+		) a
+	left join work[1] b on a.workno = b.noa
+	where a.tggno between @t_btggno and @t_etggno and (len(@t_noa)=0 or a.noa = @t_noa)
+	group by a.noa,a.datea,a.tgg,b.productno,b.product,b.unit,b.cuadate,b.workdate,b.uindate,b.enddate,b.ordeno,b.inmount,b.rmount,b.mount
 select * from @tmp;
 --------------------------------------------------------------------------------------------------------
 z_workc4:--z_workc4
@@ -163,15 +174,18 @@ declare @tmp table(
 	ordeno nvarchar(30)
 )
 insert into @tmp
-select
-	'0',a.tgg,a.noa,a.datea,b.productno,b.product,sum(b.mount),
-	b.unit,b.cuadate,b.uindate,a.ordeno
-from workc[1] a
-left join workcs[1] c on a.noa = c.noa
-left join work[1] b on c.workno = b.noa
-where (a.datea between @t_bdate and @t_edate) and (a.tggno between @t_btggno and @t_etggno)
- and (len(@t_noa)=0 or a.noa = @t_noa)
-group by a.tgg,a.noa,a.datea,b.productno,b.product,b.unit,b.cuadate,b.uindate,a.ordeno
+	select
+		'0',a.tgg,a.noa,a.datea,b.productno,b.product,sum(b.mount),
+		b.unit,b.cuadate,b.uindate,b.ordeno
+	from (
+			select distinct a.workno,a.noa,b.datea,b.tggno,b.tgg,a.productno,a.product,a.unit from workcs[1] a
+			left join workc[1] b on a.noa = b.noa
+			where isnull(a.workno,'') != ''
+		) a
+	left join work[1] b on a.workno = b.noa
+	where (a.datea between @t_bdate and @t_edate) and (a.tggno between @t_btggno and @t_etggno)
+	 and (len(@t_noa)=0 or a.noa = @t_noa)
+	group by a.tgg,a.noa,a.datea,b.productno,b.product,b.unit,b.cuadate,b.uindate,b.ordeno
 select * from @tmp;
 --------------------------------------------------------------------------------------------------------
 z_workc6:--z_workc6
@@ -241,24 +255,42 @@ declare @tmp table(
 		e_mount float----------------在途未進量
 )
 insert into @tmp
-select '0' gno,a.noa,b.noq,a.datea,a.productno,a.product,c.workcno,isnull(d.born,0),isnull(d.mount,0),
-e.productno,e.product,e.cuadate,e.mount,e.unit,b.mount,e.emount,0,0,0
-from workc[1] a
-left join workcs[1] b on a.noa = b.noa
-left join workd[1] c on c.workcno = b.noa 
-left join workds[1] d on c.noa = d.noa and d.productno = b.productno
-left join works[1] e on e.noa = a.workno and e.productno = b.productno
-where (isnull(a.datea,'') between @t_bdate and @t_edate) and (len(@t_noa)=0 or a.noa = @t_noa) 
+	select '0' gno,a.noa,b.noq,a.datea,f.productno,f.product,c.workcno,isnull(f.mount,0),isnull(f.inmount,0),
+	e.productno,e.product,e.cuadate,e.mount,e.unit,b.mount,e.emount,0,0,0
+	from workc[1] a
+	left join workcs[1] b on a.noa = b.noa
+	left join workd[1] c on c.workcno = b.noa 
+	left join works[1] e on e.noa = b.workno and e.productno = b.productno
+	left join work[1] f on e.noa = f.noa
+	where (isnull(a.datea,'') between @t_bdate and @t_edate) and (len(@t_noa)=0 or a.noa = @t_noa) 
 
+insert into @tmp(gno,noa,gmount,bmount)
+	select '1',noa,sum(gmount),sum(bmount) from @tmp
+	group by noa
+declare @noa nvarchar(30)
+declare cursor_table cursor for
+	select noa from @tmp where gno = 1
+open cursor_table
+fetch next from cursor_table
+into @noa
+while(@@FETCH_STATUS <> -1)
+begin
+	update @tmp set mount = (select gmount/bmount from @tmp where gno = 1 and noa = @noa)*mount where gno = 0
+	fetch next from cursor_table 
+	into @noa
+end 
+close cursor_table 
+deallocate cursor_table 
+delete @tmp where gno = 1
 select gno,noa,noq,datea,aproductno,aproduct,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
-bproductno,bproduct,cuadatez,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmount),1)),4,12)) bmount,
-bunit,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gmount),1)),4,12)) gmount,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,emount),1)),4,12)) emount,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stkmount),1)),4,12)) stkmount,
-0 s_mount,0 e_mount
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
+	bproductno,bproduct,cuadatez,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmount),1)),4,12)) bmount,
+	bunit,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gmount),1)),4,12)) gmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,emount),1)),4,12)) emount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stkmount),1)),4,12)) stkmount,
+	0 s_mount,0 e_mount
 from @tmp;
 
 ---------------------------------------------------------------------------------------------------------
@@ -294,7 +326,7 @@ insert into @tmp
 		0,0
 	from workds[1] a
 	left join workd[1] b on a.noa = b.noa
-	left join workc[1] c on b.workcno = c.noa
+	left join workcs[1] c on b.workcno = c.noa
 	left join work[1] d on c.workno = d.noa
 	where (b.datea between @t_bdate and @t_edate) and (len(@t_noa)=0 or c.noa = @t_noa)
 	order by b.datea
@@ -349,7 +381,7 @@ declare @tmp table(
 )
 insert into @tmp
 	select 
-		'0',b.datea,a.productno,a.product,b.tggno,b.tgg,b.noa,a.productno,a.product,b.workno,
+		'0',b.datea,a.productno,a.product,b.tggno,b.tgg,b.noa,a.productno,a.product,a.workno,
 		b.typea,
 		case when b.typea = '2' then a.mount*(-1) else a.mount end,
 		a.unit,b.storeno,b.store
@@ -397,20 +429,18 @@ declare @tmp table(
 )
 insert into @tmp
 	select
-		'0',a.noa,a.noq,b.productno,b.product,c.workmount,c.inmount,c.workunit,c.uindate,c.enddate,a.productno,a.product,
+		'0',a.noa,a.noq,c.productno,c.product,c.workmount,c.inmount,c.workunit,c.uindate,c.enddate,a.productno,a.product,
 		a.unit,c.worksmount,a.mount,0,0
 	from workcs[1] a
 	left join workc[1] b on a.noa = b.noa
 	left join (
 		select
 			b.noa,a.noq,b.mount workmount,b.inmount,b.unit workunit,b.uindate,
-			b.enddate,a.productno,a.product,a.unit worksunit,a.mount worksmount,
-			d.price
+			b.enddate,b.productno,b.product,a.unit worksunit,a.mount worksmount,
+			a.productno aproductno,a.product aproduct 
 		from works[1] a 
 		left join work[1] b on a.noa = b.noa
-		left join ordbs[1] c on (b.ordeno = c.noa) and (b.no2 = c.no2)
-		left join ordcs[1] d on (c.noa = d.ordbno) and (c.no3 = d.no3)
-	) c on (b.workno = c.noa) and (a.productno = c.productno) and (a.unit = c.worksunit)
+	) c on (a.workno = c.noa) and (a.productno = aproductno)
 	where (len(@t_noa) = 0 or b.noa = @t_noa) and
 		  (b.datea between @t_bdate and @t_edate)
 
