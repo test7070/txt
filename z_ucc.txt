@@ -3,6 +3,8 @@ z_tb:--z_tb
 	declare @t_edate nvarchar(10)
 	declare @t_bproductno nvarchar(30)
 	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	set @t_typea = case when '#non'=[9] then '' else [9] end
 	set @t_bdate = case when '#non'=[1] then '' else [1] end
 	set @t_edate = case when '#non'=[2] then char(255) else [2] end
 	set @t_bproductno = case when '#non'=[3] then '' else [3] end
@@ -22,12 +24,13 @@ z_tb:--z_tb
 		mount decimal(16,2),
 		weight decimal(16,2),
 		totmount decimal(18,2),
-		totweight decimal(18,2)
+		totweight decimal(18,2),
+		ucctype nvarchar(15)
 		primary key (productno,recno) 
 	)
 	insert into @result
 	select
-		'0' gno, ROW_NUMBER()over(order by productno,datea,typea)as recno,R1.*, 0 totmount, 0 totweight
+		'0' gno, ROW_NUMBER()over(order by productno,datea,typea)as recno,R1.*, 0 totmount, 0 totweight,''
 	from(
 		select noa productno,product xproduct,isnull(datea,'') datea,'01' typea,'期初' typec, 
 		       '' noa,'' comp, unit, start mount, start weight
@@ -58,6 +61,26 @@ z_tb:--z_tb
 		       noa, '' comp, unit, mount, weight
 		from gets[5]
 		where productno BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '領料' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workas[5] b left join worka[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '領料' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workcs[5] b left join workc[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '入庫' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workbs[5] b left join workb[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '入庫' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workds[5] b left join workd[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
 		) as R1
 
 	--*****************************************************************************************	
@@ -90,7 +113,7 @@ z_tb:--z_tb
 		begin
 			insert into @result
 			select '1' gno,-1 recno,@t_productno,'' xproduct,'' datea,'zz' typea,'小計' typec, 
-				   '' noa,'' comp, '' unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweight
+				   '' noa,'' comp, '' unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweight,''
 		end
 		if @t_productno!=@productno
 		begin
@@ -139,10 +162,45 @@ z_tb:--z_tb
 	begin
 		insert into @result
 		select '1' gno,-1 recno,@t_productno,'' xproduct,'' datea,'zz' typea,'小計' typec, 
-			   '' noa,'' comp, '' unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweigh
+			   '' noa,'' comp, '' unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweigh,''
 	end
+	
+	declare @ucctype nvarchar(15)
+	declare cursor_table cursor for
+	select noa,typea from ucc order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @result set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select noa,typea from uca order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@ucctype = 1)
+			set @ucctype = 2
+		else
+			set @ucctype = 3
+		update @result set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
 	--*****************************************************************************************	
-	select * from @result where gno='1' or (gno='0' and datea between @t_bdate and @t_edate) order by productno, gno, recno;
+	select * from @result where (gno='1' or (gno='0' and datea between @t_bdate and @t_edate)) 
+	 and (len(@t_typea) = 0 or ucctype = @t_typea)
+	order by productno, gno, recno;
 
 z_stk:	--庫存表  
 	--z_stk
@@ -150,10 +208,12 @@ z_stk:	--庫存表
 	declare @t_edate nvarchar(10)
 	declare @t_bproductno nvarchar(30)
 	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
 	set @t_bdate = case when '#non'=[1] then '' else [1] end
 	set @t_edate = case when '#non'=[2] then char(255) else [2] end
 	set @t_bproductno = case when '#non'=[3] then '' else [3] end
 	set @t_eproductno = case when '#non'=[4] then char(255) else [4] end
+	set @t_typea = case when '#non'=[9] then '' else [9] end
 
 	declare @result table(
 		gno nvarchar(1),
@@ -166,15 +226,16 @@ z_stk:	--庫存表
 		noa nvarchar(20),
 		comp nvarchar(40),
 		unit nvarchar(10),
-		mount decimal(16,2),
-		weight decimal(16,2),
-		totmount decimal(18,2),
-		totweight decimal(18,2)
+		mount float,
+		weight float,
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
 		primary key (productno,recno) 
 	)
 	insert into @result
 	select
-		'z' gno, ROW_NUMBER()over(order by productno,datea,typea)as recno,R1.*, 0 totmount, 0 totweight
+		'z' gno, ROW_NUMBER()over(order by productno,datea,typea)as recno,R1.*, 0 totmount, 0 totweight,'' ucctype
 	from(
 		select noa productno,product xproduct,isnull(datea,'') datea,'01' typea,'期初' typec, 
 		       '' noa,'' comp, unit, start mount, start weight
@@ -205,6 +266,26 @@ z_stk:	--庫存表
 		       noa, '' comp, unit, mount, weight
 		from gets[5]
 		where productno BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '領料' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workas[5] b left join worka[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '領料' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workcs[5] b left join workc[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '入庫' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workbs[5] b left join workb[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
+		union
+		select b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '入庫' typec,
+		       a.noa, '' comp, b.unit, b.mount, b.weight
+		from workds[5] b left join workd[5] a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate
 		) as R1
 
 	--*****************************************************************************************	
@@ -214,14 +295,14 @@ z_stk:	--庫存表
 	declare @typea nvarchar(10)
 	declare @unit nvarchar(10)
 	declare @datea nvarchar(10)
-	declare @mount decimal(18,2)
-	declare @weight decimal(18,2)
+	declare @mount float
+	declare @weight float
 	
 	declare @t_productno nvarchar(30)
-	declare @t_mount decimal(18,2)
-	declare @t_weight decimal(18,2)
-	declare @t_totmount decimal(18,2)
-	declare @t_totweight decimal(18,2)
+	declare @t_mount float
+	declare @t_weight float
+	declare @t_totmount float
+	declare @t_totweight float
 	set @t_productno = '@#S(DJ#SH!@'
 	set @t_mount = 0
 	set @t_weight = 0
@@ -239,7 +320,7 @@ z_stk:	--庫存表
 		begin
 			insert into @result
 			select '0' gno,-1 recno,@t_productno,'' xproduct,'' datea,'zz' typea,'小計' typec, 
-				   '' noa,'' comp, @unit unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweight
+				   '' noa,'' comp, @unit unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweight,''
 		end
 		if @t_productno!=@productno
 		begin
@@ -285,24 +366,44 @@ z_stk:	--庫存表
 	begin
 		insert into @result
 		select '0' gno,-1 recno,@t_productno,'' xproduct,'' datea,'zz' typea,'小計' typec, 
-			   '' noa,'' comp, @unit unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweigh
+			   '' noa,'' comp, @unit unit, @t_mount mount, @t_weight weight, @t_totmount totmount, @t_totweight totweigh,''
 	end
-
+	declare @ucctype nvarchar(15)
 	declare cursor_table cursor for
-	select noa,product from ucc order by noa
+	select noa,product,typea from ucc order by noa
 	open cursor_table
 	fetch next from cursor_table
-	into @productno,@product
+	into @productno,@product,@ucctype
 	while(@@FETCH_STATUS <> -1)
 	begin
-		update @result set xproduct = @product where productno=@productno
+		update @result set xproduct = @product,ucctype = @ucctype where productno=@productno
 		fetch next from cursor_table
-		into @productno,@product
+		into @productno,@product,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	declare cursor_table cursor for
+	select noa,product,typea from uca order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@product,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@ucctype = 1)
+			set @ucctype = 2
+		else
+			set @ucctype = 3
+		update @result set xproduct = @product,ucctype = @ucctype where productno=@productno
+		fetch next from cursor_table
+		into @productno,@product,@ucctype
 	end
 	close cursor_table
 	deallocate cursor_table
 	--*****************************************************************************************	
-	select * from @result where gno='0' order by productno, gno, recno;
+	select * from @result
+	where gno='0' and (len(@t_typea) = 0 or ucctype = @t_typea)
+	order by productno, gno, recno;
 
 z_stk1:	
 	return
