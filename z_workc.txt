@@ -380,12 +380,12 @@ declare @tmp table(
 )
 insert into @tmp
 	select
-		'0',b.datea,a.ordeno,a.no2,d.stationno,d.station,d.process,b.workcno,a.noq,
-		a.productno,a.product,a.unit,a.born,a.mount,(a.mount+a.errmount),
+		'0',b.datea,a.ordeno,a.no2,d.stationno,d.station,d.process,e.noa,a.noq,
+		a.productno,a.product,a.unit,d.mount,a.mount,(a.mount+a.errmount),
 		0,0
 	from workds[1] a
 	left join workd[1] b on a.noa = b.noa
-	left join workcs[1] c on b.workcno = c.noa
+	left join workcs[1] c on a.workno = c.workno
 	left join workc[1] e on c.noa = e.noa
 	left join work[1] d on c.workno = d.noa
 	where (b.datea between @t_bdate and @t_edate) and (len(@t_noa)=0 or c.noa = @t_noa)
@@ -548,28 +548,50 @@ declare @tmp table(
 	y_mount float,
 	n_mount float
 )
+--insert into @tmp
+--	select
+--		'0',a.productno,a.product,a.unit,sum(d.mount),sum(isnull(e.lastmount,0)),
+--		sum(isnull(f.mount,0)),sum(isnull(g.mount,0)),0,0
+--	from workcs[1] a
+--	left join workc[1] b on a.noa = b.noa
+--	left join work[1] c on b.workno = c.noa
+--	left join works[1] d on (c.noa = d.noa) and (a.productno = d.productno) and (a.unit = d.unit)
+--	left join calstk e on (a.productno = e.productno) and (e.datea = d.cuadate)
+--	left join (
+--		select b.odate,a.productno,a.mount from ordcs[1] a
+--		left join ordc[1] b on a.noa = b.noa
+--	) f on (f.productno = e.productno) and e.datea <= f.odate
+--	left join (
+--		select b.odate,a.productno,a.mount from ordes[1] a 
+--		left join orde[1] b on a.noa = b.noa
+--	) g on (g.productno = e.productno) and e.datea <= g.odate
+--	where (len(@t_noa) = 0 or b.noa = @t_noa) and
+--		  (b.datea between @t_bdate and @t_edate) and
+--		  (b.tggno between @t_btggno and @t_etggno)
+--		  and (len(@t_ordeno)=0 or c.ordeno = @t_ordeno) and (len(@t_no2)=0 or c.no2 = @t_no2)
+--	group by a.productno,a.product,a.unit
+
+declare @pev_date nvarchar(10)--取前一天庫存量
+set @pev_date=CONVERT (VARCHAR(7), dateadd (day,-1,cast( cast(cast(left(@t_bdate,3) as int)+1911 as nvarchar(10))+right(@t_bdate,6) as datetime)),12 )+0890000
+set @pev_date=left(@pev_date,3)+'/'+substring(@pev_date,4,2)+'/'+right(@pev_date,2)
+
 insert into @tmp
-	select
-		'0',a.productno,a.product,a.unit,sum(d.mount),sum(isnull(e.lastmount,0)),
-		sum(isnull(f.mount,0)),sum(isnull(g.mount,0)),0,0
-	from workcs[1] a
-	left join workc[1] b on a.noa = b.noa
-	left join work[1] c on b.workno = c.noa
-	left join works[1] d on (c.noa = d.noa) and (a.productno = d.productno) and (a.unit = d.unit)
-	left join calstk e on (a.productno = e.productno) and (e.datea = d.cuadate)
-	left join (
-		select b.odate,a.productno,a.mount from ordcs[1] a
-		left join ordc[1] b on a.noa = b.noa
-	) f on (f.productno = e.productno) and e.datea <= f.odate
-	left join (
-		select b.odate,a.productno,a.mount from ordes[1] a 
-		left join orde[1] b on a.noa = b.noa
-	) g on (g.productno = e.productno) and e.datea <= g.odate
-	where (len(@t_noa) = 0 or b.noa = @t_noa) and
-		  (b.datea between @t_bdate and @t_edate) and
-		  (b.tggno between @t_btggno and @t_etggno)
-		  and (len(@t_ordeno)=0 or c.ordeno = @t_ordeno) and (len(@t_no2)=0 or c.no2 = @t_no2)
-	group by a.productno,a.product,a.unit
+select '0',
+wb.productno,wb.product,wb.unit,sum(wb.mount)needmount
+,isnull((select sum(mount) from stkucc[1](@pev_date,'','') where productno=wb.productno),0)stkmount
+,isnull((select SUM(mount) from view_ordcs[1] ocs where ocs.datea>=@t_edate and ocs.productno=wb.productno),0) uinmount
+,isnull((select SUM(mount) from (
+select mount from view_ordes[1] oes where oes.datea>=@t_edate and oes.productno=wb.productno union
+select mount from view_workcs[1] wcs where wcs.datea>=@t_edate and wcs.productno=wb.productno
+)tmp),0) uinmount,0,0
+from view_work[1] wa left join view_works[1] wb on wa.noa=wb.noa
+left join view_workcs[1] wcb on wa.noa=wcb.workno
+where len(wa.tggno)!=0 and (wcb.datea between @t_bdate and @t_edate)
+and (len(@t_ordeno)=0 or wa.ordeno=@t_ordeno) and (len(@t_no2)=0 or wa.no2=@t_no2) and (len(@t_noa)=0 or wcb.noa=@t_noa)
+and (wa.tggno between @t_btggno and @t_etggno)
+group by wb.productno,wb.product,wb.unit 
+
+	
 update @tmp set y_mount = (stkmount+uinmount-uoutmount)
 update @tmp set n_mount = case when (needmount-y_mount) > 0 then (needmount-y_mount) else 0 end
 select
