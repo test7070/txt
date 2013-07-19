@@ -47,6 +47,7 @@ insert into @tmp(gno,datea,mechno,mechs,borntime,inmount,errmount,chgmo,
 	order by b.datea
 update @tmp set activation = case when borntime > 0 then (borntime-(chgmo+fault+delay+waittime+waitfedtime+lacksss))/borntime
 										 else 0 end
+update @tmp set activation = round(activation,4)
 insert into @tmp
 	select '1',datea,'','',sum(activation),sum(borntime),sum(inmount),sum(errmount),
 			 sum(chgmo),sum(fault),sum(delay),sum(waittime),sum(waitfedtime),sum(lacksss),
@@ -101,9 +102,12 @@ select
 from work[1] a
 left join station b on a.stationno = b.noa
 where (a.datea between @t_bdate and @t_edate) and (a.station between @t_bstationno and @t_estationno)
+insert into @tmp(gno,stationno,stations,mount,hours,diffdate,dayhtotal,dayhs,difftime)
+	select '1',stationno,stations,sum(mount),sum(hours),sum(diffdate),0,max(dayhs),0 from @tmp
+	group by stationno,stations
 update @tmp set dayhtotal = ceiling((hours/diffdate)*100)/100 where diffdate != 0
 update @tmp set difftime = dayhs-dayhtotal
-select * from @tmp order by stationno,stations,datea,noa;
+select * from @tmp order by stationno,gno,stations,datea,noa;
 --------------------------------------------------------------------------------------------------------
 z_work3:--z_work3
 declare @t_noa nvarchar(30)
@@ -348,12 +352,38 @@ insert into @tmp
 			(c.costa + c.costb + c.costc + c.costd) price
 		from workas[1] a
 		left join wcost[1] c on (a.workno = c.workno) and (a.productno = c.productno) and (a.noa = c.noa)
+		union
+		select
+			a.workno,a.productno,a.product,a.unit,a.mount,
+			(c.costa + c.costb + c.costc + c.costd) price
+		from workcs[1] a
+		left join wcost[1] c on (a.workno = c.workno) and (a.productno = c.productno) and (a.noa = c.noa)
 	) c on b.noa = c.workno and (a.productno = c.productno)
 	where isnull(b.noa ,'') != '' and
 	(b.cuadate between @t_bdate and @t_edate) and
 	(b.productno between @t_bproductno and @t_eproductno)
 	order by b.noa,a.noq,b.productno,a.productno
 update @tmp set s_total = (binmount-bmount) where (binmount-bmount) > 0
+declare @ucanoa nvarchar(90)
+declare @ucabadperc float
+declare cursor_table cursor for
+	select noa,isnull(badperc,0) from uca a
+	union 
+	select productno,loss from ucas b
+	union
+	select b.productno,a.badperc from ucat b
+	left join uca a on a.noa = b.noa
+open cursor_table
+fetch next from cursor_table
+into @ucanoa,@ucabadperc
+while(@@FETCH_STATUS <> -1)
+begin
+	delete @tmp where (aproductno = @ucanoa) and (s_total <= @ucabadperc)
+	fetch next from cursor_table
+	into @ucanoa,@ucabadperc
+end
+close cursor_table
+deallocate cursor_table
 select * from @tmp order by noa,noq,aproductno,bproductno;
 ---------------------------------------------------------------------------------------------
 z_work9:--z_work9
@@ -413,26 +443,31 @@ declare @tmp table(
 	y_mount float,
 	n_mount float
 )
+declare @pev_date nvarchar(10)--取前一天庫存量
+set @pev_date=CONVERT (VARCHAR(7), dateadd (day,-1,cast( cast(cast(left(@t_bdate,3) as int)+1911 as nvarchar(10))+right(@t_bdate,6) as datetime)),12 )+0890000
+set @pev_date=left(@pev_date,3)+'/'+substring(@pev_date,4,2)+'/'+right(@pev_date,2)
+
 insert into @tmp
 	select
 		'0',b.uindate,b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,
-		a.productno,a.product,a.mount,a.gmount,a.unit,a.emount,isnull(c.lastmount,0),
+		a.productno,a.product,a.mount,a.gmount,a.unit,a.emount,isnull(
+		(select sum(mount) from stkucc[1](@pev_date,'','') where productno=a.productno)
+		,0),
 		sum(isnull(d.mount,0)),sum(isnull(d.mount,0)),0,0
 	from works[1] a
 	left join work[1] b on a.noa = b.noa
-	left join calstk c on (a.productno = c.productno) and (c.datea = a.cuadate)
 	left join (
 		select b.odate,a.productno,a.mount mount from ordcs[1] a
 		left join ordc[1] b on a.noa = b.noa
-	) d on (d.productno = c.productno) and c.datea <= d.odate
+	) d on (d.productno = a.productno) and a.cuadate <= d.odate
 	left join (
 		select b.odate,a.productno,a.mount mount from ordes[1] a 
 		left join orde[1] b on a.noa = b.noa
-	) e on (e.productno = c.productno) and c.datea <= e.odate
+	) e on (e.productno = a.productno) and a.cuadate <= e.odate
 	where b.noa is not null and
 		(b.cuadate between @t_bdate and @t_edate)
 	group by b.uindate,b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,
-				a.productno,a.product,a.mount,a.gmount,a.unit,a.emount,c.lastmount
+				a.productno,a.product,a.mount,a.gmount,a.unit,a.emount
 update @tmp set y_mount = (bstkmount+buinmount-buoutmount)
 update @tmp set n_mount = case when (bmount-y_mount) > 0 then (bmount-y_mount) else 0 end
 select * from @tmp;
