@@ -1,0 +1,515 @@
+z_accc01:--z_accc01 明細分類帳
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+	
+	declare @t_accy nvarchar(10)
+	declare @t_namea nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	declare @t_part nvarchar(max)
+	declare @t_option04 nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_namea = '[2]'
+	set @t_bdate = case when '#non'=[3] then '' else [3] end
+	set @t_edate = case when '#non'=[4] then char(255) else [4] end
+	set @t_bacc1 = case when '#non'=[5] then '' else [5] end
+	set @t_eacc1 = case when '#non'=[6] then char(255) else [6] end
+	set @t_part = case when '#non'=[7] then '' else [7] end
+	----------------------------------------------------------------------------------------------	
+	set @islock = 1 --鎖定的不顯示
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select @string
+			end
+			break
+		end
+		insert into #part select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+	
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and LEFT(@t_edate,3))
+	----------------------------------------------------------------------------------------------
+	declare @flag int 
+	declare @tmpString nvarchar(max)
+	declare @maxcount int
+	set @maxcount = 10
+	--declare @accy nvarchar(10)
+	declare @datea  nvarchar(10)
+	declare @accc1 nvarchar(20)
+	declare @accc2 nvarchar(20)
+	declare @accc3 nvarchar(20)
+	declare @accc4 nvarchar(20)
+	declare @accc5 nvarchar(20)
+	declare @accc6 nvarchar(max)
+	declare @accc7 nvarchar(max)
+	declare @dmoney float
+	declare @cmoney float
+	declare @partno  nvarchar(20)
+	declare @part  nvarchar(20)
+	declare @noq  nvarchar(20)
+	declare @cn1 int
+	declare @cn2 int
+	declare @mon nvarchar(10)
+	declare @typea nvarchar(20)
+	declare @pno nvarchar(10)
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(20),
+		accy nvarchar(10),
+		datea nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10)
+	)
+	
+	declare @tmpHistory table(
+		accy nvarchar(10),
+		mon nvarchar(10),
+		accc5 nvarchar(20),
+		dmoney float,
+		cmoney float
+	)
+	----------------------------------------------------------------------------------------------
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select 'data',@accy,@yy+'/'+b.accc2,a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7,isnull(a.dmoney,0),isnull(a.cmoney,0) "+
+		" ,a.part,d.part,a.noq"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+		" left join part d on c.noa=d.noa"+
+		" where @yy between left(@t_bdate,3) and left(@t_edate,3)"+
+		" and @yy+'/'+b.accc2 <= @t_edate"+
+		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+		" and a.accc5 between @t_bacc1 and @t_eacc1"
+		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	insert into @tmpHistory(accy,mon,accc5,dmoney,cmoney)
+	select accy,LEFT(datea,6),accc5,SUM(dmoney),SUM(cmoney)
+	from @tmp
+	group by accy,LEFT(datea,6),accc5
+	
+	--上期餘額
+	declare cursor_table cursor for
+	select accy,accc5,left(mon,3) from @tmpHistory group by accy,accc5,left(mon,3) having sum(dmoney)!=0 and sum(cmoney)!=0
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc5,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @dmoney = 0,@cmoney = 0
+		if not exists(select top(1) * from @tmp where accy=@accy and accc5=@accc5)
+		begin
+			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from @tmpHistory where accy=@accy and accc5=@accc5
+		end
+		else
+		begin
+			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from @tmp where accy=@accy and accc5=@accc5 and datea<@t_bdate 
+		end
+		select @dmoney = ISNULL(@dmoney,0),@cmoney = ISNULL(@cmoney,0)
+		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		values('begin',@accy,@yy,'','','','',@accc5,'','上期餘額',@dmoney,@cmoney,'','','')
+		
+		fetch next from cursor_table
+		into @accy,@accc5,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	delete @tmp where typea='data' and not(datea between @t_bdate and @t_edate)
+	--月小計
+	declare cursor_table cursor for
+	select accy,accc5,left(datea,6),sum(dmoney),sum(cmoney) from @tmp where typea='data' group by accy,accc5,left(datea,6)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc5,@mon,@dmoney,@cmoney
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		values('mon',@accy,@mon+CHAR(255),'','','','',@accc5,'',right(@mon,2)+'月小計',@dmoney,@cmoney,'','','')
+		
+		fetch next from cursor_table
+		into @accy,@accc5,@mon,@dmoney,@cmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	--總計
+	declare cursor_table cursor for
+	select accy,accc5,left(datea,3),sum(dmoney),sum(cmoney) from @tmp where (typea='begin' or typea='data') group by accy,accc5,left(datea,3)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc5,@yy,@dmoney,@cmoney
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		values('end',@accy,@yy+CHAR(255),'','','','',@accc5,'','總計',@dmoney,@cmoney,'','','')
+		
+		fetch next from cursor_table
+		into @accy,@accc5,@yy,@dmoney,@cmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	----------------------------------------------------------------------------------------------
+	declare @tmp2 table(
+		pno nvarchar(10),
+		typea nvarchar(20),
+		accy nvarchar(10),
+		datea nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		cn1 int,
+		cn2 int
+	)
+	declare cursor_table cursor for
+	select typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq
+	,row_number()over(order by accy,accc5,datea,accc3)
+	from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @pno = case when @typea='begin' then '1' when @typea='mon' then '2' when @typea='end' then '3' else '4' end
+		select @n=0,@string=@accc7,@flag=0,@tmpString="",@cn2=0
+		if(LEN(@string)=0)
+		begin
+			insert into @tmp2(pno,typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2)
+					values(@pno,@typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2)
+		end
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = right(@string,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount)
+			begin
+				if(@cn2=0)
+				begin
+					insert into @tmp2(pno,typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2)
+					values(@pno,@typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@tmpString,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2)
+				end
+				else
+				begin
+					insert into @tmp2(pno,typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2)
+					values(@pno,@typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,null,@tmpString,0,0,@partno,@part,@noq,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		
+		fetch next from cursor_table
+		into @typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select case when pno='4' and a.cn2=0 and b.cn2=0 then '4'  
+				when pno='4' and a.cn2>0 and a.cn2=b.cn2 then '5' 		   
+				else pno end gno
+	,accy+accc5 zzz
+	,'明 細 分 類 帳('+accy+')' titela
+	,a.* 
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,dmoney),1)),4,17)) dd
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,cmoney),1)),4,17)) cc
+	from @tmp2 a
+	outer apply (select top(1) b.cn2 from @tmp2 b 
+		where a.accy=b.accy and a.accc5=b.accc5 and a.datea=b.datea 
+		and a.accc3=b.accc3 and a.noq=b.noq and a.cn1=b.cn1 order by b.cn2 desc) b ;
+
+z_accc04:--z_accc04 日記帳
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+	
+	declare @t_accy nvarchar(10)
+	declare @t_namea nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	declare @t_part nvarchar(max)
+	declare @t_option04 nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_namea = '[2]'
+	set @t_bdate = case when '#non'=[3] then '' else [3] end
+	set @t_edate = case when '#non'=[4] then char(255) else [4] end
+	set @t_bacc1 = case when '#non'=[5] then '' else [5] end
+	set @t_eacc1 = case when '#non'=[6] then char(255) else [6] end
+	set @t_part = case when '#non'=[7] then '' else [7] end
+	----------------------------------------------------------------------------------------------
+	set @islock = 1 --鎖定的不顯示
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select @string
+			end
+			break
+		end
+		insert into #part select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+	
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and LEFT(@t_edate,3))
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		accy nvarchar(10),
+		datea nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10)
+	)
+	----------------------------------------------------------------------------------------------
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select @accy,@yy+'/'+b.accc2,a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7,a.dmoney,a.cmoney "+
+		" ,a.part,d.part,a.noq"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+		" left join part d on c.noa=d.noa"+
+		" where @yy+'/'+b.accc2 between @t_bdate and @t_edate"+
+		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+		" and a.accc5 between @t_bacc1 and @t_eacc1"
+		insert into @tmp(accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	-----------------------------------------------------------------------------------------------
+	declare @tmp2 table(
+		accy nvarchar(10),
+		datea nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zz nvarchar(10)
+	)
+	declare @flag int 
+	declare @tmpString nvarchar(max)
+	declare @maxcount int
+	set @maxcount = 32
+	--declare @accy nvarchar(10)
+	declare @datea  nvarchar(10)
+	declare @accc1 nvarchar(20)
+	declare @accc2 nvarchar(20)
+	declare @accc3 nvarchar(20)
+	declare @accc4 nvarchar(20)
+	declare @accc5 nvarchar(20)
+	declare @accc6 nvarchar(max)
+	declare @accc7 nvarchar(max)
+	declare @dmoney float
+	declare @cmoney float
+	declare @partno  nvarchar(20)
+	declare @part  nvarchar(20)
+	declare @noq  nvarchar(20)
+	
+	declare cursor_table cursor for
+	select accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq
+	from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @n=0,@string=@accc7,@flag=0,@tmpString=""
+		if(LEN(@string)=0)
+		begin
+			insert into @tmp2(accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zz)
+					values(@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq
+					,'1')
+		end
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = right(@string,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount)
+			begin
+				if(@flag=0)
+				begin
+					insert into @tmp2(accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zz)
+					values(@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@tmpString,@dmoney,@cmoney,@partno,@part,@noq
+					,case when LEN(@string)=0 and @flag=0 then '1' else '2' end)
+					set @flag = 1
+				end
+				else
+				begin
+					insert into @tmp2(accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zz)
+					values(@accy,@datea,@accc1,@accc2,@accc3,@accc4,null,null,@tmpString,null,null,@partno,@part,@noq
+					,case when LEN(@string)=0 then '4' else '3' end)
+				end
+				set @n = 0
+				set @tmpString = ""
+			end
+		end
+		
+		fetch next from cursor_table
+		into @accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,dmoney),1)),4,17)) dd
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,cmoney),1)),4,17)) cc
+	from(
+	select case when a.recno=1 then (case when a.zz='1' then '1' else '2' end)
+		when a.recno=b.n then '7'
+		else (case when a.zz='1' then '3' 
+				when a.zz='2' then '4'
+				when a.zz='3' then '5'
+				else '6' end) end gno
+	,a.*
+	from(
+		select ROW_NUMBER()over(partition by a.datea,a.accc3 order by a.datea,a.accc3) recno
+		,a.*
+		from @tmp2 a)a
+	outer apply (select COUNT(1) n from @tmp2 where accc3=a.accc3 and datea=a.datea)b
+	union all
+	select '8','','','','','','','','','','',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),'','','',''
+	from @tmp2) a;
