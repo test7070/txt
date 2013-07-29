@@ -130,3 +130,124 @@ reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stockmount),1)),0,3
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ndemand),1)),0,30)) ndemand
 from @tmp
 ;
+----**************************************************************************************
+z_cuap2:--z_cuap2
+declare @t_cuano nvarchar(30)
+declare @t_stkdate nvarchar(30)
+set @t_cuano = case when '#non' =  [2] then '' else  [2] end
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+--*********************************************************************************************
+SET QUOTED_IDENTIFIER OFF 
+declare @cmd nvarchar(max) 
+declare @tmp table(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	gdemand float,
+	emount float,
+	ordenotv float,
+	ordcmount float,
+	stockmount float,
+	ndemand float
+)
+
+set @cmd ="
+select '0',productno,(select product from ucc where noa=tmp.productno)products
+,sum(gdemand)gdemand,sum(emount)emount,sum(ordenotv)ordenotv,sum(ordcmount)ordcmount 
+,(select sum(mount) from stkucc102('"+@t_stkdate+"','','') where productno=tmp.productno)stockmount
+,0 ndemand
+from (
+	--毛需求(有cuano)
+	select ws.productno,sum(ws.emount) gdemand,0 emount,0 ordcmount,0 ordenotv from view_work102 w left join view_works102 ws on w.noa=ws.noa 
+	where w.cuano!='' and ws.productno in (select noa from ucc where typea='4' or typea='5') and w.enda!='1'  and (len('"+@t_cuano+"')=0 or w.cuano='"+@t_cuano+"')
+	group by ws.productno
+	union all
+	--製令未領(沒有cuano)
+	select ws.productno,0 gdemand,sum(ws.emount) emount,0 ordcmount,0 ordenotv from view_work102 w left join view_works102 ws on w.noa=ws.noa 
+	where w.cuano='' and ws.productno in (select noa from ucc where typea='4' or typea='5') and w.enda!='1' and (len('"+@t_cuano+"')=0)
+	group by ws.productno
+	union all
+	--訂單未入(不含訂單製令內需求的數量)
+	select ob.productno,0 gdemand,0 emount,0 ordcmount,sum(ob.mount) ordenotv from view_orde102 oa left join view_ordes102 ob on oa.noa=ob.noa
+	where oa.enda!='1' and ob.noa+'_'+ob.no2 not in (select ordeno+'_'+no2 from view_work102) and productno in (select noa from ucc where typea='4' or typea='5')	"
+	
+if(len(@t_cuano)!=0)
+set @cmd +=" and ob.noa+'_'+ob.no2  in (select ordeno+'_'+no2 from view_cuas102 where noa='"+@t_cuano+"')"
+		 
+set @cmd +="
+	group by productno
+	union all
+	--採購未入(不含訂單製令內需求的數量,結案表示已入庫)
+	select ocs.productno,0 gdemand,0 emount,sum(ocs.notv)ordcmount,0 ordenotv from view_ordcs102 ocs left join view_ordbs102 obs on ocs.ordbno=obs.noa and ocs.no3=obs.no3
+	where ocs.enda!='1' and obs.ordeno+'_'+obs.no2 not in (select ordeno+'_'+no2 from view_work102) and ocs.productno in (select noa from ucc where typea='4' or typea='5')"
+
+if(len(@t_cuano)!=0)
+set @cmd +=" and obs.ordeno+'_'+obs.no2 in (select ordeno+'_'+no2 from view_cuas102 where noa='"+@t_cuano+"')"
+	
+set @cmd +="
+	group by ocs.productno
+)tmp group by productno"
+
+insert into @tmp
+execute sp_executesql @cmd
+
+update @tmp set ndemand = (gdemand+emount+ordenotv-ordcmount-stockmount)
+update @tmp set ndemand=0 where ndemand<0
+
+select gno,productno,products,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,emount),1)),0,30)) emount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordenotv),1)),0,30)) ordenotv,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stockmount),1)),0,30)) stockmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ndemand),1)),0,30)) ndemand
+from @tmp
+
+--*************************************************************************************
+--寫入請購單
+declare @sssno nvarchar(max)=[3] --採購員編號
+declare @ordbno nvarchar(max)=[4] --目前請購代號
+declare @ordbum nvarchar(max) --目前請購序號
+declare @typea nvarchar(max) 
+declare @tggno nvarchar(max) 
+declare @ordbdate nvarchar(10) 
+
+set @ordbum=isnull(right((select top 1 noa from view_ordb102 where CHARINDEX(@ordbno+ REPLACE(@t_stkdate,'/',''),noa)>0 order by noa desc),3),'0')
+
+set @ordbdate=CONVERT (VARCHAR(7), GETDATE()+3,12 )+0890000
+set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate,2)
+
+declare cursor_table cursor for 
+select b.typea,b.tggno
+from @tmp a left join ucc b on a.productno=b.noa where a.ndemand>0
+group by b.typea,b.tggno
+open cursor_table 
+fetch next from cursor_table 
+into @typea,@tggno
+while(@@FETCH_STATUS <> -1) 
+begin
+
+	insert into ordb102(datea,odate,noa,kind,tggno,tgg,worker,money,total,memo)
+	select @ordbdate,@t_stkdate,@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3) noa
+	,case when @typea='4' then '1' else '2' end typea,@tggno tggno,(select comp from tgg where noa=@tggno) tgg,(select namea from nhpe where noa=@sssno) worker
+	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from @tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea=@typea and b.tggno=tggno)money
+	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from @tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea=@typea and b.tggno=tggno)total
+	,@t_stkdate+' 物料需求表 轉來'memo
+	
+	insert into ordbs102(datea,noa,no3,productno,product,unit,mount,price,total,tggno)
+	select @ordbdate,@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3) noa
+	,right('000'+cast(ROW_NUMBER() OVER (ORDER BY a.productno DESC) as nvarchar(10)),3) no3
+	,a.productno,a.products,b.unit,isnull(a.ndemand,0)ndemand,isnull(b.inprice,0)inprice,isnull(a.ndemand,0)*isnull(b.inprice,0) total
+	,b.tggno
+	from @tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea=@typea and b.tggno=@tggno
+	
+	
+	set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	fetch next from cursor_table 
+	into @typea,@tggno
+end 
+close cursor_table 
+deallocate cursor_table 
+;
+
