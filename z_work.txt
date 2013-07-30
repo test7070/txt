@@ -17,30 +17,37 @@ declare @tmp table(
 	delay float,
 	waittime float,
 	waitfedtime float,
-	lacksss float,
-	workmount float
+	lacksss float
 )
 insert into @tmp(gno,datea,mechno,mechs,borntime,inmount,errmount,chgmo,
-					   fault,delay,waittime,waitfedtime,lacksss,workmount)
+					   fault,delay,waittime,waitfedtime,lacksss)
 	select
 		'0',b.datea,a.noa,a.mech,isnull(c.borntime,0),isnull(b.inmount,0),isnull(b.errmount,0),
 		isnull(c.chgtime,0),isnull(c.faulttime,0),isnull(c.delaytime,0),isnull(c.waittime,0),
-		isnull(c.waitfedtime,0),isnull(c.lacksss,0),isnull(c.hours,0)
+		isnull(c.waitfedtime,0),isnull(c.lacksss,0)
 	from mech a 
 	left join (
-		select
-			b.datea,b.mechno,b.mech,sum(a.mount) inmount,sum(a.errmount) errmount
-		from workbs[1] a
-		left join workb[1] b on a.noa = b.noa
-		group by b.datea,b.mechno,b.mech
+		select datea,mechno,sum(inmount) inmount,sum(errmount)errmount from (
+			select b.datea,b.mechno,b.mech,a.mount inmount,0 errmount 
+			from workbs[1] a 
+			left join workb[1] b on a.noa = b.noa 
+			left join work[1] c on a.workno=c.noa 
+			where c.isrework=0 or c.isrework is null and b.datea between @t_bdate and @t_edate 
+			union all
+			select b.datea,b.mechno,b.mech,0 inmount,a.mount errmount 
+			from workbs[1] a 
+			left join workb[1] b on a.noa = b.noa 
+			left join work[1] c on a.workno=c.noa 
+			where c.isrework=1 and b.datea between @t_bdate and @t_edate 
+		)tmp group by datea,mechno
 	) b on (a.noa = b.mechno)
 	left join (
 		select b.datea,a.mechno,sum(a.borntime) borntime,sum(a.chgtime) chgtime,sum(a.faulttime) faulttime,
 				 sum(a.delaytime) delaytime,sum(a.waittime) waittime,sum(a.waitfedtime) waitfedtime,
-				 sum(a.lacksss) lacksss,sum(c.hours) hours
+				 sum(a.lacksss) lacksss
 		from cuws[1] a
 		left join cuw[1] b on a.noa = b.noa
-		left join cuwt[1] c on (b.noa = c.noa) and (a.mechno = c.mechno) 
+		where b.datea between @t_bdate and @t_edate 
 		group by b.datea,a.mechno
 	) c on (a.noa = c.mechno) and (c.datea = b.datea)
 	where b.datea between @t_bdate and @t_edate
@@ -50,12 +57,11 @@ update @tmp set activation = case when borntime > 0 then (borntime-(chgmo+fault+
 update @tmp set activation = round(activation,4)
 insert into @tmp
 	select '1',datea,'','',sum(activation),sum(borntime),sum(inmount),sum(errmount),
-			 sum(chgmo),sum(fault),sum(delay),sum(waittime),sum(waitfedtime),sum(lacksss),
-			 sum(workmount)
+			 sum(chgmo),sum(fault),sum(delay),sum(waittime),sum(waitfedtime),sum(lacksss)
 	from @tmp
 	group by datea
 select
-	gno,datea,mechno,mechs,activation,
+	gno,datea,mechno,mechs,activation,@t_bdate bdate,@t_edate edate,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,borntime),1)),4,12)) borntime,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),4,12)) errmount,
@@ -64,8 +70,7 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,delay),1)),4,12)) delay,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,waittime),1)),4,12)) waittime,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,waitfedtime),1)),4,12)) waitfedtime,
-	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lacksss),1)),4,12)) lacksss,
-	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,workmount),1)),4,12)) workmount
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lacksss),1)),4,12)) lacksss
 from @tmp order by datea,gno,mechno;
 --------------------------------------------------------------------------------------------------------
 z_work2:--z_work2
@@ -101,7 +106,7 @@ select
 	0,b.hours,0
 from work[1] a
 left join station b on a.stationno = b.noa
-where (a.datea between @t_bdate and @t_edate) and (a.station between @t_bstationno and @t_estationno)
+where (a.datea between @t_bdate and @t_edate) and (a.station between @t_bstationno and @t_estationno) and a.station!=''
 insert into @tmp(gno,stationno,stations,mount,hours,diffdate,dayhtotal,dayhs,difftime)
 	select '1',stationno,stations,sum(mount),sum(hours),sum(diffdate),0,max(dayhs),0 from @tmp
 	group by stationno,stations
@@ -202,6 +207,7 @@ declare @tmp table(
 		datea nvarchar(20),
 		storeno nvarchar(30),
 		store nvarchar(40),
+		workno nvarchar(60),
 		productno nvarchar(20),
 		product nvarchar(50),
 		unit nvarchar(20),
@@ -211,8 +217,8 @@ declare @tmp table(
 		bweight float
 )
 insert into @tmp
-select '0' gno,'0.1',a.noa,b.noq,a.datea,a.storeno,a.store,b.productno,b.product,
-b.unit,b.mount,b.weight,b.wmount,b.bweight
+select '0' gno,'0.1',a.noa,b.noq,a.datea,a.storeno,a.store,b.workno,b.productno,b.product,
+b.unit,b.mount,b.theory,b.wmount,b.bweight
 from workb[1] a
 left join workbs[1] b on a.noa = b.noa
 where (a.datea between @t_bdate and @t_edate) and
@@ -220,18 +226,18 @@ where (a.datea between @t_bdate and @t_edate) and
 (b.productno between @t_bproductno and @t_eproductno)
 
 insert into @tmp
-select '1' gno,'0.2','','',datea,'','',productno,MAX(product),'',SUM(mount),SUM(weightb),SUM(wmount),SUM(bweight)
+select '1' gno,'0.2','','',datea,'','','',productno,MAX(product),'',SUM(mount),SUM(weightb),SUM(wmount),SUM(bweight)
 from @tmp
 group by datea,productno
 
 
 insert into @tmp
-select '2' gno,'0.3','','',CHAR(255),'','',productno,MAX(product),'',SUM(mount),SUM(weightb),SUM(wmount),SUM(bweight)
+select '2' gno,'0.3','','',CHAR(255),'','','',productno,MAX(product),'',SUM(mount),SUM(weightb),SUM(wmount),SUM(bweight)
 from @tmp
 where gno = 1
 group by productno
 
-select gno,n,noa,noq,datea,storeno,store,productno,product,unit,
+select gno,n,noa,noq,datea,storeno,store,productno,product,unit,workno,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,weightb),1)),4,12)) weightb,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmount),1)),4,12)) wmount,
