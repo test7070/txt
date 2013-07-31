@@ -262,11 +262,11 @@ declare @tmp table(
 		unit nvarchar(20),
 		inmount float,
 		rmount float,
-		errmount float
+		wmount float
 )
 insert into @tmp
 select '0' gno,a.productno,MAX(a.product),SUM(a.mount),MAX(a.unit),SUM(a.inmount),
-		SUM(a.rmount),SUM(a.errmount)
+		SUM(a.rmount),SUM(a.wmount)
 from work[1] a
 where (a.datea between @t_bdate and @t_edate) and 
 (a.productno between @t_bproductno and @t_eproductno)
@@ -276,7 +276,7 @@ select gno,productno,product,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,unit,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,rmount),1)),4,12)) rmount,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),4,12)) errmount
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmount),1)),4,12)) wmount
 from @tmp;
 --------------------------------------------------------------------------------------------------------
 z_work7:--z_work7
@@ -322,10 +322,13 @@ declare @t_bdate nvarchar(20)
 declare @t_edate nvarchar(20)
 declare @t_bproductno nvarchar(20)
 declare @t_eproductno nvarchar(20)
+declare @t_aberrant nvarchar(20)
 set @t_bdate = case when '#non' = [3] then '' else [3] end
 set @t_edate = case when '#non' = [4] then char(255) else [4] end
 set @t_bproductno = case when '#non' = [11] then '' else [11] end
 set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+set @t_aberrant = case when '#non' = [13] then '' else [13] end
+
 declare @tmp table(
 	gno nvarchar(1),
 	noa nvarchar(30),
@@ -349,7 +352,7 @@ declare @tmp table(
 insert into @tmp
 	select
 		'0',b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,b.uindate,
-		b.enddate,a.productno,a.product,a.unit,a.mount,c.mount,0,isnull(c.price,0),isnull(b.wmount,0)
+		b.enddate,a.productno,a.product,a.unit,isnull(a.mount,0),isnull(c.mount,0),0,isnull(c.price,0),isnull(b.wmount,0)
 	from works[1] a
 	left join work[1] b on a.noa = b.noa
 	left join (
@@ -358,7 +361,7 @@ insert into @tmp
 			(c.costa + c.costb + c.costc + c.costd) price
 		from workas[1] a
 		left join wcost[1] c on (a.workno = c.workno) and (a.productno = c.productno) and (a.noa = c.noa)
-		union
+		union all
 		select
 			a.workno,a.productno,a.product,a.unit,a.mount,
 			(c.costa + c.costb + c.costc + c.costd) price
@@ -370,26 +373,36 @@ insert into @tmp
 	(b.productno between @t_bproductno and @t_eproductno)
 	order by b.noa,a.noq,b.productno,a.productno
 update @tmp set s_total = (binmount-bmount) where (binmount-bmount) > 0
-declare @ucanoa nvarchar(90)
-declare @ucabadperc float
-declare cursor_table cursor for
-	select noa,isnull(badperc,0) from uca a
-	union 
-	select productno,loss from ucas b
-	union
-	select b.productno,a.badperc from ucat b
-	left join uca a on a.noa = b.noa
-open cursor_table
-fetch next from cursor_table
-into @ucanoa,@ucabadperc
-while(@@FETCH_STATUS <> -1)
+
+
+if(len(@t_aberrant)>0)
 begin
-	delete @tmp where (aproductno = @ucanoa) and (s_total <= @ucabadperc)
+	declare @ucanoa nvarchar(90)
+	declare @ucabadperc float
+	declare cursor_table cursor for
+		select noa,isnull(badperc,0) from uca a
+		union 
+		select productno,loss from ucas b
+		union
+		select b.productno,a.badperc from ucat b
+		left join uca a on a.noa = b.noa
+	open cursor_table
 	fetch next from cursor_table
 	into @ucanoa,@ucabadperc
+	while(@@FETCH_STATUS <> -1)
+	begin
+		--delete @tmp where (aproductno = @ucanoa) and (s_total <= @ucabadperc)
+		
+		delete @tmp where (aproductno = @ucanoa) and (case when binmount=0 then 0 else (1-(bmount/binmount))*100 end <= @ucabadperc)
+		
+		fetch next from cursor_table
+		into @ucanoa,@ucabadperc
+	end
+	close cursor_table
+	deallocate cursor_table
 end
-close cursor_table
-deallocate cursor_table
+
+
 select * from @tmp order by noa,noq,aproductno,bproductno;
 ---------------------------------------------------------------------------------------------
 z_work9:--z_work9
@@ -459,17 +472,26 @@ insert into @tmp
 		a.productno,a.product,a.mount,a.gmount,a.unit,a.emount,isnull(
 		(select sum(mount) from stkucc[1](@pev_date,'','') where productno=a.productno)
 		,0),
-		sum(isnull(d.mount,0)),sum(isnull(d.mount,0)),0,0
+		sum(isnull(d.mount,0)),sum(isnull(e.mount,0)),0,0
 	from works[1] a
 	left join work[1] b on a.noa = b.noa
 	left join (
 		select b.odate,a.productno,a.mount mount from ordcs[1] a
 		left join ordc[1] b on a.noa = b.noa
-	) d on (d.productno = a.productno) and a.cuadate <= d.odate
+		union
+		select datea,productno,mount from workbs[1]
+		union
+		select datea,productno,mount from workds[1]
+		
+	) d on (d.productno = a.productno) and a.cuadate <= d.odate 
 	left join (
 		select b.odate,a.productno,a.mount mount from ordes[1] a 
 		left join orde[1] b on a.noa = b.noa
-	) e on (e.productno = a.productno) and a.cuadate <= e.odate
+		union
+		select datea,productno,mount from workas[1]
+		union
+		select datea,productno,mount from workcs[1]
+	) e on (e.productno = a.productno) and a.cuadate <= e.odate 
 	where b.noa is not null and
 		(b.cuadate between @t_bdate and @t_edate)
 	group by b.uindate,b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,
