@@ -1,3 +1,262 @@
+z_umm02:--z_umm02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	declare @t_bdate nvarchar(20)
+	declare @t_edate nvarchar(20)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_option02 nvarchar(max)
+	
+	set @t_bdate = case when '#non'=[3] then '' else [3] end
+	set @t_edate = case when '#non'=[4] then char(255) else [4] end
+	
+	set @t_bcustno = case when '#non'=[6] then '' else [6] end
+	set @t_ecustno = case when '#non'=[7] then char(255) else [7] end
+	set @t_option02 = case when '#non'=[8] then '' else [8] end
+	--------------------------------------------------------------------------------------------
+	declare @list table(
+		tablea nvarchar(20),
+		accy nvarchar(20)
+	)
+	insert into @list(tablea,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'trd','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'trd[0-9][0-9][0-9]' 
+	
+	insert into @list(tablea,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'vcc','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'vcc[0-9][0-9][0-9]' 
+	--------------------------------------------------------------------------------------------
+	declare @tmp table(
+		tablea nvarchar(20),
+		noa nvarchar(20),
+		custno nvarchar(20),
+		datea nvarchar(10),
+		mon nvarchar(10),
+		total float,
+		payed float,
+		unpay float
+	)
+	declare @tablea nvarchar(20)
+	
+	declare cursor_table cursor for
+	select tablea from @list
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd=
+		" select @tablea,a.noa,isnull(a.custno,''),a.datea,a.mon,isnull(a.total,0),isnull(b.paysale,0),ISNULL(a.total,0)-ISNULL(b.paysale,0)"+
+		" from "+@tablea+" a"+
+		" outer apply (select SUM(isnull(paysale,0)) paysale from umms where vccno=a.noa) b"+
+		" where left(a.noa,1)!='_' and not(isnull(a.total,0)=0 and isnull(b.paysale,0)=0 )"+
+		" and isnull(a.custno,'') between @t_bcustno and @t_ecustno"+
+		" and isnull(a.datea,'')<=@t_edate"+
+		""
+		insert into @tmp(tablea,noa,custno,datea,mon,total,payed,unpay)
+		execute sp_executesql @cmd,N'@tablea nvarchar(20),@t_bcustno nvarchar(10),@t_ecustno nvarchar(10),@t_edate nvarchar(10)'
+		,@tablea=@tablea,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno,@t_edate=@t_edate
+	
+		fetch next from cursor_table
+		into @tablea
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------
+	declare @tmp2 table(
+		typea nvarchar(10),
+		custno nvarchar(20),
+		noa nvarchar(20),
+		mon nvarchar(10),
+		total float,
+		payed float,
+		unpay float
+	)
+	declare @custno nvarchar(20)
+	declare @total float
+	declare @payed float
+	declare @unpay float
+
+	declare cursor_table cursor for
+	select custno from @tmp group by custno
+	open cursor_table
+	fetch next from cursor_table
+	into @custno
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		select @total=0,@payed=0,@unpay = 0
+		if not exists(select top(1) * from @tmp where custno=@custno and datea<@t_bdate)
+		begin
+			insert into @tmp2(typea,custno,total,payed,unpay)
+			select 'begin',@custno,0,0,0
+		end
+		else	
+		begin
+			insert into @tmp2(typea,custno,unpay)
+			select 'begin',custno,SUM(unpay) 
+			from @tmp where custno=@custno and datea<@t_bdate group by custno
+			
+			select @unpay=unpay from @tmp2 where custno=@custno
+		end
+		insert into @tmp2(typea,custno,noa,mon,total,payed,unpay)
+		select 'data',custno,noa,mon,total,payed,unpay 
+		from @tmp where custno=@custno and datea between @t_bdate and @t_edate
+		
+		select @total=SUM(ISNULL(total,0)),@payed=SUM(ISNULL(payed,0)) 
+		from @tmp where custno=@custno and datea between @t_bdate and @t_edate
+
+		insert into @tmp2(typea,custno,mon,total,payed,unpay)
+		select 'end',@custno,CHAR(255),isnull(@total,0),isnull(@payed,0),isnull(@total,0)-isnull(@payed,0)+@unpay
+
+		fetch next from cursor_table
+		into @custno
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------
+	if(@t_option02='onlyunpay')
+	begin
+		delete @tmp2
+		from @tmp2 a
+		outer apply(select unpay from @tmp2 where a.custno=custno and typea='end') b
+		where ISNULL(b.unpay,0)=0
+	end
+	--------------------------------------------------------------------------------------------
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	set @rowline = 44
+	set @endline = 0
+	
+	--分頁
+	declare @tmp3 table(
+		page int,
+		nn int,
+		gno nvarchar(10),
+		typea nvarchar(20),
+		custno nvarchar(20),
+		noa nvarchar(20),
+		mon nvarchar(10),
+		total float,
+		payed float,
+		unpay float
+	)
+	declare @gno nvarchar(10)
+	declare @typea nvarchar(10)
+	declare @noa nvarchar(20)
+	declare @mon nvarchar(10)
+	
+	set @curline = 0
+	set @page = 0
+
+	declare cursor_table cursor for
+	select typea,custno,noa,mon,total,payed,unpay from @tmp2 
+	order by custno,mon,noa
+	open cursor_table
+	fetch next from cursor_table
+	into @typea,@custno,@noa,@mon,@total,@payed,@unpay
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if(@typea='begin')
+		begin
+			if(@curline%@rowline=0)
+			begin
+				insert into @tmp3(page,nn,gno,typea,custno,unpay)
+				select @page,@curline%@rowline,'1',@typea,@custno,@unpay
+				set @curline = @curline + 1
+				insert into @tmp3(page,nn,gno)
+				select @page,@curline%@rowline,'4'
+				set @curline = @curline + 1
+			end
+			else
+			begin
+				if(@rowline-@curline%@rowline>2)
+				begin
+					insert into @tmp3(page,nn,gno,typea,custno,unpay)
+					select @page,@curline%@rowline,'2',@typea,@custno,@unpay
+					set @curline = @curline + 1
+					insert into @tmp3(page,nn,gno)
+					select @page,@curline%@rowline,'4'
+					set @curline = @curline + 1
+				end
+				else
+				begin
+					while(@curline%@rowline != 0)
+					begin
+						insert into @tmp3(page,nn,gno)
+						select @page,@curline%@rowline,case when (@curline+1)%@rowline=0 then '9' else '0' end
+						set @curline = @curline + 1
+					end
+					if(@curline%@rowline=0)
+					begin
+						set @page = @page + 1
+					end
+					insert into @tmp3(page,nn,gno,typea,custno,unpay)
+					select @page,@curline%@rowline,'1',@typea,@custno,@unpay
+					set @curline = @curline + 1
+					insert into @tmp3(page,nn,gno)
+					select @page,@curline%@rowline,'4'
+					set @curline = @curline + 1
+				end
+			end
+		end
+		if(@typea='data')
+		begin
+			if(@curline%@rowline=0)
+			begin
+				insert into @tmp3(page,nn,gno)
+				select @page,@curline%@rowline,'3'
+				set @curline = @curline + 1
+			end
+			insert into @tmp3(page,nn,gno,typea,custno,noa,mon,total,payed,unpay)
+			select @page,@curline%@rowline
+			,case when (@curline+1)%@rowline=0 then '6' else '5' end	
+			,@typea,@custno,@noa,@mon,@total,@payed,@unpay
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+		if(@typea='end')
+		begin
+			insert into @tmp3(page,nn,gno,typea,custno,total,payed,unpay)
+			select @page,@curline%@rowline,case when @curline%@rowline=0 then '8' else '7' end
+			,@typea,@custno,@total,@payed,@unpay
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+
+		fetch next from cursor_table
+		into @typea,@custno,@noa,@mon,@total,@payed,@unpay
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------
+	select a.*
+	,case when @t_bdate=@t_edate then @t_bdate else @t_bdate+'~'+@t_edate end titelc
+	,a.page+1 pp1
+	,b.page+1 pp2
+	,c.comp comp
+	,c.nick nick
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,total),1)),4,17)) aa1
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,payed),1)),4,17)) aa2
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,unpay),1)),4,17)) aa3
+	from @tmp3 a 
+	outer apply (select max(page) page from @tmp3) b
+	left join cust c on a.custno=c.noa
+	order by a.page,a.nn;
+
 z_umm01:--z_umm01
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
