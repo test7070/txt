@@ -657,14 +657,11 @@ create table #w_transtmpB(
 	memo nvarchar(max)
 )
 insert into @tmpa (gno,nick,mount,b_year,b_mon,b_day)
-	select '1' gno,b.nick,a.mount,
-	substring(b.datea,1, charindex('/', b.datea)-1) b_year,
-	substring(b.datea, charindex('/', b.datea)+1,2) b_mon,
-	RIGHT(b.datea,2) b_day	
-	from view_transvcces[1] a
-	left join view_transvcce[1] b on a.noa = b.noa
-	left join view_tranorde[1] c on b.ordeno = c.noa
-	where (c.ctype = '貨櫃')
+	select '1' gno,a.nick,mount,
+	substring(datea,1, charindex('/', datea)-1) b_year,
+	substring(datea, charindex('/', datea)+1,2) b_mon,
+	RIGHT(datea,2) b_day	
+	from transvcce[1] a----------------------------------------傳到TXT要改!!
 insert into @tmpb(gno,idno,nick,mount,b_year,b_mon,b_day)
 	select * from @tmpa where ((b_year = @t_accy) and (b_mon = @t_mon))
 select @Debug_val = count(*) from @tmpb ---若有資料則繼續進行下列程序 若無則不執行
@@ -769,6 +766,193 @@ end
 	drop table #w_transtmp
 	drop table #w_transtmpA
 	drop table #w_transtmpB;
+--*********************************************************************************************
+z_trand2A:--z_trand2A
+declare @t_accy nvarchar(20)
+declare @t_year int
+declare @Field_Count int
+declare @i int ---迴圈用
+declare @j int ---迴圈用
+declare @cmd nvarchar(max)
+declare @Field_cmd nvarchar(max) ---公司欄位製造記錄
+declare @Field_nameval nvarchar(max)
+declare @Field_empval nvarchar(max) ---公司欄位值
+declare @comp_nametmp nvarchar(max) ---公司名稱暫存
+declare @sum_comp nvarchar(max) ---加總暫存
+declare @result_sum_comp nvarchar(max) ---結果加總暫存
+declare @tdtr_html nvarchar(max) ---HTML輸出
+declare @Debug_val int ---如果沒有資料提前結束
+
+set @t_accy = [1]
+set @t_year = CAST(@t_accy as int) + 1911
+set @Field_Count = 0
+set @i = 0
+set @j = 0
+set @cmd = ''
+set @Field_cmd = ''
+set @Field_nameval = ''
+set @Field_empval = ''
+set @comp_nametmp = ''
+set @sum_comp = ''
+set @result_sum_comp = ''
+set @tdtr_html = ''
+set @Debug_val = 0
+
+IF OBJECT_ID('tempdb..#w_transtmp')is not null
+	BEGIN
+		set @cmd = 'drop table #w_transtmp'
+		EXECUTE sp_executesql @cmd
+	END
+IF OBJECT_ID('tempdb..#w_transtmpA')is not null
+	BEGIN
+		set @cmd = 'drop table #w_transtmpA'
+		EXECUTE sp_executesql @cmd
+	END
+IF OBJECT_ID('tempdb..#w_transtmpB')is not null
+	BEGIN
+		set @cmd = 'drop table #w_transtmpB'
+		EXECUTE sp_executesql @cmd
+	END
+declare @tmpa table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	nick nvarchar(20),
+	mount nvarchar(15),
+	b_year nvarchar(10),
+	b_mon nvarchar(10)
+)
+declare @tmpb table(
+	idno int identity(0,1),
+	nick nvarchar(20)
+)
+declare @tmpc table(
+	gno nvarchar(1),
+	idno int,
+	compno int,
+	nick nvarchar(20),
+	mount nvarchar(15),
+	b_year nvarchar(10),
+	b_mon nvarchar(10)
+)
+insert into @tmpa (gno,nick,mount,b_year,b_mon)
+	select '1' gno,a.nick,mount,
+	substring(datea,1, charindex('/', datea)-1) b_year,
+	substring(datea, charindex('/', datea)+1,2) b_mon
+	from transvcce[1] a
+	where LEFT(a.datea,3) = [1]----------------------------------------傳到TXT要改!!
+insert into @tmpc(gno,idno,nick,mount,b_year,b_mon)
+	select * from @tmpa
+select @Debug_val = count(*) from @tmpc ---若有資料則繼續進行下列程序 若無則不執行
+if(@Debug_val > 0)
+begin
+	insert into @tmpb
+		select distinct(nick) from @tmpa
+	select @Field_Count = max(idno)+1 from @tmpb
+	while(@i < @Field_Count)
+	begin
+		set @Field_cmd +='comp' + cast((@i+1) as nvarchar) + ' nvarchar(20)'
+		set @Field_nameval+= CHAR(39)
+		select @Field_nameval += isnull(nick,'') from @tmpb where (@i = idno)
+		set @Field_nameval+= CHAR(39)
+		set @Field_empval += CHAR(39) + CHAR(39)
+		set @sum_comp += 'cast(comp' + cast((@i+1) as nvarchar) + ' as float)'
+		select @comp_nametmp = nick from @tmpb where idno = @i
+		update @tmpc set compno = (@i+1) where nick = @comp_nametmp
+		set @result_sum_comp += 'sum(cast(comp' + cast((@i+1) as nvarchar) + ' as float))'
+		set @tdtr_html += char(39) + '<td style="border:1px solid" width="80">' + CHAR(39) 
+		set @tdtr_html += ' + comp' + cast((@i+1) as nvarchar) + ' + ' + CHAR(39) + '</td>' + CHAR(39) 
+		if(@i != @Field_Count-1)
+		begin
+			set @Field_cmd += ','
+			set @Field_nameval += ','
+			set @Field_empval += ','
+			set @sum_comp += '+'
+			set @result_sum_comp += ','
+			set @tdtr_html += ' + '
+		end
+		set @i += 1
+	end
+	create table #w_transtmp (
+		gno nvarchar(1),
+		d_year nvarchar(10),
+		d_mon nvarchar(10)
+	)
+	---新增足夠欄位
+	set @cmd = 'alter table #w_transtmp add ' + @Field_cmd
+	execute sp_executesql @cmd
+	---插入公司名稱
+	set @cmd = 'insert into #w_transtmp values(1,0,0,' + @Field_nameval + ')'
+	execute sp_executesql @cmd
+	---插入日期列
+	set @i = 1
+	while(@i < 13)
+	begin
+		set @cmd = 'insert into #w_transtmp select 0,' + @t_accy + ',' + cast(@i as nvarchar) + ','+ @Field_empval
+		execute sp_executesql @cmd
+		set @i +=1
+	end
+	create table #w_transtmpA (
+		gno nvarchar(1),
+		compno int,
+		nick nvarchar(20),
+		b_count nvarchar(10),
+		b_mon nvarchar(10)
+	)
+	insert into #w_transtmpA
+		select gno,compno,nick ,sum(cast(mount as float)) b_count,
+		case when substring(b_mon,1,1) = '0' then SUBSTRING(b_mon,2,1) else b_mon end
+		from @tmpc group by compno,nick,b_mon,gno order by b_mon
+
+	set @i = 0
+	set @j = 1
+	set @cmd = ''
+	set @comp_nametmp = ''
+	while(@j < 13)
+	begin
+		while(@i <@Field_Count)
+		begin
+			select @comp_nametmp = compno from #w_transtmpA where ((b_mon = @j) and (compno = (@i+1)))
+			set @cmd = 'update #w_transtmp set comp' + cast((@i+1) as nvarchar) +  ' = b_count from #w_transtmpA' + ' where b_mon = #w_transtmp.d_mon and compno = ' + cast((@i+1) as nvarchar) + ' and #w_transtmp.gno = 0'
+			execute sp_executesql @cmd
+			set @cmd = 'update #w_transtmp set comp' + cast((@i+1) as nvarchar) + ' = 0 where comp' + cast((@i+1) as nvarchar) + ' = ' + CHAR(39) + CHAR(39)
+			execute sp_executesql @cmd
+			set @i += 1
+		end	
+		set @j +=1
+	end 
+	alter table #w_transtmp add total nvarchar(15)
+	update #w_transtmp set total = 0
+	set @cmd = 'update #w_transtmp set total = (' + @sum_comp + ') where gno = 0'
+	execute sp_executesql @cmd
+	update #w_transtmp set d_year = d_year + '年',d_mon = d_mon + '月'
+	update #w_transtmp set d_year = '',d_mon = '日期' ,total = '合計' where gno = 1
+	set @cmd = 'insert into #w_transtmp select 2,'+ char(39) + char(39) + ',' + char(39) + '合計' + CHAR(39) + ',' + ' + ' + @result_sum_comp + ',sum(cast(total as float)) from #w_transtmp where gno = 0'
+	execute sp_executesql @cmd
+	create table #w_transtmpB(
+		gno nvarchar(1),
+		idno int identity(0,1),
+		memo nvarchar(max)
+	)
+	set @cmd = 'insert into #w_transtmpB(memo)'
+	set @cmd += ' select ' + char(39) + '</td></tr><tr align="center"><td style="border:1px solid" width="80">' + CHAR(39) + ' + cast(d_year as nvarchar) + cast(d_mon as nvarchar) + ' + char(39) + '</td>' + CHAR(39) + ' + ' + 
+			   @tdtr_html + ' + ' + char(39) + '<td style="border:1px solid" width="80">' + CHAR(39) + ' + total memo from #w_transtmp'
+	execute sp_executesql @cmd
+	update #w_transtmpB set gno = 1
+	set @i = 0
+	set @tdtr_html = ''
+	while(@i < 14)
+	begin
+		select @tdtr_html += memo from #w_transtmpB where idno = @i
+		set @i += 1
+	end
+	set @tdtr_html = '</td></tr></table><table border="1px solid" rules="ALL">' + SUBSTRING(@tdtr_html,11,LEN(@tdtr_html)) + '</table><table>'
+	insert into #w_transtmpB(gno,memo)
+		select '0',@tdtr_html
+	select * from #w_transtmpB
+	drop table #w_transtmp
+	drop table #w_transtmpA
+	drop table #w_transtmpB
+end;
 --*********************************************************************************************
 z_trand99:--z_trand99
 declare @t_date nvarchar(10)
