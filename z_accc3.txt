@@ -1,0 +1,385 @@
+z_acsrate:--z_acsrate	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+	
+	declare @t_accy nvarchar(10)
+	declare @t_rank nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_part nvarchar(max)	
+	
+	set @t_accy = '[1]'
+	set @t_rank = '[2]'
+	set @t_bdate = case when '#non'=[3] then '' else [3] end
+	set @t_edate = case when '#non'=[4] then char(255) else [4] end
+	set @t_part = case when '#non'=[10] then '' else [10] end
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	--zzzzz@無部門
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select case when @string='zzzzz' then '' else @string end
+			end
+			break
+		end
+		insert into #part select case when LEFT(@string,@n-1)='zzzzz' then '' else LEFT(@string,@n-1) end 	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and left(@t_edate,3))
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(20),
+		accy nvarchar(10),
+		mon nvarchar(10),
+		money4 float,
+		money5 float,
+		money6 float,
+		money7 float,
+		money8 float,
+		money9 float
+	)
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare @accc5 nvarchar(20)
+	declare @dmoney float
+	declare @cmoney float
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select 'data',@accy,@yy+'/'+left(b.accc2,2)"+
+		",sum(case when left(a.accc5,1)='4' then isnull(a.cmoney,0)-isnull(a.dmoney,0) else 0 end)"+
+		",sum(case when left(a.accc5,1)='5' then isnull(a.dmoney,0)-isnull(a.cmoney,0) else 0 end)"+
+		",sum(case when left(a.accc5,1)='6' then isnull(a.dmoney,0)-isnull(a.cmoney,0) else 0 end)"+
+		",sum(case when left(a.accc5,1)='7' then isnull(a.cmoney,0)-isnull(a.dmoney,0) else 0 end)"+
+		",sum(case when left(a.accc5,1)='8' then isnull(a.dmoney,0)-isnull(a.cmoney,0) else 0 end)"+
+		",sum(case when left(a.accc5,1)='9' then isnull(a.dmoney,0)-isnull(a.cmoney,0) else 0 end)"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+		" left join part d on c.noa=d.noa"+
+		" where b.accc3 is not null and c.noa is not null"+
+		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+		" and (left(a.accc5,1) between '4' and '8' ) "+
+		" and (@yy+'/'+b.accc2 between @t_bdate and @t_edate)"+
+		" group by @yy+'/'+left(b.accc2,2)"
+		insert into @tmp(typea,accy,mon,money4,money5,money6,money7,money8,money9)
+		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10)'
+		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	declare @tmp2 table(
+		gno nvarchar(10),
+		mon nvarchar(10),
+		mm4 nvarchar(max),
+		rate1 nvarchar(max),
+		rate2 nvarchar(max),
+		rate3 nvarchar(max),
+		rate4 nvarchar(max),
+		rr1 float,
+		rr2 float,
+		rr3 float,
+		rr4 float
+	)
+	insert into @tmp2(mon,mm4,rate1,rate2,rate3,rate4,rr1,rr2,rr3,rr4)
+	select mon
+	,case when money4=0 then '--' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,money4),1)),4,17)) end
+	,case when money4=0 then '--' else cast(cast(round((money4-money5)/money4*100,2) as decimal(10,2))as nvarchar) end 毛利率 
+	,case when money4=0 then '--' else cast(cast(round((money4-money5-money6)/money4*100,2) as decimal(10,2))as nvarchar) end 毛利率 
+	,case when money4=0 then '--' else cast(cast(round((money4-money5-money6+money7-money8)/money4*100,2) as decimal(10,2))as nvarchar) end 稅前純益率 
+	,case when money4=0 then '--' else cast(cast(round((money4-money5-money6+money7-money8-money9)/money4*100,2) as decimal(10,2))as nvarchar) end 稅後純益率
+	,case when money4=0 then 0 else round((money4-money5)/money4*100,2) end
+	,case when money4=0 then 0 else round((money4-money5-money6)/money4*100,2)end 
+	,case when money4=0 then 0 else round((money4-money5-money6+money7-money8)/money4*100,2)end
+	,case when money4=0 then 0 else round((money4-money5-money6+money7-money8-money9)/money4*100,2)end 
+	from @tmp
+	
+	update @tmp2 set gno= CAST(case when CAST(rr1 as float)>0 then 0 else 1 end *1
+						+ case when CAST(rr2 as float)>0 then 0 else 1 end *2
+						+ case when CAST(rr3 as float)>0 then 0 else 1 end *4
+						+ case when CAST(rr4 as float)>0 then 0 else 1 end *8 +1as nvarchar)
+	insert into @tmp2(gno,mon,mm4,rate1,rate2,rate3,rate4)
+	select '17',CHAR(255)
+	,case when money4=0 then '--' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,money4),1)),4,17)) end
+	,case when money4=0 then '--' else cast(cast(round((money4-money5)/money4*100,2) as decimal(10,2))as nvarchar) end 毛利率 
+	,case when money4=0 then '--' else cast(cast(round((money4-money5-money6)/money4*100,2) as decimal(10,2))as nvarchar) end 毛利率 
+	,case when money4=0 then '--' else cast(cast(round((money4-money5-money6+money7-money8)/money4*100,2) as decimal(10,2))as nvarchar) end 稅前純益率 
+	,case when money4=0 then '--' else cast(cast(round((money4-money5-money6+money7-money8-money9)/money4*100,2) as decimal(10,2))as nvarchar) end 稅後純益率
+	from (
+		select SUM(ISNULL(money4,null))money4
+			,SUM(ISNULL(money5,null))money5
+			,SUM(ISNULL(money6,null))money6
+			,SUM(ISNULL(money7,null))money7
+			,SUM(ISNULL(money8,null))money8
+			,SUM(ISNULL(money9,null))money9
+		from @tmp) a
+	select * from @tmp2 order by mon;
+
+z_acsmon:--z_acsmon
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+	
+	declare @t_accy nvarchar(10)
+	declare @t_rank nvarchar(20)
+	declare @t_mon nvarchar(10)
+	declare @t_part nvarchar(max)
+	
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	
+	
+	set @t_accy = '[1]'
+	set @t_rank = '[2]'
+	set @t_mon = case when '#non'=[5] then '' else [5] end
+	set @t_part = case when '#non'=[10] then '' else [10] end
+	
+	set @t_bacc1 = '4'
+	set @t_eacc1 = '4'+char(255)
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	
+	declare @monCount int
+	set @monCount = 5
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	--zzzzz@無部門
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select case when @string='zzzzz' then '' else @string end
+			end
+			break
+		end
+		insert into #part select case when LEFT(@string,@n-1)='zzzzz' then '' else LEFT(@string,@n-1) end 	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listmon table(
+		mon nvarchar(10),
+		bmon nvarchar(10)
+	)
+	declare @xDate datetime
+	set @xDate = CONVERT(datetime,cast(cast(LEFT(@t_mon,3) as int)+1911 as nvarchar)+'/'+RIGHT(@t_mon,2)+'/01',111)
+	declare @mon nvarchar(10)
+	declare @bmon nvarchar(10)
+	
+	set @n=0
+	while(@n<@monCount)
+	begin
+		set @mon = right('000'+cast(YEAR(@xDate )-1911 as nvarchar),3)+'/'+right('00'+cast(MONTH(@xDate)as nvarchar),2)
+		set @bmon = right('000'+cast(YEAR(DATEADD(yy,-1,@xDate))-1911 as nvarchar),3)+'/'+right('00'+cast(MONTH(DATEADD(yy,-1,@xDate))as nvarchar),2)
+		insert into @listmon(mon,bmon)
+		select @mon,@bmon
+		set @xDate = DATEADD(mm,-1,@xDate)
+		set @n=@n+1
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+
+	delete @listaccc where not exists(select * from @listmon where yy=LEFT(mon,3) or yy=LEFT(bmon,3))
+
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(20),
+		accy nvarchar(10),
+		mon nvarchar(10),
+		dmoney float,
+		cmoney float,
+		[money] float,
+		total float
+	)
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare @accc5 nvarchar(20)
+	declare @dmoney float
+	declare @cmoney float
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select 'data',@accy,@yy+'/'+left(b.accc2,2),sum(isnull(a.dmoney,0)),sum(isnull(a.cmoney,0)),sum(isnull(a.cmoney,0)-isnull(a.dmoney,0))"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+		" left join part d on c.noa=d.noa"+
+		" where b.accc3 is not null and c.noa is not null"+
+		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+		" and a.accc5 between @t_bacc1 and @t_eacc1"+
+		" group by @yy+'/'+left(b.accc2,2)"
+		insert into @tmp(typea,accy,mon,dmoney,cmoney,[money])
+		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20),@t_mon nvarchar(10)'
+		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1,@t_mon=@t_mon
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	update @tmp set total=b.[money]
+	from @tmp a
+	outer apply(select SUM([money]) [money] from @tmp where accy=a.accy and mon<=a.mon) b
+	
+	delete @tmp
+	from @tmp a
+	left join @listmon b on a.mon=b.mon or a.mon=b.bmon
+	where b.mon is null
+	----------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#acsmon')is not null
+	BEGIN
+		set @cmd = 'drop table #acsmon'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #acsmon(
+		pno nvarchar(10)
+	)
+	set @n=1
+	while(@n<=@monCount)
+	begin
+		set @cmd = "alter table #acsmon"
+			+" add mon"+cast(@n as nvarchar)+" nvarchar(10) null"
+			+" ,bmon"+cast(@n as nvarchar)+" nvarchar(10) null"
+			+" ,money"+cast(@n as nvarchar)+" float null"
+			+" ,bmoney"+cast(@n as nvarchar)+" float null"
+			+" ,mdiff"+cast(@n as nvarchar)+" float null"
+			+" ,mrate"+cast(@n as nvarchar)+" float null"
+			+" ,total"+cast(@n as nvarchar)+" float null"
+			+" ,btotal"+cast(@n as nvarchar)+" float null"
+			+" ,ydiff"+cast(@n as nvarchar)+" float null"
+			+" ,yrate"+cast(@n as nvarchar)+" float null"
+		EXECUTE sp_executesql @cmd
+		set @n = @n +1
+	end
+	
+	insert into #acsmon(pno)select '1'
+	
+	declare @money float
+	declare @bmoney float
+	declare @total float
+	declare @btotal float
+
+	declare cursor_table cursor for
+	select row_number()over(order by mon desc), mon,bmon from @listmon
+	open cursor_table
+	fetch next from cursor_table
+	into @n,@mon,@bmon
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @money=0,@total=0,@bmoney=0,@btotal=0
+		select @money=[money],@total=total from @tmp where mon=@mon
+		select @bmoney=[money],@btotal=total from @tmp where mon=@bmon
+		set @cmd = "update #acsmon set mon"+cast(@n as nvarchar)+"=@mon,bmon"+cast(@n as nvarchar)+"=@bmon"
+			+",money"+cast(@n as nvarchar)+"=@money,bmoney"+cast(@n as nvarchar)+"=@bmoney"
+			+",total"+cast(@n as nvarchar)+"=@total,btotal"+cast(@n as nvarchar)+"=@btotal"
+			+",mdiff"+cast(@n as nvarchar)+"=@money-@bmoney,mrate"+cast(@n as nvarchar)+"=case when @bmoney=0 then 0 else round((@money-@bmoney)/@bmoney*100,2) end"
+			+",ydiff"+cast(@n as nvarchar)+"=@total-@btotal,yrate"+cast(@n as nvarchar)+"=case when @btotal=0 then 0 else round((@total-@btotal)/@btotal*100,2) end"
+		execute sp_executesql @cmd,N'@mon nvarchar(10),@bmon nvarchar(10),@money float,@bmoney float,@total float,@btotal float'
+		,@mon=@mon,@bmon=@bmon,@money=@money,@bmoney=@bmoney,@total=@total,@btotal=@btotal
+		
+		fetch next from cursor_table
+		into @n,@mon,@bmon
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	declare @gno nvarchar(10)
+	set @gno = '1'
+	set @cmd = "select @gno gno"
+	set @n=1
+	while(@n<=@monCount)
+	begin
+		set @cmd = @cmd+",mon"+cast(@n as nvarchar)
+			+",bmon"+cast(@n as nvarchar)
+			+",case when money"+cast(@n as nvarchar)+"=0 then '--' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money"+cast(@n as nvarchar)+"),1)),4,12)) end mm"+cast(@n as nvarchar)
+			+",case when bmoney"+cast(@n as nvarchar)+"=0 then '--' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmoney"+cast(@n as nvarchar)+"),1)),4,12)) end bm"+cast(@n as nvarchar)
+			+",case when mdiff"+cast(@n as nvarchar)+"=0 then '--' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mdiff"+cast(@n as nvarchar)+"),1)),4,12)) end md"+cast(@n as nvarchar)
+			+",case when mrate"+cast(@n as nvarchar)+"=0 then '--' else cast(mrate"+cast(@n as nvarchar)+" as nvarchar) end mr"+cast(@n as nvarchar)
+			+",case when total"+cast(@n as nvarchar)+"=0 then '--' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total"+cast(@n as nvarchar)+"),1)),4,12)) end tt"+cast(@n as nvarchar)
+			+",case when btotal"+cast(@n as nvarchar)+"=0 then '--' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,btotal"+cast(@n as nvarchar)+"),1)),4,12)) end bt"+cast(@n as nvarchar)
+			+",case when ydiff"+cast(@n as nvarchar)+"=0 then '--' else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ydiff"+cast(@n as nvarchar)+"),1)),4,12)) end yd"+cast(@n as nvarchar)
+			+",case when yrate"+cast(@n as nvarchar)+"=0 then '--' else cast(yrate"+cast(@n as nvarchar)+" as nvarchar) end yr"+cast(@n as nvarchar)
+		set @n = @n +1
+	end
+	set @cmd = @cmd + " from #acsmon"
+	EXECUTE sp_executesql @cmd,N'@gno nvarchar(10)',@gno=@gno
+		
+	drop table #acsmon;
