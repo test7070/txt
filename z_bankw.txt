@@ -1,0 +1,102 @@
+﻿z_bankw1:--z_bankw1
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bankmoney float
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bankmoney = cast(replace('0',',','') as float)
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	datea nvarchar(10), ----日期
+	gqb float, ----到期票據
+	umm float, ----應收帳款
+	pay float, ----應付帳款
+	ordc float, ----預估採購
+	oget float, ----預收
+	bankw float, ----借款融資
+	opay float, ----預付
+	total float, ----餘額
+	memo nvarchar(max), ----備註
+	paymoney float, ----還款金額
+	sales nvarchar(50), ----業務
+	comp nvarchar(90), ----公司名稱
+	typea nvarchar(30) ----種類
+)
+insert into @tmp
+	select '0',a.datea,0,0,0,0,0,a.money,0,0,
+	(case a.typea when '1' then '銀行借款' when '2' then '融資' when '3' then '股東往來' when '4' then '外部往來' end) + ' ' + a.memo,
+	0,'',a.comp,'1BANKW'
+	from bankw a
+	union
+	select '0',a.paydate,0,0,0,0,0,a.money,0,0,
+	(case a.typea when '1' then '銀行借款' when '2' then '融資' when '3' then '股東往來' when '4' then '外部往來' end) + ' ' + a.memo,
+	(a.money * ( 1+ a.rate /365/100 * (DATEDIFF(day,CONVERT(datetime,cast((cast(left(a.datea,3) as int)+1911) as nvarchar)+right(a.datea,6)),
+					CONVERT(datetime,cast((cast(left(a.paydate,3) as int)+1911) as nvarchar)+right(a.paydate,6)))))) money,
+	'',a.comp,'2BANKW'
+	from bankw a
+	where isnull(a. paydate,'') != ''
+	union
+	select
+		'0',a.datea,0,0,0,0,(a.opay-a.unpay),0,0,0,'預收>未收，' + cast(a.opay as nvarchar) + '>' + cast(a.unpay as nvarchar),
+		0,'',a.comp,'3UMM3'
+	from umm a
+	where a.opay >a.unpay
+	union
+	select
+		'0',a.datea,0,0,0,0,0,0,(a.opay-a.unpay),0,'預付>未付，' + cast(a.opay as nvarchar) + '>' + cast(a.unpay as nvarchar),
+		0,'',a.comp,'3PAY3'
+	from pay a
+	where a.opay >a.unpay
+	union
+	select
+		'0',a.datea,0,a.sale,0,0,0,0,0,0,a.memo,
+		0,'',a.comp,'1UMM'
+	from umm a
+	union
+	select
+		'0',a.datea,0,0,a.sale,0,0,0,0,0,a.memo,
+		0,'',a.comp,'1PAY'
+	from pay a
+	union 
+	select '0',a.datea,0,0,0,a.money,0,0,0,0,a.memo,0,'','','1ORDC' from (
+		select a.datea,(a.notv*a.price) money,a.memo from view_ordcs102 a
+	) a
+	union
+	select '0',a.indate,a.money,0,0,0,0,0,0,0,
+	case a.typea when '1' then '收票' when '2' then '開票' when '3' then '收退' when '4' then '開退' end +' ' + a.indate+' 票號=' + a.gqbno,
+	0,'','','1GQB'
+	from gqb a
+	where isnull(a.enda,'')='' and (a.indate between @t_bdate and @t_edate)
+update @tmp set total = gqb+umm-pay-ordc+opay-oget+bankw-paymoney
+
+declare @idno int
+declare @total float
+declare cursor_table cursor for
+	select idno,total from @tmp
+open cursor_table
+fetch next from cursor_table
+into @idno,@total
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_bankmoney = @t_bankmoney+@total
+	update @tmp set total = @t_bankmoney where idno = @idno
+	fetch next from cursor_table
+	into @idno,@total
+end
+close cursor_table
+deallocate cursor_table
+
+select
+	gno,datea,gqb,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,umm),1)),4,12)) umm,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pay),1)),4,12)) pay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ordc),1)),4,12)) ordc,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,oget),1)),4,12)) oget,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bankw),1)),4,12)) bankw,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,opay),1)),4,12)) opay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+	memo,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paymoney),1)),4,12)) paymoney,
+	sales,comp,typea
+from @tmp;
