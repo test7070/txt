@@ -850,7 +850,13 @@ z_accc02:--z_accc02 總分類帳
 	declare @typea nvarchar(20)
 	declare @pno nvarchar(10)
 	----------------------------------------------------------------------------------------------
-	declare @tmp table(
+	IF OBJECT_ID('tempdb..#z_accc02')is not null
+	BEGIN
+		set @cmd = 'drop table #z_accc02'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #z_accc02(
 		typea nvarchar(20),
 		accy nvarchar(10),
 		datea nvarchar(10),
@@ -872,6 +878,7 @@ z_accc02:--z_accc02 總分類帳
 		part nvarchar(20),
 		noq nvarchar(10)
 	)
+	create index z_accc02 on #z_accc02(accy,acc1,datea)
 	
 	declare @tmpHistory table(
 		accy nvarchar(10),
@@ -879,7 +886,8 @@ z_accc02:--z_accc02 總分類帳
 		acc1 nvarchar(20),
 		acc2 nvarchar(max),
 		dmoney float,
-		cmoney float
+		cmoney float,
+		primary key (accy,mon,acc1)
 	)
 	----------------------------------------------------------------------------------------------
 	declare @tablea nvarchar(20)
@@ -909,7 +917,7 @@ z_accc02:--z_accc02 總分類帳
 		" and @yy+'/'+b.accc2 <= @t_edate"+
 		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
 		" and left(a.accc5,5) between @t_bacc1 and @t_eacc1"
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc02(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
 		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
 		
@@ -921,7 +929,7 @@ z_accc02:--z_accc02 總分類帳
 	----------------------------------------------------------------------------------------------
 	insert into @tmpHistory(accy,mon,acc1,acc2,dmoney,cmoney)
 	select accy,LEFT(datea,6),acc1,acc2,SUM(dmoney),SUM(cmoney)
-	from @tmp
+	from #z_accc02
 	group by accy,LEFT(datea,6),acc1,acc2
 	
 	--上期餘額
@@ -934,16 +942,16 @@ z_accc02:--z_accc02 總分類帳
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		select @dmoney = 0,@cmoney = 0
-		if not exists(select top(1) * from @tmp where accy=@accy and acc1=@acc1)
+		if not exists(select top(1) * from #z_accc02 where accy=@accy and acc1=@acc1)
 		begin
 			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from @tmpHistory where accy=@accy and acc1=@acc1
 		end
 		else
 		begin
-			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from @tmp where accy=@accy and acc1=@acc1 and datea<@t_bdate 
+			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from #z_accc02 where accy=@accy and acc1=@acc1 and datea<@t_bdate 
 		end
 		select @dmoney = ISNULL(@dmoney,0),@cmoney = ISNULL(@cmoney,0)
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc02(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		values('begin',@accy,@yy,'','','','',@acc1,@acc2,'','上期餘額',@dmoney,@cmoney,'','','')
 		
 		fetch next from cursor_table
@@ -951,17 +959,17 @@ z_accc02:--z_accc02 總分類帳
 	end
 	close cursor_table
 	deallocate cursor_table
-	delete @tmp where typea='data' and not(datea between @t_bdate and @t_edate)
+	delete #z_accc02 where typea='data' and not(datea between @t_bdate and @t_edate)
 	--月小計
 	declare cursor_table cursor for
-	select accy,acc1,acc2,left(datea,6),sum(dmoney),sum(cmoney) from @tmp 
+	select accy,acc1,acc2,left(datea,6),sum(dmoney),sum(cmoney) from #z_accc02
 	where typea='data' group by accy,acc1,acc2,left(datea,6)
 	open cursor_table
 	fetch next from cursor_table
 	into @accy,@acc1,@acc2,@mon,@dmoney,@cmoney
 	while(@@FETCH_STATUS <> -1)
 	begin		
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc02(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		values('mon',@accy,@mon+CHAR(255),'','','','',@acc1,@acc2,'',right(@mon,2)+'月小計',@dmoney,@cmoney,'','','')
 		
 		fetch next from cursor_table
@@ -971,14 +979,14 @@ z_accc02:--z_accc02 總分類帳
 	deallocate cursor_table
 	--合計
 	declare cursor_table cursor for
-	select accy,acc1,acc2,left(datea,3),sum(dmoney),sum(cmoney) from @tmp where (typea='begin' or typea='data') 
+	select accy,acc1,acc2,left(datea,3),sum(dmoney),sum(cmoney) from #z_accc02 where (typea='begin' or typea='data') 
 	group by accy,acc1,acc2,left(datea,3)
 	open cursor_table
 	fetch next from cursor_table
 	into @accy,@acc1,@acc2,@yy,@dmoney,@cmoney
 	while(@@FETCH_STATUS <> -1)
 	begin		
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc02(typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		values('end',@accy,@yy+CHAR(255),'','','','',@acc1,@acc2,'','合計',@dmoney,@cmoney,'','','')
 		
 		fetch next from cursor_table
@@ -1012,11 +1020,12 @@ z_accc02:--z_accc02 總分類帳
 		noq nvarchar(10),
 		cn1 int,
 		cn2 int
+		primary key(accy,acc1,accc3,noq,cn1,cn2)
 	)
 	declare cursor_table cursor for
 	select typea,accy,datea,accc1,accc2,accc3,accc4,acc1,acc2,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq
 	,row_number()over(order by accy,acc1,datea,accc3)
-	from @tmp
+	from #z_accc02
 	open cursor_table
 	fetch next from cursor_table
 	into @typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@acc1,@acc2,@accc5,@titelb,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1
@@ -1267,6 +1276,7 @@ z_accc01:--z_accc01 明細分類帳
 	set @t_bacc1 = case when '#non'=[5] then '' else [5] end
 	set @t_eacc1 = case when '#non'=[6] then char(255) else [6] end
 	set @t_part = case when '#non'=[9] then '' else [9] end
+	declare @btime datetime
 	----------------------------------------------------------------------------------------------	
 	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
 	----------------------------------------------------------------------------------------------
@@ -1346,7 +1356,12 @@ z_accc01:--z_accc01 明細分類帳
 	declare @typea nvarchar(20)
 	declare @pno nvarchar(10)
 	----------------------------------------------------------------------------------------------
-	declare @tmp table(
+	IF OBJECT_ID('tempdb..#z_accc01')is not null
+	BEGIN
+		set @cmd = 'drop table #z_accc01'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_accc01(
 		typea nvarchar(20),
 		accy nvarchar(10),
 		datea nvarchar(10),
@@ -1366,6 +1381,7 @@ z_accc01:--z_accc01 明細分類帳
 		part nvarchar(20),
 		noq nvarchar(10)
 	)
+	create index z_accc01 on #z_accc01(accy,accc5,datea)
 	
 	declare @tmpHistory table(
 		accy nvarchar(10),
@@ -1373,9 +1389,12 @@ z_accc01:--z_accc01 明細分類帳
 		accc5 nvarchar(20),
 		titelb nvarchar(max),
 		dmoney float,
-		cmoney float
+		cmoney float,
+		primary key(accy,mon,accc5)
 	)
 	----------------------------------------------------------------------------------------------
+	set @btime = CURRENT_TIMESTAMP
+	
 	declare @tablea nvarchar(20)
 	declare @tableas nvarchar(20)
 	declare @tableacc nvarchar(20)
@@ -1402,7 +1421,7 @@ z_accc01:--z_accc01 明細分類帳
 		" and @yy+'/'+b.accc2 <= @t_edate"+
 		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
 		" and a.accc5 between @t_bacc1 and @t_eacc1"
-		insert into @tmp(titelb,typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc01(titelb,typea,accy,datea,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
 		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
 		
@@ -1411,10 +1430,15 @@ z_accc01:--z_accc01 明細分類帳
 	end
 	close cursor_table
 	deallocate cursor_table
+	
+	--select 'a', DATEDIFF(MS,@btime,CURRENT_TIMESTAMP)
+	
 	----------------------------------------------------------------------------------------------
+	set @btime = CURRENT_TIMESTAMP
+
 	insert into @tmpHistory(accy,mon,accc5,titelb,dmoney,cmoney)
 	select accy,LEFT(datea,6),accc5,titelb,SUM(dmoney),SUM(cmoney)
-	from @tmp
+	from #z_accc01
 	group by accy,LEFT(datea,6),accc5,titelb
 	
 	--上期餘額
@@ -1427,16 +1451,16 @@ z_accc01:--z_accc01 明細分類帳
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		select @dmoney = 0,@cmoney = 0
-		if not exists(select top(1) * from @tmp where accy=@accy and accc5=@accc5)
+		if not exists(select top(1) * from #z_accc01 where accy=@accy and accc5=@accc5)
 		begin
 			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from @tmpHistory where accy=@accy and accc5=@accc5
 		end
 		else
 		begin
-			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from @tmp where accy=@accy and accc5=@accc5 and datea<@t_bdate 
+			select @dmoney = SUM(dmoney),@cmoney = SUM(cmoney) from #z_accc01 where accy=@accy and accc5=@accc5 and datea<@t_bdate 
 		end
 		select @dmoney = ISNULL(@dmoney,0),@cmoney = ISNULL(@cmoney,0)
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc01(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		values('begin',@accy,@yy,'','','','',@accc5,@titelb,'','上期餘額',@dmoney,@cmoney,'','','')
 		
 		fetch next from cursor_table
@@ -1444,17 +1468,17 @@ z_accc01:--z_accc01 明細分類帳
 	end
 	close cursor_table
 	deallocate cursor_table
-	delete @tmp where typea='data' and not(datea between @t_bdate and @t_edate)
+	delete #z_accc01 where typea='data' and not(datea between @t_bdate and @t_edate)
 	--月小計
 	declare cursor_table cursor for
-	select accy,accc5,titelb,left(datea,6),sum(dmoney),sum(cmoney) from @tmp 
+	select accy,accc5,titelb,left(datea,6),sum(dmoney),sum(cmoney) from #z_accc01
 	where typea='data' group by accy,accc5,titelb,left(datea,6)
 	open cursor_table
 	fetch next from cursor_table
 	into @accy,@accc5,@titelb,@mon,@dmoney,@cmoney
 	while(@@FETCH_STATUS <> -1)
 	begin		
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc01(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		values('mon',@accy,@mon+CHAR(255),'','','','',@accc5,@titelb,'',right(@mon,2)+'月小計',@dmoney,@cmoney,'','','')
 		
 		fetch next from cursor_table
@@ -1464,14 +1488,14 @@ z_accc01:--z_accc01 明細分類帳
 	deallocate cursor_table
 	--合計
 	declare cursor_table cursor for
-	select accy,accc5,titelb,left(datea,3),sum(dmoney),sum(cmoney) from @tmp where (typea='begin' or typea='data') 
+	select accy,accc5,titelb,left(datea,3),sum(dmoney),sum(cmoney) from #z_accc01 where (typea='begin' or typea='data') 
 	group by accy,accc5,titelb,left(datea,3)
 	open cursor_table
 	fetch next from cursor_table
 	into @accy,@accc5,@titelb,@yy,@dmoney,@cmoney
 	while(@@FETCH_STATUS <> -1)
 	begin		
-		insert into @tmp(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
+		insert into #z_accc01(typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq)
 		values('end',@accy,@yy+CHAR(255),'','','','',@accc5,@titelb,'','合計',@dmoney,@cmoney,'','','')
 		
 		fetch next from cursor_table
@@ -1479,7 +1503,9 @@ z_accc01:--z_accc01 明細分類帳
 	end
 	close cursor_table
 	deallocate cursor_table
+	--select 'b', DATEDIFF(MS,@btime,CURRENT_TIMESTAMP)
 	----------------------------------------------------------------------------------------------
+	set @btime = CURRENT_TIMESTAMP
 	--摘要太長分多行
 	declare @tmp2 table(
 		pno nvarchar(10),
@@ -1507,7 +1533,7 @@ z_accc01:--z_accc01 明細分類帳
 	declare cursor_table cursor for
 	select typea,accy,datea,accc1,accc2,accc3,accc4,accc5,titelb,accc6,accc7,dmoney,cmoney,partno,part,noq
 	,row_number()over(order by accy,accc5,datea,accc3)
-	from @tmp
+	from #z_accc01
 	open cursor_table
 	fetch next from cursor_table
 	into @typea,@accy,@datea,@accc1,@accc2,@accc3,@accc4,@accc5,@titelb,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1
@@ -1549,6 +1575,7 @@ z_accc01:--z_accc01 明細分類帳
 	end
 	close cursor_table
 	deallocate cursor_table
+	--select 'c', DATEDIFF(MS,@btime,CURRENT_TIMESTAMP)
 	----------------------------------------------------------------------------------------------
 	--分頁
 	declare @tmp3 table(
