@@ -755,3 +755,69 @@ z_umm01:--z_umm01
 	from @tmp3 a
 	outer apply (select max(page) page from @tmp3) b
 	order by a.page,a.nn;
+------------------------------------------------------------------------------------------------------------
+z_vccj:--z_vccj
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bcustno nvarchar(30)
+declare @t_ecustno nvarchar(30)
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+set @t_bcustno = case when '#non'=[5] then '' else [5] end
+set @t_ecustno = case when '#non'=[6] then char(255) else [6] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	custno nvarchar(30), ----客戶編號
+	comp nvarchar(90), ----客戶名稱
+	vcc_money float, ----出貨金額 > vcc.應收
+	vcc_tax float, ----營業稅 > vcc.稅金
+	vcc_weight float, ----出貨重量 > if vcc.type = 退 *-1 if vccs.實重>0 then 實重 else vccs.重量
+	oinvoice_money float, ----已開發票金額 > vcca.產品金額
+	uninvoice_money float, ----未開發票金額 >出貨金額-已開發票金額
+	uninvoice_tax float, ----未開發票稅額 > 營業稅 -vcca.稅額
+	oinvoice_weight float, ----已開發票重 > vccas.數量
+	uninvoice_weight float, ----未開發票重 > 出貨重量-已開發票重 
+	unsales_money float, ----未開銷貨收入 > if vcc.type = 退 *-1 if len(會計傳票)=0 then vcc.應收 else 0
+	unsales_tax float ----未開銷項稅額 > if vcc.type = 退 *-1  if len(會計傳票)=0 then vcc.稅額 else 0
+)
+insert into @tmp
+	select
+		'0',a.custno,d.nick,sum(a.money),sum(a.tax),
+		case when sum(b.gweight) > 0 then sum(b.gweight) else sum(b.weight) end,
+		isnull(sum(c.money),0),isnull(sum(a.money)-sum(c.money),0),isnull(sum(a.tax)-sum(c.tax),0),isnull(sum(c.mount),0),0,
+		sum((case when a.typea ='2' then (-1) else 1 end)*(case when len(a.accno) = 0 then a.money else 0 end)),
+		sum((case when a.typea ='2' then (-1) else 1 end)*(case when len(a.accno) = 0 then a.tax else 0 end))
+	from vcc[10] a
+	left join (
+		select
+			a.custno,sum((case when a.typea ='2' then (-1) else 1 end)*a.gweight) gweight,
+			sum((case when a.typea ='2' then (-1) else 1 end)*a.weight) weight
+		from vccs[10] a
+		left join vcc[10] b on a.noa = b.noa
+		where a.datea between @t_bdate and @t_edate
+		group by a.custno
+	) b on a.custno = b.custno
+	left join (
+		select a.custno,sum(a.money) money,sum(a.tax) tax,sum(b.mount) mount from vcca a
+		left join vccas b on a.noa = b.noa
+		where a.datea between @t_bdate and @t_edate
+		group by a.custno
+	) c on a.custno = c.custno
+	left join cust d on a.custno = d.noa
+	where a.custno between @t_bcustno and @t_ecustno
+	group by a.custno,d.nick
+update @tmp set uninvoice_weight = vcc_weight-oinvoice_weight
+select
+	gno,custno,comp,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,vcc_money),1)),4,12)) vcc_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,vcc_tax),1)),4,12)) vcc_tax,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,vcc_weight),1)),4,12)) vcc_weight,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,oinvoice_money),1)),4,12)) oinvoice_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,uninvoice_money),1)),4,12)) uninvoice_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,uninvoice_tax),1)),4,12)) uninvoice_tax,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,oinvoice_weight),1)),4,12)) oinvoice_weight,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,uninvoice_weight),1)),4,12)) uninvoice_weight,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unsales_money),1)),4,12)) unsales_money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unsales_tax),1)),4,12)) unsales_tax
+from @tmp;
