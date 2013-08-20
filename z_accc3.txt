@@ -1,3 +1,182 @@
+z_acsfin:--z_acsfin
+	SET QUOTED_IDENTIFIER OFF 
+	declare @cmd nvarchar(max) 
+	declare @islock int 
+	
+	declare @t_accy nvarchar(10) 
+	declare @t_rank nvarchar(20) 
+	declare @t_bdate1 nvarchar(10) 
+	declare @t_edate1 nvarchar(10) 
+	declare @t_bdate2 nvarchar(10)
+	declare @t_edate2 nvarchar(10)
+	declare @t_part nvarchar(max)	
+
+	set @t_accy = '[1]'
+	set @t_rank = '[2]'
+	set @t_bdate1 = case when '#non'=[5] then '' else [5] end
+	set @t_edate1 = case when '#non'=[6] then char(255) else [6] end
+	set @t_bdate2 = case when '#non'=[7] then '' else [7] end
+	set @t_edate2 = case when '#non'=[8] then char(255) else [8] end
+	set @t_part = case when '#non'=[14] then '' else [14] end
+
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	----------------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	--zzzzz@無部門
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select case when @string='zzzzz' then '' else @string end
+			end
+			break
+		end
+		insert into #part select case when LEFT(@string,@n-1)='zzzzz' then '' else LEFT(@string,@n-1) end 	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+
+	delete @listaccc where not(yy between LEFT(@t_bdate1,3) and left(@t_edate1,3) or yy between LEFT(@t_bdate2,3) and left(@t_edate2,3))
+	
+
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(20),
+		accy nvarchar(10),
+		datea nvarchar(10),
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		dmoney float,
+		cmoney float,
+		[money] float
+	)
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @dmoney float
+	declare @cmoney float
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select 'data',@accy,@yy+'/'+b.accc2"+
+		" ,case when left(a.accc5,1)='3' then a.accc5 else left(a.accc5,1) end"+
+		" ,case when left(a.accc5,1)='3' then isnull(e.acc2,'') else '' end"+
+		" ,(isnull(a.dmoney,0)),(isnull(a.cmoney,0))"+
+		" ,(case when left(a.accc5,1)='1' or left(a.accc5,1)='5' or left(a.accc5,1)='6' or left(a.accc5,1)='8' or left(a.accc5,2)='73' then a.dmoney-a.cmoney else a.cmoney-a.dmoney end)"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+		" left join acpart"+@accy+" d on c.noa=d.noa"+
+		" left join acc"+@accy+" e on a.accc5=e.acc1"+
+		" where b.accc3 is not null and c.noa is not null"+
+		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+		" and (left(a.accc5,1) between '3' and '9' ) "+
+		" and ((@yy+'/'+b.accc2 between @t_bdate1 and @t_edate1) or (@yy+'/'+b.accc2 between @t_bdate2 and @t_edate2))"
+		insert into @tmp(typea,accy,datea,acc1,acc2,dmoney,cmoney,[money])
+		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate1 nvarchar(10),@t_edate1 nvarchar(10),@t_bdate2 nvarchar(10),@t_edate2 nvarchar(10)'
+		,@islock=@islock,@accy=@accy,@yy=@yy,@t_bdate1=@t_bdate1,@t_edate1=@t_edate1,@t_bdate2=@t_bdate2,@t_edate2=@t_edate2
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	declare @z_acsfin table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		money1 float,
+		money2 float
+	)
+	insert @z_acsfin(acc1,acc2,money1,money2)
+	select acc1,acc2,SUM(isnull(money1,0)),SUM(isnull(money2,0))
+	from(
+		select acc1,acc2,SUM(isnull([money],0)) money1,0 money2
+		from @tmp where datea between @t_bdate1 and @t_edate1 group by acc1,acc2 
+		having SUM(isnull([money],0))!=0
+		union all 
+		select acc1,acc2,0 money1,SUM(isnull([money],0)) money2
+		from @tmp where datea between @t_bdate2 and @t_edate2 group by acc1,acc2 
+		having SUM(isnull([money],0))!=0
+		)a
+	group by acc1,acc2 
+	------------------------------------------------------------------------------------------------
+	insert @z_acsfin(acc1,acc2,money1,money2)
+	select 'A','營業收入',sum(money1),sum(money2)
+	from @z_acsfin where acc1='4'
+	union all
+	select 'B','營業毛利'
+		,sum(case when acc1='4' then money1 else -money1 end)
+		,sum(case when acc1='4' then money2 else -money2 end)
+	from @z_acsfin where acc1 between '4' and '5'
+	union all
+	select 'C','營業損益'
+		,sum(case when acc1='4' then money1 else -money1 end)
+		,sum(case when acc1='4' then money2 else -money2 end)
+	from @z_acsfin where acc1 between '4' and '6'
+	union all
+	select 'D','業外收入',sum(money1),sum(money2)
+	from @z_acsfin where acc1='7'
+	union all
+	select 'E','業外支出',sum(money1),sum(money2)
+	from @z_acsfin where acc1='8'
+	union all
+	select 'F','稅前盈餘'
+		,sum(case when acc1='4' or acc1='7' then money1 else -money1 end)
+		,sum(case when acc1='4' or acc1='7' then money2 else -money2 end)
+	from @z_acsfin where acc1 between '4' and '8'
+	union all
+	select 'G','稅後盈餘'
+		,sum(case when acc1='4' or acc1='7' then money1 else -money1 end)
+		,sum(case when acc1='4' or acc1='7' then money2 else -money2 end)
+	from @z_acsfin where acc1 between '4' and '9'
+
+	delete @z_acsfin where acc1 between '4' and '9'
+
+	select *
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,money1),1)),4,17)) mm1
+	,reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,money2),1)),4,17)) mm2
+	,case when not(acc1 between 'A' and 'Z') then '' 
+		  when money1=0 then '--' else cast(round((money1-money2)/money1*100,2) as nvarchar) end rr
+	,case when (money1-money2)>=0 then '1' else '2' end gno 
+	from @z_acsfin order by acc1;
+
 z_acsrate:--z_acsrate	
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
@@ -13,7 +192,7 @@ z_acsrate:--z_acsrate
 	set @t_rank = '[2]'
 	set @t_bdate = case when '#non'=[3] then '' else [3] end
 	set @t_edate = case when '#non'=[4] then char(255) else [4] end
-	set @t_part = case when '#non'=[10] then '' else [10] end
+	set @t_part = case when '#non'=[14] then '' else [14] end
 	----------------------------------------------------------------------------------------------	
 	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
 	----------------------------------------------------------------------------------------------
@@ -176,8 +355,8 @@ z_acsmon:--z_acsmon
 	
 	set @t_accy = '[1]'
 	set @t_rank = '[2]'
-	set @t_mon = case when '#non'=[5] then '' else [5] end
-	set @t_part = case when '#non'=[10] then '' else [10] end
+	set @t_mon = case when '#non'=[9] then '' else [9] end
+	set @t_part = case when '#non'=[14] then '' else [14] end
 	
 	set @t_bacc1 = '4'
 	set @t_eacc1 = '4'+char(255)
