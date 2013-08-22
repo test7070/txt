@@ -18,11 +18,528 @@ z_acsfinrate:--z_acsfinrate 財務比率
 	set @t_bdate2 = case when '#non'=[7] then '' else [7] end
 	set @t_edate2 = case when '#non'=[8] then char(255) else [8] end
 	set @t_part = case when '#non'=[14] then '' else [14] end
-
 	----------------------------------------------------------------------------------------------	
-	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	declare @t_bdate3 nvarchar(10)
+	declare @t_edate3 nvarchar(10)
+	declare @t_bdate4 nvarchar(10)
+	declare @t_edate4 nvarchar(10)
+	
+	if(right(@t_bdate1,5)='01/01')
+	begin
+		set @t_bdate3 = case when len(@t_bdate1)=0 then '' else right('000'+cast(cast(LEFT(@t_bdate1,3) as int)-1 as nvarchar),3)+'/01/01' end
+		set @t_edate3 = case when @t_edate1=char(255) then CHAR(255) else right('000'+cast(cast(LEFT(@t_edate1,3) as int)-1 as nvarchar),3)+'/12/31'end
+	end
+	else
+	begin
+		set @t_bdate3 = case when len(@t_bdate1)=0 then '' else LEFT(@t_bdate1,3)+'/01/01'end
+		set @t_edate3 = dateadd(dd,-1,convert( datetime,cast(cast(LEFT(@t_bdate1,3) as int)+1911 as nvarchar)+'/'+right(@t_bdate1,5),111))
+	end
+	if(right(@t_bdate2,5)='01/01')
+	begin
+		set @t_bdate4 = case when len(@t_bdate2)=0 then '' else right('000'+cast(cast(LEFT(@t_bdate2,3) as int)-1 as nvarchar),3)+'/01/01' end
+		set @t_edate4 = case when @t_edate2=char(255) then CHAR(255) else right('000'+cast(cast(LEFT(@t_edate2,3) as int)-1 as nvarchar),3)+'/12/31'end
+	end
+	else
+	begin
+		set @t_bdate4 = case when len(@t_bdate2)=0 then '' else LEFT(@t_bdate2,3)+'/01/01'end
+		set @t_edate4 = dateadd(dd,-1,convert( datetime,cast(cast(LEFT(@t_bdate2,3) as int)+1911 as nvarchar)+'/'+right(@t_bdate2,5),111))
+	end
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示 
+	---------------------------------------------------------------------------------------------- 
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	--zzzzz@無部門
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select case when @string='zzzzz' then '' else @string end
+			end
+			break
+		end
+		insert into #part select case when LEFT(@string,@n-1)='zzzzz' then '' else LEFT(@string,@n-1) end 	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
 	----------------------------------------------------------------------------------------------
-	;
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+
+	delete @listaccc where not(yy between LEFT(@t_bdate1,3) and left(@t_edate1,3) 
+							or yy between LEFT(@t_bdate2,3) and left(@t_edate2,3)
+							or yy between LEFT(@t_bdate3,3) and left(@t_edate3,3)
+							or yy between LEFT(@t_bdate4,3) and left(@t_edate4,3))
+	
+
+	----------------------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(20),
+		accy nvarchar(10),
+		datea nvarchar(10),
+		acc1 nvarchar(20),
+		dmoney float,
+		cmoney float,
+		[money] float
+	)
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @dmoney float
+	declare @cmoney float
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select 'data',@accy,@yy+'/'+b.accc2"+
+		" ,left(a.accc5,4)"+
+		" ,sum(isnull(a.dmoney,0)),sum(isnull(a.cmoney,0))"+
+		" ,sum(case when left(a.accc5,1)='1' or left(a.accc5,1)='5' or left(a.accc5,1)='6' or left(a.accc5,1)='8' or left(a.accc5,2)='73' or left(a.accc5,1)='9' then a.dmoney-a.cmoney else a.cmoney-a.dmoney end)"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join #part c on a.part=c.noa"+
+	--	" left join acpart"+@accy+" d on c.noa=d.noa"+
+		" where b.accc3 is not null and c.noa is not null"+
+		" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+		" and (left(a.accc5,1) between '1' and '9' ) "+
+		" and ((@yy+'/'+b.accc2 between @t_bdate1 and @t_edate1)"+
+		"	or (@yy+'/'+b.accc2 between @t_bdate2 and @t_edate2)"+
+		"	or (@yy+'/'+b.accc2 between @t_bdate3 and @t_edate3)"+
+		"	or (@yy+'/'+b.accc2 between @t_bdate4 and @t_edate4))"+
+		" group by @yy+'/'+b.accc2,left(a.accc5,4)"
+		insert into @tmp(typea,accy,datea,acc1,dmoney,cmoney,[money])
+		execute sp_executesql @cmd,N'@islock int,@accy nvarchar(10),@yy nvarchar(10),@t_bdate1 nvarchar(10),@t_edate1 nvarchar(10),@t_bdate2 nvarchar(10),@t_edate2 nvarchar(10),@t_bdate3 nvarchar(10),@t_edate3 nvarchar(10),@t_bdate4 nvarchar(10),@t_edate4 nvarchar(10)'
+		,@islock=@islock,@accy=@accy,@yy=@yy
+		,@t_bdate1=@t_bdate1,@t_edate1=@t_edate1
+		,@t_bdate2=@t_bdate2,@t_edate2=@t_edate2
+		,@t_bdate3=@t_bdate3,@t_edate3=@t_edate3
+		,@t_bdate4=@t_bdate4,@t_edate4=@t_edate4
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	declare @z_acsfinrate table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		rate1 float,
+		rate2 float
+	)
+	------------------------------------------------------------------------------------------------
+	declare @x1 float
+	declare @x10 float
+	declare @x11 float
+	declare @x12 float
+	declare @x2 float
+	declare @x20 float
+	declare @x22 float
+	declare @x3 float
+	
+	declare @y1 float
+	declare @y10 float
+	declare @y11 float
+	declare @y12 float
+	declare @y2 float
+	declare @y20 float
+	declare @y22 float
+	declare @y3 float
+	
+	select @x1=SUM([money]) from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate1 and @t_edate1
+	select @x10=SUM([money]) from @tmp where LEFT(acc1,2) between '10' and '11' and datea between @t_bdate1 and @t_edate1
+	select @x11=SUM([money]) from @tmp where LEFT(acc1,3) between '113' and '119' and datea between @t_bdate1 and @t_edate1
+	select @x12=SUM([money]) from @tmp where LEFT(acc1,2) between '22' and '29' and datea between @t_bdate1 and @t_edate1
+	select @x2=SUM([money]) from @tmp where LEFT(acc1,1)='2' and datea between @t_bdate1 and @t_edate1
+	select @x20=SUM([money]) from @tmp where LEFT(acc1,2) between '20' and '21' and datea between @t_bdate1 and @t_edate1
+	select @x22=SUM([money]) from @tmp where LEFT(acc1,2) between '22' and '29' and datea between @t_bdate1 and @t_edate1
+	select @x3=SUM([money]) from @tmp where LEFT(acc1,1)='3' and datea between @t_bdate1 and @t_edate1
+	select @y1=SUM([money]) from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate2 and @t_edate2
+	select @y10=SUM([money]) from @tmp where LEFT(acc1,2) between '10' and '11' and datea between @t_bdate2 and @t_edate2
+	select @y11=SUM([money]) from @tmp where LEFT(acc1,3) between '113' and '119' and datea between @t_bdate2 and @t_edate2
+	select @y12=SUM([money]) from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate2 and @t_edate2
+	select @y2=SUM([money]) from @tmp where LEFT(acc1,1)='2' and datea between @t_bdate2 and @t_edate2
+	select @y20=SUM([money]) from @tmp where LEFT(acc1,2) between '20' and '21' and datea between @t_bdate2 and @t_edate2
+	select @y22=SUM([money]) from @tmp where LEFT(acc1,2) between '22' and '29' and datea between @t_bdate2 and @t_edate2
+	select @y3=SUM([money]) from @tmp where LEFT(acc1,1)='3' and datea between @t_bdate2 and @t_edate2
+	select @x1=ISNULL(@x1,0),@x10=ISNULL(@x10,0),@x11=ISNULL(@x11,0),@x12=ISNULL(@x12,0),@x2=ISNULL(@x2,0),@x20=ISNULL(@x20,0),@x22=ISNULL(@x22,0),@x3=ISNULL(@x3,0)
+		,@y1=ISNULL(@y1,0),@y10=ISNULL(@y10,0),@y11=ISNULL(@y11,0),@y12=ISNULL(@y12,0),@y2=ISNULL(@y2,0),@y20=ISNULL(@y20,0),@y22=ISNULL(@y22,0),@y3=ISNULL(@y3,0)
+	--1股東權益比率
+	--股東權益比率=股東權益總額/資產總額*100%=股東權益總額/(股東權益總額+負債總額) *100%
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A01','股東權益比率'
+		,case when (@x2+@x3)=0 then null else round(@x3/(@x2+@x3)*100,2)end
+		,case when (@y2+@y3)=0 then null else round(@y3/(@y2+@y3)*100,2)end
+	--2.資產負債比率(Asset Liability Ratio)
+	--資產負債比率=負債總額/資產總額*100%=負債總額/(股東權益總額+負債總額) *100%
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A02','資產負債比率'
+		,case when (@x2+@x3)=0 then null else round(@x2/(@x2+@x3)*100,2)end
+		,case when (@y2+@y3)=0 then null else round(@y2/(@y2+@y3)*100,2)end
+	--3.資本負債比率(Debt to Equity Ratio)
+	--資本負債比率=負債總額/股東權益總額*100%
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A03','資本負債比率'
+		,case when @x3=0 then null else round(@x2/@x3*100,2)end
+		,case when @y3=0 then null else round(@y2/@y3*100,2)end
+	--4.資本總額比率(Capitalization Ratio)
+	--資本總額比率=長期負債/ (長期負債+股東權益總額) *100%	
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A04','資本總額比率'
+		,case when (@x22+@x3)=0 then null else round(@x22/(@x22+@x3)*100,2)end
+		,case when (@y22+@y3)=0 then null else round(@y22/(@y22+@y3)*100,2)end
+	--5.長期負債比率
+	--長期負債比率=長期負債/資產總額*100%=長期負債/ (負債總額+股東權益總額) *100%
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A05','長期負債比率'
+		,case when (@x2+@x3)=0 then null else round(@x22/(@x2+@x3)*100,2)end
+		,case when (@y2+@y3)=0 then null else round(@y22/(@y2+@y3)*100,2)end
+	--6.有息負債比率
+	--有息負債比率= (短期借款+一年內到期的長期負債+長期借款+應付債券+長期應付款) /股東權益總額*100%		
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A06','有息負債比率',null,null
+
+	--7.流動負債占總負債比率
+	--流動負債占總負債比率=流動負債/負債總額*100%
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A07','流動負債占總負債比率'
+		,case when (@x2)=0 then null else round(@x20/(@x2)*100,2)end
+		,case when (@y2)=0 then null else round(@y20/(@y2)*100,2)end
+	--8.固定資產對股東權益比率
+	--固定資產對股東權益的比率=固定資產/股東權益總額*100%
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A08','固定資產對股東權益比率'
+		,case when (@x3)=0 then null else round(@x12/(@x3)*100,2)end
+		,case when (@y3)=0 then null else round(@y12/(@y3)*100,2)end
+	--9.固定資產對長期資金比率
+	--固定資產對長期資金比率=固定資產/ (長期負債+股東權益總額) *100%	
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'A09','固定資產對長期資金比率'
+		,case when (@x2+@x3)=0 then null else round(@x12/(@x2+@x3)*100,2)end
+		,case when (@y2+@y3)=0 then null else round(@y12/(@y2+@y3)*100,2)end
+	------------------------------------------------------------------------------------------------
+	--流動比率=流動資產÷流動負債
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'B01','流動比率'
+		,case when (@x20)=0 then null else round(@x10/(@x20),2)end
+		,case when (@y20)=0 then null else round(@y10/(@y20),2)end
+	--速動比率=速動資產/流動負債
+	--速動資產=流動資產-存貨 or 速動資產=流動資產-存貨-預付賬款-待攤費用
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'B02','速動比率'
+		,case when (@x20)=0 then null else round((@x10-@x11)/(@x20),2)end
+		,case when (@y20)=0 then null else round((@y10-@y11)/(@y20),2)end	
+	--利息保障倍數=息稅前利潤÷利息費用			
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'B03','利息保障倍數',null,null
+	
+	------------------------------------------------------------------------------------------------
+	--應收賬款周轉率
+	--應收帳款周轉率=賒銷收入凈額/應收賬款平均餘額
+	--應收賬款平均餘額＝（期初應收帳款餘額 + 期末應收帳款餘額）/ 2 = 期初應收帳款餘額 + (本期應收帳款/2)
+	--銷售凈收入=銷售收入-銷售退回  賒銷收入凈額=銷售收入-銷售退回-現銷收入
+	declare @z1 float -- 當期銷售凈收入
+	declare @z2 float --（期初應收帳款餘額 + 期末應收帳款餘額）/ 2
+	declare @z3 float -- 當期銷售凈收入
+	declare @z4 float --（期初應收帳款餘額 + 期末應收帳款餘額）/ 2
+	
+	select @z1=SUM([money])from @tmp where LEFT(acc1,1)='4' and datea between @t_bdate1 and @t_edate1	
+	if(right(@t_bdate1,5)='01/01')--應收賬款平均餘額＝（期初應收帳款餘額 + 期末應收帳款餘額）/ 2
+	begin
+		select @z2=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,4)='1123' and datea between @t_bdate1 and @t_edate1
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,4)='1123' and datea between @t_bdate3 and @t_edate3
+			)a
+	end
+	else--應收賬款平均餘額＝ 期初應收帳款餘額 + (本期應收帳款/2)
+	begin
+		select @z2=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,4)='1123' and datea between @t_bdate3 and @t_edate3
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,4)='1123' and datea between @t_bdate1 and @t_edate1
+			)a
+	end
+	
+	select @z3= SUM([money]) from @tmp where LEFT(acc1,1)='4' and datea between @t_bdate2 and @t_edate2
+	if(right(@t_bdate2,5)='01/01')--應收賬款平均餘額＝（期初應收帳款餘額 + 期末應收帳款餘額）/ 2
+	begin
+		select @z4=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,4)='1123' and datea between @t_bdate2 and @t_edate2
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,4)='1123' and datea between @t_bdate4 and @t_edate4
+			)a
+	end
+	else--應收賬款平均餘額＝ 期初應收帳款餘額 + (本期應收帳款/2)
+	begin
+		select @z4=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,4)='1123' and datea between @t_bdate4 and @t_edate4
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,4)='1123' and datea between @t_bdate2 and @t_edate2
+			)a
+	end
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C01','應收賬款周轉率'
+		,case when isnull(@z2,0)=0 then null else round(isnull(@z1,0)/@z2,2)end
+		,case when isnull(@z4,0)=0 then null else round(isnull(@z3,0)/@z4,2)end
+	--應收帳款周轉天數＝365/應收帳款周轉率
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C02','應收款項收現日數'
+		,case when isnull(@z2,0)=0 then null else round(365/round(isnull(@z1,0)/@z2,2),2)end
+		,case when isnull(@z4,0)=0 then null else round(365/round(isnull(@z3,0)/@z4,2),2)end
+	--應付帳款週轉率
+	select @z1=SUM([money])from @tmp where LEFT(acc1,1)='5' and datea between @t_bdate1 and @t_edate1
+	if(right(@t_bdate1,5)='01/01')--應付賬款平均餘額＝（期初應付帳款餘額 + 期末應付帳款餘額）/ 2
+	begin
+		select @z2=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,4)='2123' and datea between @t_bdate1 and @t_edate1
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,4)='2123' and datea between @t_bdate3 and @t_edate3
+			)a
+	end
+	else--應付賬款平均餘額＝ 期初應付帳款餘額 + (本期應付帳款/2)
+	begin
+		select @z2=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,4)='2123' and datea between @t_bdate3 and @t_edate3
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,4)='2123' and datea between @t_bdate1 and @t_edate1
+			)a
+	end
+		
+	select @z3=SUM([money])from @tmp where LEFT(acc1,1)='5' and datea between @t_bdate2 and @t_edate2
+	if(right(@t_bdate2,5)='01/01')--應付賬款平均餘額＝（期初應付帳款餘額 + 期末應付帳款餘額）/ 2
+	begin
+		select @z4=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,4)='2123' and datea between @t_bdate2 and @t_edate2
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,4)='2123' and datea between @t_bdate4 and @t_edate4
+			)a
+	end
+	else--應付賬款平均餘額＝ 期初應付帳款餘額 + (本期應付帳款/2)
+	begin
+		select @z4=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,4)='2123' and datea between @t_bdate4 and @t_edate4
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,4)='2123' and datea between @t_bdate2 and @t_edate2
+			)a
+	end
+	
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C03','應付帳款週轉率'
+		,case when isnull(@z2,0)=0 then null else round(isnull(@z1,0)/@z2,2)end
+		,case when isnull(@z4,0)=0 then null else round(isnull(@z3,0)/@z4,2)end
+	--應付帳款支付日數
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C04','應付帳款支付日數'
+		,case when isnull(@z2,0)=0 then null else round(365/round(isnull(@z1,0)/@z2,2),2)end
+		,case when isnull(@z4,0)=0 then null else round(365/round(isnull(@z3,0)/@z4,2),2)end
+	--存貨周轉率（次）＝銷售（營業）成本÷平均存貨
+	--平均存貨＝（年初存貨+年末存貨）÷2,存貨周轉率（天）＝365÷存貨周轉率（次）
+	select @z1=SUM([money])from @tmp where LEFT(acc1,1)='5' and datea between @t_bdate1 and @t_edate1	
+	if(right(@t_bdate1,5)='01/01')--平均存貨＝（期初存貨＝ + 期末存貨＝）/ 2
+	begin
+		select @z2=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,3)='113' and datea between @t_bdate1 and @t_edate1
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,3)='113' and datea between @t_bdate3 and @t_edate3
+			)a
+	end
+	else--平均存貨＝ 期初存貨＝ + (本期存貨＝/2)
+	begin
+		select @z2=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,3)='113' and datea between @t_bdate3 and @t_edate3
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,3)='113' and datea between @t_bdate1 and @t_edate1
+			)a
+	end
+	
+	select @z3=SUM([money])from @tmp where LEFT(acc1,1)='5' and datea between @t_bdate2 and @t_edate2	
+	if(right(@t_bdate1,5)='01/01')--平均存貨＝（期初存貨＝ + 期末存貨＝）/ 2
+	begin
+		select @z4=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,3)='113' and datea between @t_bdate2 and @t_edate2
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,3)='113' and datea between @t_bdate4 and @t_edate4
+			)a
+	end
+	else--平均存貨＝ 期初存貨＝ + (本期存貨＝/2)
+	begin
+		select @z4=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,3)='113' and datea between @t_bdate4 and @t_edate4
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,3)='113' and datea between @t_bdate2 and @t_edate2
+			)a
+	end
+	
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C05','存貨周轉率'
+		,case when isnull(@z2,0)=0 then null else round(isnull(@z1,0)/@z2,2)end
+		,case when isnull(@z4,0)=0 then null else round(isnull(@z3,0)/@z4,2)end
+	--存貨支付日數
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C06','存貨支付日數'
+		,case when isnull(@z2,0)=0 then null else round(365/round(isnull(@z1,0)/@z2,2),2)end
+		,case when isnull(@z4,0)=0 then null else round(365/round(isnull(@z3,0)/@z4,2),2)end
+	
+	--固定資產周轉率的計算及說明
+	--固定資產利用率＝產品銷售收入凈額÷固定資產平均凈值
+	--固定資產平均凈值=(期初凈值+期末凈值)÷2	
+	select @z1=SUM([money])from @tmp where LEFT(acc1,1)='4' and datea between @t_bdate1 and @t_edate1	
+	if(right(@t_bdate1,5)='01/01')--固定資產平均凈值＝（期初凈值 + 期末凈值）/ 2
+	begin
+		select @z2=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate1 and @t_edate1
+			union all
+			select sum([money]) from @tmp where  LEFT(acc1,2) between '12' and '19' and datea between @t_bdate3 and @t_edate3
+			)a
+	end
+	else--平均凈值＝ 期初 + (本期/2)
+	begin
+		select @z2=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate3 and @t_edate3
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate1 and @t_edate1
+			)a
+	end
+	
+	select @z3= SUM([money]) from @tmp where LEFT(acc1,1)='4' and datea between @t_bdate2 and @t_edate2
+	if(right(@t_bdate2,5)='01/01')--平均＝（期初 + 期末）/ 2
+	begin
+		select @z4=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate2 and @t_edate2
+			union all
+			select sum([money]) from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate4 and @t_edate4
+			)a
+	end
+	else--平均＝ 期初 + (本期/2)
+	begin
+		select @z4=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate4 and @t_edate4
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,2) between '12' and '19' and datea between @t_bdate2 and @t_edate2
+			)a
+	end
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'C07','固定資產周轉率'
+		,case when isnull(@z2,0)=0 then null else round(isnull(@z1,0)/@z2,2)end
+		,case when isnull(@z4,0)=0 then null else round(isnull(@z3,0)/@z4,2)end
+	------------------------------------------------------------------------------------------------
+	select @z2= SUM([money]) 
+	from @tmp where LEFT(acc1,1)='4' and datea between @t_bdate1 and @t_edate1 
+	select @z4= SUM([money]) 
+	from @tmp where LEFT(acc1,1)='4' and datea between @t_bdate2 and @t_edate2 
+	--銷售毛利率=銷售毛利/銷售收入×100%=（銷售收入-銷售成本）/銷售收入×100%
+	select @z1= SUM(case when LEFT(acc1,1)='4' then [money] else -[money] end) 
+		from @tmp where LEFT(acc1,1) between '4' and '5' and datea between @t_bdate1 and @t_edate1 
+	select @z3= SUM(case when LEFT(acc1,1)='4' then [money] else -[money] end) 
+		from @tmp where LEFT(acc1,1) between '4' and '5' and datea between @t_bdate2 and @t_edate2 
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'D01','毛利率'
+		,case when isnull(@z2,0)=0 then null else round(isnull(@z1,0)/@z2*100,2)end
+		,case when isnull(@z4,0)=0 then null else round(isnull(@z3,0)/@z4*100,2)end
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'D02','成本率'
+		,case when isnull(@z2,0)=0 then null else 100-round(isnull(@z1,0)/@z2*100,2)end
+		,case when isnull(@z4,0)=0 then null else 100-round(isnull(@z3,0)/@z4*100,2)end
+	--營業利潤率=營業利潤/營業收入×100%
+	select @z1= SUM(case when LEFT(acc1,1)='4' then [money] else -[money] end) 
+		from @tmp where LEFT(acc1,1) between '4' and '6' and datea between @t_bdate1 and @t_edate1 
+	select @z3= SUM(case when LEFT(acc1,1)='4' then [money] else -[money] end) 
+		from @tmp where LEFT(acc1,1) between '4' and '6' and datea between @t_bdate2 and @t_edate2 
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'D03','營業利潤率'
+		,case when isnull(@z2,0)=0 then null else round(isnull(@z1,0)/@z2*100,2)end
+		,case when isnull(@z4,0)=0 then null else round(isnull(@z3,0)/@z4*100,2)end
+	---------------------------------------------------------------
+	--總資產報酬率=稅後淨利/平均總資產×100%
+	if(right(@t_bdate1,5)='01/01')--固定資產平均凈值＝（期初凈值 + 期末凈值）/ 2
+	begin
+		select @z1=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate1 and @t_edate1
+			union all
+			select sum([money]) from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate3 and @t_edate3
+			)a
+	end
+	else--平均凈值＝ 期初 + (本期/2)
+	begin
+		select @z1=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate3 and @t_edate3
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate1 and @t_edate1
+			)a
+	end	
+	select @z2=SUM(case when LEFT(acc1,1)='4' or LEFT(acc1,1)='7' then [money] else -[money] end)
+		from @tmp where LEFT(acc1,1) between '4' and '9' and datea between @t_bdate2 and @t_edate2
+		
+	if(right(@t_bdate1,5)='01/01')--固定資產平均凈值＝（期初凈值 + 期末凈值）/ 2
+	begin
+		select @z3=SUM([money])/2
+		from(
+			select sum([money]) [money] from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate2 and @t_edate2
+			union all
+			select sum([money]) from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate4 and @t_edate4
+			)a
+	end
+	else--平均凈值＝ 期初 + (本期/2)
+	begin
+		select @z3=SUM([money]) from
+			(select sum([money]) [money] from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate4 and @t_edate4
+			union all
+			select sum([money])/2 from @tmp where LEFT(acc1,1)='1' and datea between @t_bdate2 and @t_edate2
+			)a
+	end		
+	select @z4=SUM(case when LEFT(acc1,1)='4' or LEFT(acc1,1)='7' then [money] else -[money] end)
+		from @tmp where LEFT(acc1,1) between '4' and '9' and datea between @t_bdate2 and @t_edate2
+
+	insert into @z_acsfinrate(acc1,acc2,rate1,rate2)
+	select 'D04','總資產報酬率'
+		,case when isnull(@z1,0)=0 then null else round(isnull(@z2,0)/@z1*100,2)end
+		,case when isnull(@z3,0)=0 then null else round(isnull(@z4,0)/@z3*100,2)end	
+	------------------------------------------------------------------------------------------------
+	select *
+	,'0' gno 
+	,CAST(rate1 as decimal(10,2)) rr1
+	,CAST(rate2 as decimal(10,2)) rr2
+	from @z_acsfinrate;
 
 z_acsfin:--z_acsfin
 	SET QUOTED_IDENTIFIER OFF 
@@ -124,7 +641,7 @@ z_acsfin:--z_acsfin
 		" ,case when left(a.accc5,1)='3' then a.accc5 else left(a.accc5,1) end"+
 		" ,case when left(a.accc5,1)='3' then isnull(e.acc2,'') else '' end"+
 		" ,(isnull(a.dmoney,0)),(isnull(a.cmoney,0))"+
-		" ,(case when left(a.accc5,1)='1' or left(a.accc5,1)='5' or left(a.accc5,1)='6' or left(a.accc5,1)='8' or left(a.accc5,2)='73' then a.dmoney-a.cmoney else a.cmoney-a.dmoney end)"+
+		" ,(case when left(a.accc5,1)='1' or left(a.accc5,1)='5' or left(a.accc5,1)='6' or left(a.accc5,1)='8' or left(a.accc5,2)='73' or left(a.accc5,1)='9' then a.dmoney-a.cmoney else a.cmoney-a.dmoney end)"+
 		" from "+@tableas+" a"+
 		" left join "+@tablea+" b on a.accc3=b.accc3"+
 		" left join #part c on a.part=c.noa"+
