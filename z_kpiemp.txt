@@ -1,0 +1,115 @@
+﻿z_kpiemp1:--z_kpiemp1
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_accy nvarchar(10) = '[1]'
+set @t_bdate = case when '#non' = [2] then '[1]/01/01' else [2] end
+set @t_edate = case when '#non' = [3] then '[1]/01/31' else [3] end
+declare @kpi_tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	kpitype int, ----0 = % , 1 = other
+	kpi_name nvarchar(max),
+	kpi_formula nvarchar(max),
+	kpi_value float,
+	kpi_unit nvarchar(max)
+)
+declare @directsss table( ----直接人員
+	sssno nvarchar(30),
+	sssnamea nvarchar(50)
+)
+insert into @directsss
+	select distinct b.salesno,a.namea
+	from sss a
+	left join view_cuwt[1] b on a.noa = b.salesno
+	where b.salesno is not null and rtrim(ltrim(isnull(a.outdate,0))) = '' 
+
+insert into @kpi_tmp
+	select '0',0,'人員離職率','離職員工人數÷在職總人數',
+	case when cast(sum(sssall) as float) > 0 then cast(sum(isouts) as float)/cast(sum(sssall) as float) else 0 end,''
+	from (
+		select count(*) isouts,0 sssall
+		from sss where rtrim(ltrim(isnull(outdate,0))) != '' and indate <= @t_edate
+		union
+		select 0 isouts,count(*) sssall
+		from sss where rtrim(ltrim(isnull(outdate,0))) = '' and indate <= @t_edate
+	) a
+insert into @kpi_tmp
+	select '0',1,'直接人員平均薪資','直接人員當期總薪資÷在職直接人員數',avg(a.money),' 元'
+	from (
+		select a.sssno sssno,a.sssnamea namea,b.total5 money from @directsss a
+		left join salarys b on a.sssno = b.sno
+		left join salary c on b.noa = c.noa
+		where b.sno is not null and c.mon between left(@t_bdate,6) and left(@t_edate,6)
+	) a
+insert into @kpi_tmp
+	select '0',0,'加班費用率','加班費用÷總薪資費用',round(addmoney/money,4),''
+	from (
+		select sum(b.addmoney) addmoney,sum(b.total5) money from salary a
+		left join salarys b on a.noa = b.noa
+		where a.mon between left(@t_bdate,6) and left(@t_edate,6)
+	) a
+insert into @kpi_tmp
+	select '0',0,'直間接人員比率','間接人員數÷直接人員數',cast(sum(a.indirectsss) as float)/cast(sum(a.directsss) as float),''
+	from (
+		select count(*) indirectsss,0 directsss from (
+			select noa,namea from sss where rtrim(ltrim(isnull(outdate,0))) = ''
+				except
+			select sssno,sssnamea from @directsss
+		) a
+		union 
+		select 0 indirectsss,count(*) directsss from @directsss
+	) a
+insert into @kpi_tmp
+	select '0',1,'人員平均年資','人員年資÷在職總人數',
+	round(avg(abs(cast(left(indate,3) as float)-cast(left(@t_accy,3) as float))),2),' 年'
+	from sss a
+	where rtrim(ltrim(isnull(a.outdate,0))) = '' 
+insert into @kpi_tmp
+	select '0',0,'[1]年新進員工比率','新進人員數÷在職總人數',
+	case when cast(sum(a.allsss) as float) > 0 then cast(sum(a.newsss) as float)/cast(sum(a.allsss) as float) else 0 end,''
+	from (
+		select count(*) newsss,0 allsss
+		from sss a where left(indate,3) = @t_accy and indate <= @t_edate and rtrim(ltrim(isnull(outdate,0))) = ''
+		union
+		select 0 newsss, count(*) allsss from sss where rtrim(ltrim(isnull(outdate,0))) = '' and indate <= @t_edate
+	) a
+declare @workhours int ----總應出勤時數 1個月30天 每天上8小時
+set @workhours = abs(cast(right(left(@t_bdate,6),2) as int)-cast(right(left(@t_edate,6),2) as int))
+set @workhours = (case when @workhours =0 then 1 else @workhours end) *30*8
+insert into @kpi_tmp
+	select '0',0,'請假比率','請假時數÷總應出勤時數',
+	case when cast(@workhours as float) > 0 then round(cast(a.leavetime as float)/cast(@workhours as float),4) else 0 end,''
+	from (
+		select sum(b.hr_sick+b.hr_leave+b.hr_nosalary+b.hr_person) leavetime from salary a
+		left join salarys b on a.noa = b.noa
+		where a.mon between left(@t_bdate,6) and left(@t_edate,6)
+	) a
+insert into @kpi_tmp
+	select '0',1,'員工平均年齡','Σ(人員年齡)÷在職總人數',cast(yearold as float)/cast(mount as float),''
+	from (
+		select
+			sum(cast('[1]' as int)-cast(left(a.birthday,3) as int)) yearold,count(*) mount
+		from sss a where rtrim(ltrim(isnull(outdate,0))) = '' and indate <= @t_edate
+	) a
+insert into @kpi_tmp
+	select '0',1,'人員平均產值','銷貨收入淨額÷在職總人數',round(cast(sum(a.money) as float)/cast(sum(a.sssall) as float),4),' /人'
+	from (
+		select sum((case when b.typea = 2 then a.total*(-1) else a.total end))  money,0 sssall
+		from vccs[1] a
+		left join vcc[1] b on a.noa = b.noa
+		where b.datea between @t_bdate and @t_edate
+		union
+		select 0 money,count(*) from sss where rtrim(ltrim(isnull(outdate,0))) = '' and indate <= @t_edate
+	) a
+insert into @kpi_tmp
+	select '0',1,'員工性別比率','女性員工數÷男性員工數',round(cast(sum(a.girl) as float)/cast(sum(a.boy) as float),4),':1'
+	from (
+		select
+			case when a.sex = 1 then 1 end boy,
+			case when a.sex = 0 then 1 end girl
+		from sss a where rtrim(ltrim(isnull(outdate,0))) = '' and indate <= @t_edate
+	) a
+select gno,idno,kpi_name,kpi_formula,
+	case when kpitype=0 then cast(isnull(kpi_value,0)*100 as nvarchar) + '%' else cast(isnull(kpi_value,0) as nvarchar)+kpi_unit end kpi_value,
+	@t_bdate t_bdate,@t_edate t_edate
+from @kpi_tmp;

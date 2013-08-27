@@ -6,13 +6,15 @@ set @t_edate = case when '#non' = [3] then '[1]/01/31' else [3] end
 declare @kpi_tmp table(
 	gno nvarchar(1),
 	idno int identity(0,1),
+	kpitype int, ----0 = % , 1 = other
 	kpi_name nvarchar(max),
 	kpi_formula nvarchar(max),
-	kpi_value float
+	kpi_value float,
+	kpi_unit nvarchar(max)
 )
 insert into @kpi_tmp
-	select '0','預測差異率','(實際接單金額-預測接單金額)/預測接單金額',
-	case when sum(a.utotal*a.mount) > 0 then cast(sum(a.total)-sum(a.utotal*a.mount) as float)/cast(sum(a.utotal*a.mount) as float) else 0 end
+	select '0',0,'預測差異率','(實際接單金額-預測接單金額)/預測接單金額',
+	case when sum(a.utotal*a.mount) > 0 then cast(sum(a.total)-sum(a.utotal*a.mount) as float)/cast(sum(a.utotal*a.mount) as float) else 0 end,''
 	from (
 		select a.noa,sum(b.mount) mount,sum(b.mount*b.price) total,sum(d.price) utotal from orde[1] a
 		left join ordes[1] b on a.noa = b.noa
@@ -22,12 +24,12 @@ insert into @kpi_tmp
 		group by a.noa
 	) a
 insert into @kpi_tmp
-	select '0','訂單交貨準時率','訂單準時交貨筆數/訂單應交貨筆數',isnull(cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),0)
+	select '0',0,'訂單交貨準時率','訂單準時交貨筆數/訂單應交貨筆數',isnull(cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),0),''
 	from (
 		select
 			case when 
 				DATEDIFF(day ,CONVERT(datetime,cast(cast(left(a.datea,3) as int)+1911 as nvarchar)+right(a.datea,6)),
-						CONVERT(datetime,cast(cast(left(b.datea,3) as int)+1911 as nvarchar)+right(b.datea,6))) >=0 then 1
+						CONVERT(datetime,cast(cast(left(b.datea,3) as int)+1911 as nvarchar)+right(b.datea,6))) <=0 then 1
 			else 0 end diffdate
 		from ordes[1] a
 		left join (
@@ -40,10 +42,10 @@ insert into @kpi_tmp
 		 (len(ltrim(rtrim(a.datea))) > 0) and isnull(b.datea,'') != ''
 	) a
 insert into @kpi_tmp
-	select '0','訂單平均出貨日數','AVG(訂單實際出貨日) (結算當期結案訂單)',isnull(avg(a.diffdate),0)
+	select '0',1,'訂單平均出貨日數','AVG(訂單實際出貨日) (結算當期結案訂單)',isnull(avg(a.diffdate),0),''
 	from (
 		select
-				DATEDIFF(day ,CONVERT(datetime,cast(left(a.datea,3)+1911 as nvarchar)+right(a.datea,6)),
+				DATEDIFF(day ,CONVERT(datetime,cast(left(a.odate,3)+1911 as nvarchar)+right(a.odate,6)),
 						CONVERT(datetime,cast(left(b.datea,3)+1911 as nvarchar)+right(b.datea,6))) diffdate
 		from ordes[1] a
 		left join (
@@ -51,35 +53,38 @@ insert into @kpi_tmp
 			left join vcc[1] b on a.noa = b.noa
 			group by a.ordeno,a.no2,b.datea
 		) b on a.noa = b.ordeno and a.no2 = b.no2
-		left join orde[1] c on a.noa = c.noa
-		where (c.odate between @t_bdate and @t_edate) and
-			(len(ltrim(rtrim(a.datea))) > 0) and isnull(b.datea,'') != ''
+		where (a.odate between @t_bdate and @t_edate) and
+			(len(ltrim(rtrim(a.odate))) > 0) and isnull(b.datea,'') != ''
 	) a
 insert into @kpi_tmp
-	select '0','營收成長率','(累計銷貨淨額-去年同期累計銷貨淨額) / 去年同期累計銷貨淨額',
-		case when isnull(sum(money2),0) = 0 then 1 else cast((sum(money1)-sum(money2)) as float)/cast(sum(money2) as float) end
+	select '0',0,'營收成長率','(累計銷貨淨額-去年同期累計銷貨淨額) / 去年同期累計銷貨淨額',
+		case when isnull(sum(money2),0) = 0 then 1 else cast((sum(money1)-sum(money2)) as float)/cast(sum(money2) as float) end,''
 	from (
 		select 
 			sum((case when a.typea = 2 then a.total*(-1) else a.total end)) money1,
 			0 money2
-		from vcc[1] a
+		from view_vcc[1] a
 		where a.datea between @t_bdate and @t_edate
 		union
 		select 
 			0 money1,
 			sum((case when a.typea = 2 then a.total*(-1) else a.total end)) money2
-		from vcc[1] a
+		from view_vcc[1] a
 		where cast(cast(left(a.datea,3) as int) as nvarchar) + right(a.datea,6) between 
 				cast(cast(left(@t_bdate,3) as int)-1 as nvarchar) + right(@t_bdate,6) and
 				cast(cast(left(@t_edate,3) as int)-1 as nvarchar) + right(@t_edate,6)
 	) a
 insert into @kpi_tmp
-	select '0','訂單出貨比','本期訂單金額/本期銷貨金額',isnull(sum(isnull(a.total,0))/sum(isnull(a.total,0)),0)
-	from orde[1] a
-	left join vcc[1] b on a.noa = b.ordeno and b.typea = 1
-	where (a.odate between @t_bdate and @t_edate) and (b.datea between @t_bdate and @t_edate)
+	select '0',0,'訂單出貨比','本期訂單金額/本期銷貨金額',isnull(sum(isnull(a.ordetotal,0))/sum(isnull(a.vcctotal,0)),0),''
+	from (
+		select sum(a.total) ordetotal,0 vcctotal from orde[1] a
+		where (a.odate between @t_bdate and @t_edate)
+		union
+		select 0 ordetotal,sum(a.total) vcctotal from vcc[1] a
+		where (a.datea between @t_bdate and @t_edate) and a.typea = 1
+	) a
 insert into @kpi_tmp
-	select '0','營收達成率','本期銷售淨額/銷售預測金額',round(isnull(cast(sum(money1) as float)/cast(sum(money2) as float),0),4)
+	select '0',0,'營收達成率','本期銷售淨額/銷售預測金額',round(isnull(cast(sum(money1) as float)/cast(sum(money2) as float),0),4),''
 	from (
 		select 
 			sum((case when b.typea = 2 then a.total*(-1) else a.total end)) money1,
@@ -90,22 +95,22 @@ insert into @kpi_tmp
 		left join saleforecasts d on c.noa = d.noa and a.productno = d.productno
 	) a
 insert into @kpi_tmp
-	select '0','銷貨毛利成長率','(累計銷貨毛利-去年同期累計銷貨毛利) /去年同期累計銷貨毛利',
-		case when isnull(sum(money2),0) = 0 then 1 else cast((sum(money1)-sum(money2)) as float)/cast(sum(money2) as float) end
+	select '0',0,'銷貨毛利成長率','(累計銷貨毛利-去年同期累計銷貨毛利) /去年同期累計銷貨毛利',
+		case when isnull(sum(money2),0) = 0 then 1 else cast((sum(money1)-sum(money2)) as float)/cast(sum(money2) as float) end,''
 	from (
 		select 
 			sum((case when a.typea = 2 then (b.total*(-1))+(b.mount*c.price) else b.total-(b.mount*c.price) end)) money1,
 			0 money2
-		from vcc[1] a
-		left join vccs[1] b on a.noa = b.noa
+		from view_vcc[1] a
+		left join view_vccs[1] b on a.noa = b.noa
 		left join costs c on left(a.datea,6) = c.noa and b.productno = c.productno
 		where a.datea between @t_bdate and @t_edate
 		union
 		select 
 			0 money1,
 			sum((case when a.typea = 2 then (b.total*(-1))+(b.mount*c.price) else b.total-(b.mount*c.price) end)) money2
-		from vcc[1] a
-		left join vccs[1] b on a.noa = b.noa
+		from view_vcc[1] a
+		left join view_vccs[1] b on a.noa = b.noa
 		left join costs c on left(a.datea,6) = c.noa and b.productno = c.productno
 		where cast(cast(left(a.datea,3) as int) as nvarchar) + right(a.datea,6) between 
 				cast(cast(left(@t_bdate,3) as int)-1 as nvarchar) + right(@t_bdate,6) and
@@ -113,8 +118,8 @@ insert into @kpi_tmp
 		
 	) a
 insert into @kpi_tmp
-	select '0','銷貨毛利達成率','累計銷貨毛利/累計毛利目標',
-		case when isnull(sum(money2),0) = 0 then 1 else cast((sum(money1)-sum(money2)) as float)/cast(sum(money2) as float) end
+	select '0',0,'銷貨毛利達成率','累計銷貨毛利/累計毛利目標',
+		case when isnull(sum(money2),0) = 0 then 1 else cast((sum(money1)-sum(money2)) as float)/cast(sum(money2) as float) end,''
 	from (
 		select 
 			sum((case when a.typea = 2 then (b.total*(-1))+(b.mount*c.price) else b.total-(b.mount*c.price) end)) money1,
@@ -126,7 +131,7 @@ insert into @kpi_tmp
 	) a
 
 insert into @kpi_tmp 
-	select '0','退貨比率 ( 銷 )','退貨金額/銷貨金額',isnull(cast(sum(b.total2) as float)/cast(sum(b.total1) as float),0)
+	select '0',0,'退貨比率 ( 銷 )','退貨金額/銷貨金額',isnull(cast(sum(b.total2) as float)/cast(sum(b.total1) as float),0),''
 	from orde[1] a
 	left join (
 		select ordeno,sum(total) total1,0 total2 from vcc[1] a
@@ -152,7 +157,7 @@ fetch next from cursor_table
 into @custno,@total
 while(@@FETCH_STATUS <> -1)
 begin
-	if(@total between (@total*0.8) and @total)
+	if(@total between (@vccsTotal*0.8) and @vccsTotal)
 		set @over_i += 1
 	fetch next from cursor_table
 	into @custno,@total
@@ -160,6 +165,9 @@ end
 close cursor_table
 deallocate cursor_table
 insert into @kpi_tmp
-	select '0','A 級客戶集中度','占總營收80%內之客戶家數/總客戶數',cast(@over_i as float)/cast(count(*) as float)
+	select '0',0,'A 級客戶集中度','占總營收80%內之客戶家數/總客戶數',cast(@over_i as float)/cast(count(*) as float),''
 	from cust a
-select gno,idno,kpi_name,kpi_formula,cast(isnull(kpi_value,0)*100 as nvarchar) + '%' kpi_value,@t_bdate t_bdate,@t_edate t_edate from @kpi_tmp;
+select gno,idno,kpi_name,kpi_formula,
+	case when kpitype=0 then cast(isnull(kpi_value,0)*100 as nvarchar) + '%' else cast(isnull(kpi_value,0) as nvarchar)+kpi_unit end kpi_value,
+	@t_bdate t_bdate,@t_edate t_edate
+from @kpi_tmp;
