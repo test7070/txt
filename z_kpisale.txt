@@ -14,9 +14,9 @@ declare @kpi_tmp table(
 )
 insert into @kpi_tmp
 	select '0',0,'預測差異率','(實際接單金額-預測接單金額)/預測接單金額',
-	case when sum(a.utotal*a.mount) > 0 then cast(sum(a.total)-sum(a.utotal*a.mount) as float)/cast(sum(a.utotal*a.mount) as float) else 0 end,''
+	case when sum(a.utotal) > 0 then round(cast(sum(a.total)-sum(a.utotal) as float)/cast(sum(a.utotal) as float),4) else 0 end,''
 	from (
-		select a.noa,sum(b.mount) mount,sum(b.mount*b.price) total,sum(d.price) utotal from orde[1] a
+		select a.noa,sum(b.mount*b.price) total,sum(d.price*b.mount) utotal from orde[1] a
 		left join ordes[1] b on a.noa = b.noa
 		left join saleforecast c on left(a.odate,6) = c.mon and a.custno = c.custno
 		left join saleforecasts d on c.noa = d.noa and b.productno = d.productno
@@ -24,7 +24,8 @@ insert into @kpi_tmp
 		group by a.noa
 	) a
 insert into @kpi_tmp
-	select '0',0,'訂單交貨準時率','訂單準時交貨筆數/訂單應交貨筆數',isnull(cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),0),''
+	select '0',0,'訂單交貨準時率','訂單準時交貨筆數/訂單應交貨筆數',
+	isnull(round(cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),4),0),''
 	from (
 		select
 			case when 
@@ -42,7 +43,7 @@ insert into @kpi_tmp
 		 (len(ltrim(rtrim(a.datea))) > 0) and isnull(b.datea,'') != ''
 	) a
 insert into @kpi_tmp
-	select '0',0,'訂單交貨延遲率','(訂單延遲交貨筆數/訂單應交貨筆數) || 1-(訂單準時交貨筆數/訂單應交貨筆數)',1-isnull(cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),0),''
+	select '0',0,'訂單交貨延遲率','(訂單延遲交貨筆數/訂單應交貨筆數) || 1-(訂單準時交貨筆數/訂單應交貨筆數)',1-isnull(round(cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),4),0),''
 	from (
 		select
 			case when 
@@ -94,14 +95,11 @@ insert into @kpi_tmp
 	) a
 insert into @kpi_tmp
 	select '0',0,'訂單出貨比','本期訂單金額/本期銷貨金額',
-	case when sum(isnull(a.vcctotal,0)) > 0 then isnull(sum(isnull(a.ordetotal,0))/sum(isnull(a.vcctotal,0)),0) else 0 end,''
-	from (
-		select sum(a.total) ordetotal,0 vcctotal from orde[1] a
-		where (a.odate between @t_bdate and @t_edate)
-		union
-		select 0 ordetotal,sum(a.total) vcctotal from vcc[1] a
-		where (a.datea between @t_bdate and @t_edate) and a.typea = 1
-	) a
+		case when sum(isnull(a.total,0)) > 0 then isnull(sum(isnull(b.total,0))/sum(isnull(a.total,0)),0) else 0 end,''
+	from vccs[1] a
+	left join ordes[1] b on a.ordeno = b.noa and a.no2 = b.no2
+	left join vcc[1] c on a.noa = c.noa
+	where (a.datea between @t_bdate and @t_edate) and c.typea = 1
 insert into @kpi_tmp
 	select '0',0,'營收達成率','本期銷售淨額/銷售預測金額',round(isnull(cast(sum(money1) as float)/cast(sum(money2) as float),0),4),''
 	from (
@@ -112,6 +110,7 @@ insert into @kpi_tmp
 		left join vcc[1] b on a.noa = b.noa
 		left join saleforecast c on left(b.datea,6) = c.mon and b.custno = c.custno
 		left join saleforecasts d on c.noa = d.noa and a.productno = d.productno
+		where b.datea between @t_bdate and @t_edate
 	) a
 insert into @kpi_tmp
 	select '0',0,'銷貨毛利成長率','(累計銷貨毛利-去年同期累計銷貨毛利) /去年同期累計銷貨毛利',
@@ -153,11 +152,11 @@ insert into @kpi_tmp
 	select '0',0,'退貨比率 ( 銷 )','退貨金額/銷貨金額',isnull(cast(sum(b.total2) as float)/cast(sum(b.total1) as float),0),''
 	from orde[1] a
 	left join (
-		select ordeno,sum(total) total1,0 total2 from vcc[1] a
+		select ordeno,sum(total) total1,0 total2 from vccs[1] a
 		where a.typea= 1 and (a.datea between @t_bdate and @t_edate)
 		group by a.ordeno
 		union 
-		select ordeno,0 total1,sum(total)*(-1) total2 from vcc[1] b
+		select ordeno,0 total1,sum(total) total2 from vccs[1] b
 		where b.typea= 2 and (b.datea between @t_bdate and @t_edate)
 		group by b.ordeno
 	) b on a.noa = b.ordeno
@@ -184,7 +183,7 @@ end
 close cursor_table
 deallocate cursor_table
 insert into @kpi_tmp
-	select '0',0,'A 級客戶集中度','占總營收80%內之客戶家數/總客戶數',cast(@over_i as float)/cast(count(*) as float),''
+	select '0',0,'A 級客戶集中度','占總營收80%內之客戶家數/總客戶數',round(cast(@over_i as float)/cast(count(*) as float),4),''
 	from cust a
 select gno,idno,kpi_name,kpi_formula,
 	case when kpitype=0 then cast(isnull(kpi_value,0)*100 as nvarchar) + '%' else cast(isnull(kpi_value,0) as nvarchar)+kpi_unit end kpi_value,
