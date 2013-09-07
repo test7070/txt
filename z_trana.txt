@@ -3719,7 +3719,11 @@ z_trana08:--z_trana08
 		bonus float,
 		tax float,
 		depreciation float,
-		profit float
+		profit float,
+		ordemon nvarchar(max),
+		ordetype nvarchar(max),
+		ordememo1 nvarchar(max),
+		ordememo2 nvarchar(max)
 	)
 	--------------------------------------------------------------------------------------------
 	declare @rowline int -- 每頁可用行數
@@ -3884,7 +3888,94 @@ z_trana08:--z_trana08
 	select @page,@curline%@rowline,'10',CHAR(255)
 		,@total,@total2,@reserve,@tolls,@custplus,@custminus,@carplus,@carminus
 		,@oil,@etc,@fixa,@tire,@ticket,@bonus,@tax,@depreciation,@profit
-				
+	-----------------------------------------------------------------------------------------------------
+	--訂單
+	declare @curtime datetime
+	set @curtime = CURRENT_TIMESTAMP
+	declare @curdate nvarchar(10)
+	set @curdate = cast(Year(@curtime)-1911 as nvarchar)
+		+'/'+ right('00'+cast(Month(@curtime) as nvarchar),2)
+		+'/'+ right('00'+cast(Day(@curtime) as nvarchar),2)
+	
+	declare @curmon nvarchar(10)
+	declare @bmon nvarchar(10)
+	declare @bbmon nvarchar(10)
+	set @curmon = cast(Year(@curtime)-1911 as nvarchar)
+		+'/'+ right('00'+cast(Month(@curtime) as nvarchar),2)
+	set @bmon =  cast(Year(dateadd(mm,-1,@curtime))-1911 as nvarchar) 
+		+'/'+ right('00'+cast(Month(dateadd(mm,-1,@curtime)) as nvarchar),2)
+	set @bbmon =  cast(Year(dateadd(mm,-2,@curtime))-1911 as nvarchar) 
+		+'/'+ right('00'+cast(Month(dateadd(mm,-2,@curtime)) as nvarchar),2)
+	
+	declare @tmporde table(
+		ctype nvarchar(max),
+		ordemon nvarchar(10),
+		ordemount float,
+		ordeunit nvarchar(max),
+		transvccemount float
+	)
+	declare @ctype nvarchar(max)
+	declare @ordemon nvarchar(10)
+	declare @ordemount float
+	declare @ordeunit nvarchar(max)
+	declare @transvccemount float
+	
+	set @cmd =
+	" select ctype,LEFT(a.strdate,6),sum(isnull(a.mount,0)),a.unit,sum(isnull(b.mount,0))"+
+	" from view_tranorde"+@t_accy+" a"+
+	" outer apply("+
+	" 	select sum(isnull(x.mount,0)) mount "+
+	" 	from transvcces"+@t_accy+" x"+
+	" 	left join transvcce"+@t_accy+" y on x.noa=y.noa"+
+	" 	where y.ordeno=a.noa) b"+
+	" where LEFT(a.strdate,6)=@curmon or LEFT(a.strdate,6)=@bmon or LEFT(a.strdate,6)=@bbmon"+
+	" group by ctype,LEFT(a.strdate,6),unit"+
+	" having sum(isnull(a.mount,0))!=0"
+	insert into @tmporde
+	execute sp_executesql @cmd,N'@curmon nvarchar(10),@bmon nvarchar(10),@bbmon nvarchar(10)'
+	,@curmon=@curmon,@bmon=@bmon,@bbmon=@bbmon
+	
+	declare @tmporde2 table(
+		ctype nvarchar(max),
+		ordemon nvarchar(10),
+		ordememo1 nvarchar(max),
+		ordememo2 nvarchar(max)
+	)
+	insert into @tmporde2(ctype,ordemon)
+	select ctype,mon
+	from(select ctype from @tmporde group by ctype) a,
+	(select @curmon mon union all select @bmon union all select @bbmon)b
+	order by ctype,mon
+	
+	declare cursor_table cursor for
+	select ctype,ordemon,ordemount,ordeunit,transvccemount from @tmporde
+	open cursor_table
+	fetch next from cursor_table
+	into @ctype,@ordemon,@ordemount,@ordeunit,@transvccemount
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		update @tmporde2 set ordememo1 = ISNULL(ordememo1,'')
+			+ case when len(ISNULL(ordememo1,''))=0 then '' else ', 'end
+			+ CAST(@ordemount as nvarchar)+@ordeunit
+		where ctype=@ctype and ordemon=@ordemon
+		if(@ordemount-@transvccemount>0 and @ctype='貨櫃')
+		begin
+			update @tmporde2 set ordememo2 = ISNULL(ordememo2,'')
+				+ case when len(ISNULL(ordememo2,''))=0 then '未派 ' else ', 'end
+				+ CAST(@ordemount-@transvccemount as nvarchar)+@ordeunit
+			where ctype=@ctype and ordemon=@ordemon
+		end
+		fetch next from cursor_table
+		into @ctype,@ordemon,@ordemount,@ordeunit,@transvccemount
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	insert into @tmp(carteamno,page,nn,gno,ordetype,ordemon,ordememo1,ordememo2)
+	select CHAR(255),99999,99999,'11'
+		,ctype,ordemon,ordememo1,ordememo2
+	from @tmporde2
+	-----------------------------------------------------------------------------------------------------			
 	select * 
 	,carteam g00
 	,recno g01
