@@ -1,0 +1,91 @@
+z_vccneed1:--z_vccneed1
+	declare @t_noa nvarchar(50)
+	declare @t_no2 nvarchar(50)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_need nvarchar(30)
+	
+	set @t_noa = case when '#non'=[2] then '' else [2] end
+	set @t_no2 = case when '#non'=[3] then '' else [3] end
+	set @t_bdate = case when '#non'=[4] then '' else [4] end
+	set @t_edate = case when '#non'=[5] then char(255) else [5] end
+	set @t_need = case when '#non'=[6] then '' else [6] end
+	
+	--*****************************************************************************************	
+declare @tmp table(
+	gno nvarchar(2),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(50),
+	mount float,
+	stkmount float,
+	inmount float,
+	salemount float,
+	outmount float,
+	ninmount float,
+	ncuamount float,
+	total float
+)
+
+declare @t_now_date nvarchar(10)
+set @t_now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_now_date=left(@t_now_date,3)+'/'+substring(@t_now_date,4,2)+'/'+right(@t_now_date,2)
+
+if(len(@t_noa)>0)
+begin
+	insert @tmp
+	select '0'gno,a.noa,a.no2,a.productno pno,a.product,a.mount
+	,(select sum(mount) from stkucc[1](@t_now_date,'','') where productno=a.productno) --'庫存量'
+	,isnull((select sum(ca.inmount) from view_cuas[1] ca left join view_ordes[1] ob on ca.ordeno=ob.noa and ca.no2=ob.no2
+	where ca.ordeno=a.noa and ca.no2=a.no2 and ob.enda!='1'),0) --'生產入庫'
+	,isnull((select sum(ca.salemount) from view_cuas[1] ca where ca.ordeno=a.noa and ca.no2=a.no2),0) --'庫存預定銷售量'
+	,a.c1 --'已出貨量'
+	,isnull((select sum(mount-inmount) from view_work[1] where ordeno=a.noa and no2=a.no2 and productno=a.productno),0) --'排程未入庫量'
+	,isnull((select b.mount from view_ordes[1] b left join view_cuas[1] c on b.noa=c.ordeno and b.no2=c.no2 where b.noa=a.noa and b.no2=a.no2 and c.noa is null),0) --'訂單未排程'
+	+isnull((select sum(b.mount-c.cuamount-c.salemount) from view_ordes[1] b left join view_cuas[1] c on b.noa=c.ordeno and b.no2=c.no2 where b.noa=a.noa and b.no2=a.no2 and c.noa!=''),0)
+	,0 from view_ordes[1] a
+	where a.noa=@t_noa and a.no2=@t_no2 --and  (a.datea between @t_bdate and @t_edate)  
+end
+else
+begin
+	insert @tmp
+	select '0'gno,a.noa,a.no2,a.productno pno,a.product,a.mount
+	,(select sum(mount) from stkucc[1](@t_now_date,'','') where productno=a.productno) --'庫存量'
+	,isnull((select sum(ca.inmount) from view_cuas[1] ca left join view_ordes[1] ob on ca.ordeno=ob.noa and ca.no2=ob.no2
+	where ca.ordeno=a.noa and ca.no2=a.no2 and ob.enda!='1'),0) --'生產入庫'
+	,isnull((select sum(ca.salemount) from view_cuas[1] ca where ca.ordeno=a.noa and ca.no2=a.no2),0) --'庫存預定銷售量'
+	,a.c1 --'已出貨量'
+	,isnull((select sum(mount-inmount) from view_work[1] where ordeno=a.noa and no2=a.no2 and productno=a.productno),0) --'排程未入庫量'
+	,isnull((select b.mount from view_ordes[1] b left join view_cuas[1] c on b.noa=c.ordeno and b.no2=c.no2 where b.noa=a.noa and b.no2=a.no2 and c.noa is null),0) --'訂單未排程'
+	+isnull((select sum(b.mount-c.cuamount-c.salemount) from view_ordes[1] b left join view_cuas[1] c on b.noa=c.ordeno and b.no2=c.no2 where b.noa=a.noa and b.no2=a.no2 and c.noa!=''),0)
+	,0 from view_ordes[1] a
+	where (a.datea between @t_bdate and @t_edate) and (enda='0' or enda is null)
+end
+
+update @tmp
+set total=-1*(stkmount-(inmount+salemount-outmount)-ncuamount)
+
+update @tmp
+set total=0
+where total<0
+
+if(len(@t_need)>0)
+begin
+	delete @tmp where total<=0
+end
+
+insert @tmp (gno,total)
+select '1'gno,sum(total) from @tmp
+
+select
+gno,ordeno,pno,product,no2
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stkmount),1)),4,12)) stkmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salemount),1)),4,12)) salemount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmount),1)),4,12)) outmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ninmount),1)),4,12)) ninmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ncuamount),1)),4,12)) ncuamount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+from @tmp order by gno,ordeno desc,no2;
