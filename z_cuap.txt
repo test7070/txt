@@ -1,0 +1,292 @@
+z_cuap1:--z_cuap1
+SET QUOTED_IDENTIFIER OFF 
+declare @t_accy nvarchar(30)
+declare @t_cuano nvarchar(30)
+declare @t_stkdate nvarchar(30)
+
+set @t_accy = "[1]"
+set @t_accy= REPLACE(@t_accy,"'","")
+set @t_cuano = case when '#non' =  [2] then '' else  [2] end
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+--*********************************************************************************************
+--declare @tmp table(
+--	gno nvarchar(1),
+--	ordeno nvarchar(30),
+--	no2 nvarchar(10),
+--	productno nvarchar(30),
+--	products nvarchar(90),
+--	gdemand float,
+--	emount float,
+--	ordcmount float,
+--	ordenotv float,
+--	stockmount float,
+--	ndemand float,
+--	datea nvarchar(10)
+--)
+
+--insert into @tmp
+--	select '0',b.ordeno,b.no2,a.productno,a.product,isnull(a.mount,0),isnull(a.emount,0),0,isnull(c.notv,0),0,0,
+--	b.datea
+--	from works[1] a
+--	left join work[1] b on a.noa = b.noa
+--	left join ordes[1] c on (b.ordeno = c.noa) and (b.no2 = c.no2)
+--	where (len(@t_ordeno) = 0 or b.ordeno = @t_ordeno)
+--update @tmp set ndemand = (gdemand-emount+ordcmount+ordenotv+stockmount)
+
+--declare @datea nvarchar(10)
+--declare @productno nvarchar(90)
+--declare cursor_table cursor for
+--	select datea,productno from @tmp
+--open cursor_table
+--fetch next from cursor_table
+--into @datea,@productno
+--while(@@FETCH_STATUS <> -1)
+--begin
+--	update @tmp set stockmount = isnull((select mount from stkucc[1](@datea,'',@productno) where storeno = ''),0) where datea = @datea and productno = @productno
+--	fetch next from cursor_table
+--	into @datea,@productno
+--end
+--close cursor_table
+--deallocate cursor_table
+--insert into @tmp
+--	select
+--		'1',ordeno,no2,'','',sum(gdemand),sum(emount),sum(ordcmount),
+--		sum(ordenotv),sum(stockmount),sum(ndemand),''
+--	from @tmp
+--	group by ordeno,no2
+--select
+--	gno,
+--	case when len(ordeno) = 0 or ordeno is null then '' 
+--	when len(ordeno) >0 and len(no2) = 0 then ordeno 
+--	else ordeno + '-' + no2 end ordeno,
+--	productno,products,
+--	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gdemand),1)),4,12)) gdemand,
+--	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,emount),1)),4,12)) emount,
+--	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ordcmount),1)),4,12)) ordcmount,
+--	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ordenotv),1)),4,12)) ordenotv,
+--	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stockmount),1)),4,12)) stockmount,
+--	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ndemand),1)),4,12)) ndemand
+--from @tmp order by ordeno,no2,gno
+
+declare @cmd nvarchar(max) 
+declare @tmp table(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	gdemand float,
+	emount float,
+	ordenotv float,
+	ordcmount float,
+	stockmount float,
+	ndemand float
+)
+
+set @cmd ="
+select '0',productno,(select product from ucc where noa=tmp.productno)products
+,sum(gdemand)gdemand,sum(emount)emount,sum(ordenotv)ordenotv,sum(ordcmount)ordcmount 
+,(select sum(mount) from stkucc"+@t_accy+"('"+@t_stkdate+"','','') where productno=tmp.productno)stockmount
+,0 ndemand
+from (
+	--針對該張cuano //--毛需求(有cuano)
+	select ws.productno,sum(ws.emount) gdemand,0 emount,0 ordcmount,0 ordenotv from view_work"+@t_accy+" w left join view_works"+@t_accy+" ws on w.noa=ws.noa 
+	where ws.productno in (select noa from ucc where typea='4' or typea='5')  and (len('"+@t_cuano+"')=0 or w.cuano='"+@t_cuano+"')
+	group by ws.productno
+	union all
+	--其他全部的cuano //--製令未領(沒有cuano)
+	select ws.productno,0 gdemand,sum(ws.emount) emount,0 ordcmount,0 ordenotv from view_work"+@t_accy+" w left join view_works"+@t_accy+" ws on w.noa=ws.noa 
+	where ws.productno in (select noa from ucc where typea='4' or typea='5')  and (len('"+@t_cuano+"')!=0 and w.cuano!='"+@t_cuano+"') 
+	group by ws.productno
+	union all
+	--訂單未入(不含訂單製令內需求的數量)
+	select ob.productno,0 gdemand,0 emount,0 ordcmount,sum(ob.mount) ordenotv from view_orde"+@t_accy+" oa left join view_ordes"+@t_accy+" ob on oa.noa=ob.noa
+	where oa.enda!='1' and ob.noa+'_'+ob.no2 not in (select ordeno+'_'+no2 from view_work"+@t_accy+") and productno in (select noa from ucc where typea='4' or typea='5')	"
+	
+--if(len(@t_cuano)!=0)
+--set @cmd +=" and ob.noa+'_'+ob.no2  in (select ordeno+'_'+no2 from view_cuas"+@t_accy+" where noa='"+@t_cuano+"')"
+		 
+set @cmd +="
+	group by productno
+	union all
+	--採購未入(不含訂單製令內需求的數量,結案表示已入庫)
+	select ocs.productno,0 gdemand,0 emount,sum(ocs.mount)ordcmount,0 ordenotv from view_ordcs"+@t_accy+" ocs left join view_ordbs"+@t_accy+" obs on ocs.ordbno=obs.noa and ocs.no3=obs.no3
+	where ocs.enda!='1' and isnull(obs.ordeno,'XXX')+'_'+isnull(obs.no2,'###') not in (select ordeno+'_'+no2 from view_work"+@t_accy+") and ocs.productno in (select noa from ucc where typea='4' or typea='5')"
+
+--if(len(@t_cuano)!=0)
+--set @cmd +=" and isnull(obs.ordeno,'XXX')+'_'+isnull(obs.no2,'###') in (select ordeno+'_'+no2 from view_cuas"+@t_accy+" where noa='"+@t_cuano+"')"
+	
+set @cmd +="
+	group by ocs.productno
+)tmp group by productno"
+
+insert into @tmp
+execute sp_executesql @cmd
+
+update @tmp set ndemand = (gdemand+emount+ordenotv-ordcmount-stockmount)
+update @tmp set ndemand=0 where ndemand<0
+
+select gno,productno,products,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,emount),1)),0,30)) emount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordenotv),1)),0,30)) ordenotv,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stockmount),1)),0,30)) stockmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ndemand),1)),0,30)) ndemand
+from @tmp
+;
+----**************************************************************************************
+z_cuap2:--z_cuap2
+declare @t_cuano nvarchar(30)
+declare @t_stkdate nvarchar(30)
+set @t_cuano = case when '#non' =  [2] then '' else  [2] end
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+--*********************************************************************************************
+SET QUOTED_IDENTIFIER OFF 
+declare @cmd nvarchar(max) 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+
+create table #tmp(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	gdemand float,
+	emount float,
+	ordenotv float,
+	ordcmount float,
+	stockmount float,
+	ndemand float
+)
+
+set @cmd ="
+select '0',productno,(select product from ucc where noa=tmp.productno)products
+,sum(gdemand)gdemand,sum(emount)emount,sum(ordenotv)ordenotv,sum(ordcmount)ordcmount 
+,(select sum(mount) from stkucc"+[1]+"('"+@t_stkdate+"','','') where productno=tmp.productno)stockmount
+,0 ndemand
+from (
+	--針對該張cuano//--毛需求(有cuano)
+	select ws.productno,sum(ws.emount) gdemand,0 emount,0 ordcmount,0 ordenotv from view_work"+[1]+" w left join view_works"+[1]+" ws on w.noa=ws.noa 
+	where ws.productno in (select noa from ucc where typea='4' or typea='5')  and (len('"+@t_cuano+"')=0 or w.cuano='"+@t_cuano+"')
+	group by ws.productno
+	union all
+	--其他全部的cuano //--製令未領(沒有cuano)
+	select ws.productno,0 gdemand,sum(ws.emount) emount,0 ordcmount,0 ordenotv from view_work"+[1]+" w left join view_works"+[1]+" ws on w.noa=ws.noa 
+	where ws.productno in (select noa from ucc where typea='4' or typea='5')  and (len('"+@t_cuano+"')!=0 and w.cuano!='"+@t_cuano+"')
+	group by ws.productno
+	union all
+	--訂單未入(不含訂單製令內需求的數量)
+	select ob.productno,0 gdemand,0 emount,0 ordcmount,sum(ob.mount) ordenotv from view_orde"+[1]+" oa left join view_ordes"+[1]+" ob on oa.noa=ob.noa
+	where oa.enda!='1' and ob.noa+'_'+ob.no2 not in (select ordeno+'_'+no2 from view_work"+[1]+") and productno in (select noa from ucc where typea='4' or typea='5')	"
+	
+--if(len(@t_cuano)!=0)
+--set @cmd +=" and ob.noa+'_'+ob.no2  in (select ordeno+'_'+no2 from view_cuas"+[1]+" where noa='"+@t_cuano+"')"
+		 
+set @cmd +="
+	group by productno
+	union all
+	--採購未入(不含訂單製令內需求的數量,結案表示已入庫)
+	select ocs.productno,0 gdemand,0 emount,sum(ocs.notv)ordcmount,0 ordenotv from view_ordcs"+[1]+" ocs left join view_ordbs"+[1]+" obs on ocs.ordbno=obs.noa and ocs.no3=obs.no3
+	where ocs.enda!='1' and isnull(obs.ordeno,'XXX')+'_'+isnull(obs.no2,'###') not in (select ordeno+'_'+no2 from view_work"+[1]+") and ocs.productno in (select noa from ucc where typea='4' or typea='5')"
+
+--if(len(@t_cuano)!=0)
+--set @cmd +=" and isnull(obs.ordeno,'XXX')+'_'+isnull(obs.no2,'###') in (select ordeno+'_'+no2 from view_cuas"+[1]+" where noa='"+@t_cuano+"')"
+	
+set @cmd +="
+	group by ocs.productno
+)tmp group by productno"
+
+insert into #tmp
+execute sp_executesql @cmd
+
+update #tmp set ndemand = (gdemand+emount+ordenotv-ordcmount-stockmount)
+update #tmp set ndemand=0 where ndemand<0
+
+select gno,productno,products,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,emount),1)),0,30)) emount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordenotv),1)),0,30)) ordenotv,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stockmount),1)),0,30)) stockmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ndemand),1)),0,30)) ndemand
+from #tmp
+
+--*************************************************************************************
+--寫入請購單
+declare @sssno nvarchar(max)=[3] --採購員編號
+declare @ordbno nvarchar(max)=[4] --目前請購代號
+declare @ordbum nvarchar(max) --目前請購序號
+declare @typea nvarchar(max) 
+declare @tggno nvarchar(max) 
+declare @ordbdate nvarchar(10) 
+declare @ordbnos nvarchar(MAX) --全部請購單編號
+set @ordbnos=''
+
+--set @ordbum=isnull(right((select top 1 noa from view_ordb102 where CHARINDEX(@ordbno+ REPLACE(@t_stkdate,'/',''),noa)>0 order by noa desc),3),'0')
+set @cmd="select @ordbum= isnull(right((select top 1 noa from view_ordb"+[1]+" where CHARINDEX('"+@ordbno+"'+ REPLACE('"+@t_stkdate+"','/',''),noa)>0 order by noa desc),3),'0')"
+EXEC SP_EXECUTESQL @cmd, N'@ordbum nvarchar(max) OUTPUT', @ordbum OUTPUT
+
+
+set @ordbdate=CONVERT (VARCHAR(7), GETDATE()+3,12 )+0890000
+set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate,2)
+
+declare cursor_table cursor for 
+select b.typea,b.tggno
+from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0
+group by b.typea,b.tggno
+open cursor_table 
+fetch next from cursor_table 
+into @typea,@tggno
+while(@@FETCH_STATUS <> -1) 
+begin
+
+	--insert into ordb102(datea,odate,noa,kind,tggno,tgg,worker,money,total,memo,enda)
+	--select @ordbdate,@t_stkdate,@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3) noa
+	--,case when @typea='4' then '1' else '2' end kind,@tggno tggno,(select comp from tgg where noa=@tggno) tgg,(select namea from nhpe where noa=@sssno) worker
+	--,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea=@typea and b.tggno=tggno)money
+	--,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea=@typea and b.tggno=tggno)total
+	--,@t_stkdate+' 物料需求表 轉來'memo,0
+	
+	EXEC("insert into ordb"+[1]+" (datea,odate,noa,kind,tggno,tgg,worker,money,total,memo,enda)
+	select '"+@ordbdate+"','"+@t_stkdate+"','"+@ordbno+"'+ REPLACE('"+@t_stkdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
+	,case when '"+@typea+"'='4' then '1' else '2' end kind,'"+@tggno+"' tggno,(select comp from tgg where noa='"+@tggno+"') tgg,(select namea from nhpe where noa='"+@sssno+"') worker
+	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea='"+@typea+"' and b.tggno=tggno)money
+	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea='"+@typea+"' and b.tggno=tggno)total
+	,'"+@t_stkdate+"'+' 物料需求表 轉來 'memo,0")
+	
+	--insert into ordbs102(datea,noa,no3,productno,product,unit,mount,price,total,tggno,enda,kind)
+	--select @ordbdate,@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3) noa
+	--,right('000'+cast(ROW_NUMBER() OVER (ORDER BY a.productno DESC) as nvarchar(10)),3) no3
+	--,a.productno,a.products,b.unit,isnull(a.ndemand,0)ndemand,isnull(b.inprice,0)inprice,isnull(a.ndemand,0)*isnull(b.inprice,0) total
+	--,b.tggno,0,case when @typea='4' then '1' else '2' end kind
+	--from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea=@typea and b.tggno=@tggno
+	
+	EXEC("insert into ordbs"+[1]+"(datea,noa,no3,productno,product,unit,mount,price,total,tggno,enda,kind)
+	select '"+@ordbdate+"','"+@ordbno+"'+ REPLACE('"+@t_stkdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
+	,right('000'+cast(ROW_NUMBER() OVER (ORDER BY a.productno DESC) as nvarchar(10)),3) no3
+	,a.productno,a.products,b.unit,isnull(a.ndemand,0)ndemand,isnull(b.inprice,0)inprice,isnull(a.ndemand,0)*isnull(b.inprice,0) total
+	,b.tggno,0,case when '"+@typea+"'='4' then '1' else '2' end kind
+	from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea='"+@typea+"' and b.tggno='"+@tggno+"'")
+	
+	set @ordbnos=@ordbnos+@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
+	
+	set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	fetch next from cursor_table 
+	into @typea,@tggno
+end 
+close cursor_table 
+deallocate cursor_table 
+
+if(len(@ordbnos)>0)
+begin
+	EXEC("
+		update cua"+[1]+"
+		set ordbno=left('"+@ordbnos+"',len('"+@ordbnos+"')-1)
+		where noa='"+@t_cuano+"'")
+end
+;
+

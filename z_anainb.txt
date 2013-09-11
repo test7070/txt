@@ -1,0 +1,84 @@
+﻿chart01:--chart01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	
+	set @t_accy=[1]
+	set @t_bdate =[2]
+	set @t_edate =[3]
+	--------------------------------------------------------------------------------------	
+	declare @schedule table(
+		accy nvarchar(10),
+		inbno nvarchar(20),
+		inbnoq nvarchar(20),
+		inbdate nvarchar(10),
+		product nvarchar(40),
+		bweight float,
+		[weight] float,
+		ordeno nvarchar(20),
+		ordenoq nvarchar(20),
+		ucctno nvarchar(20),
+		ucctnoq nvarchar(20),
+		processno nvarchar(20),
+		process nvarchar(40),
+		[datea] nvarchar(10),
+		[timea] nvarchar(10)
+	)
+	set @cmd = 
+	" select a.accy,a.noa,a.noq,b.datea,a.product,a.bweight,a.weight,a.ordeno,a.no2,a.productno,ISNULL(c.noq,'')"+
+	" ,ISNULL(c.processno,''),ISNULL(c.process,'') "+
+	" from view_inbs"+@t_accy+" a"+
+	" left join view_inb"+@t_accy+" b on a.noa=b.noa"+
+	" left join ucct c on a.productno = c.noa"+
+	" where isnull(b.datea,'') between @t_bdate and @t_edate"+
+	" order by a.noa,a.noq,ISNULL(c.noq,'')"
+	
+	insert into @schedule(accy,inbno,inbnoq,inbdate,product,bweight,[weight],ordeno,ordenoq,ucctno,ucctnoq,processno,process)
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(20),@t_edate nvarchar(20)',@t_bdate=@t_bdate,@t_edate=@t_edate
+	--------------------------------------------------------------------------
+	declare @inbno nvarchar(20)
+	declare @inbnoq nvarchar(20)
+	declare @inbdate nvarchar(10)
+	declare @ordeno nvarchar(20)
+	declare @ordenoq nvarchar(20)
+	declare @processno nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @timea nvarchar(10)
+
+	declare cursor_table cursor for
+	select inbno,inbnoq,ordeno,ordenoq,processno from @schedule
+	open cursor_table
+	fetch next from cursor_table
+	into @inbno,@inbnoq,@ordeno,@ordenoq,@processno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @datea='',@timea=''
+		if(@processno='Z')
+		begin
+			--入庫
+			set @cmd=
+			" select @datea=b.datea,@timea=a.timea from view_workbs"+@t_accy+" a"+
+			" left join view_workb"+@t_accy+" b on a.noa=b.noa"+
+			" where ordeno=@ordeno and no2=@ordenoq"
+			execute sp_executesql @cmd,N'@datea nvarchar(10) output,@timea nvarchar(10) output,@ordeno nvarchar(20),@ordenoq nvarchar(20)'
+			,@datea=@datea output,@timea=@timea output,@ordeno=@ordeno,@ordenoq=@ordenoq
+		end
+		else
+		begin
+			set @cmd=
+			" select @datea=datea,@timea=timea from view_worka"+@t_accy+
+			" where cuano=@inbno and processno=@processno"
+			execute sp_executesql @cmd,N'@datea nvarchar(10) output,@timea nvarchar(10) output,@inbno nvarchar(20),@processno nvarchar(20)'
+			,@datea=@datea output,@timea=@timea output,@inbno=@inbno,@processno=@processno
+		end
+		update @schedule set [datea]=@datea,[timea]=@timea where inbno=@inbno and inbnoq=@inbnoq and processno=@processno
+		
+		fetch next from cursor_table
+		into @inbno,@inbnoq,@ordeno,@ordenoq,@processno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * from @schedule order by inbno,inbnoq,ucctno,ucctnoq;
