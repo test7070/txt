@@ -1,7 +1,7 @@
 ﻿z_ordcp1:--z_ordcp1
 declare @t_bnoa nvarchar(30)
 declare @t_enoa nvarchar(30)
-declare @t_pageline int = 18   --------一頁幾行
+declare @t_pageline int = 5   --------一頁幾行
 set @t_bnoa = case when '#non' = [4] then '' else [4] end
 set @t_enoa = case when '#non' = [5] then CHAR(255) else [5] end
 declare @tmp table(
@@ -9,6 +9,7 @@ declare @tmp table(
 	idno int identity(0,1),
 	orderno int,
 	pageno int,
+	w_totpage int,
 	a_noa nvarchar(30),
 	a_odate nvarchar(10),
 	a_kind nvarchar(15),
@@ -35,7 +36,7 @@ declare @tmp table(
 )
 insert into @tmp
 select
-	'0',ROW_NUMBER()over(partition by a.noa order by a.noa),1	,
+	'0',ROW_NUMBER()over(partition by a.noa order by a.noa),1	,0,
 	a.noa,a.odate,a.kind,a.tggno,c.comp,a.tel,a.fax,a.addr,a.addr2,a.trantype,a.trandate,a.paytype,a.memo,a.money,a.tax,a.total,
 	b.productno,b.product,b.unit,b.mount,b.price,b.total,b.memo
 from view_ordc[1] a
@@ -90,23 +91,38 @@ begin
 	begin
 		while(@k > 0)
 		begin
-			insert into @tmp(gno,orderno,pageno,a_noa,a_memo,a_tggs)
-				select '0',(@orderno+1),@pageno,@a_noa,a_memo,a_tggs from @tmp where idno = @idno
+			insert into @tmp(gno,orderno,pageno,a_noa,a_memo,a_tggno,a_tggs)
+				select '0',(@orderno+1),@pageno,@a_noa,a_memo,a_tggno,a_tggs from @tmp where idno = @idno
 			set @k = @k-1
 			set @orderno = @orderno +1
 		end
 	end
-	insert into @tmp(gno,orderno,pageno,a_noa,a_tggs,b_mount,b_total,a_money,a_tax,a_total)
-		select '1',(@t_pageline+1),pageno,a_noa,a_tggs,sum(b_mount),sum(b_total),max(a_money),max(a_tax),max(a_total) from @tmp where gno=0 and a_noa=@a_noa and pageno=@pageno group by a_noa,pageno,a_tggs
-	insert into @tmp(gno,orderno,pageno,a_noa,a_tggs,a_memo) 
-		select '2',(@t_pageline+2),pageno,a_noa,a_tggs,a_memo from @tmp where gno=0 and a_noa=@a_noa and pageno=@pageno group by a_noa,pageno,a_tggs,a_memo
+	insert into @tmp(gno,orderno,pageno,a_noa,a_tggno,a_tggs,b_mount,b_total,a_money,a_tax,a_total)
+		select '1',(@t_pageline+1),pageno,a_noa,a_tggno,a_tggs,sum(b_mount),sum(b_total),max(a_money),max(a_tax),max(a_total) from @tmp where gno=0 and a_noa=@a_noa and pageno=@pageno group by a_noa,pageno,a_tggno,a_tggs
+	insert into @tmp(gno,orderno,pageno,a_noa,a_tggno,a_tggs,a_memo) 
+		select '2',(@t_pageline+2),pageno,a_noa,a_tggno,a_tggs,a_memo from @tmp where gno=0 and a_noa=@a_noa and pageno=@pageno group by a_noa,pageno,a_tggno,a_tggs,a_memo
 	fetch next from cursor_table
 	into @a_noa,@orderno,@pageno,@idno,@a_count
 end
 close cursor_table
 deallocate cursor_table
+
+declare cursor_table cursor for
+	select distinct a_noa,count(*) from @tmp group by a_noa
+open cursor_table
+fetch next from cursor_table
+into @a_noa,@a_count
+while(@@FETCH_STATUS <> -1)
+begin	
+	update @tmp set w_totpage = @a_count/(@t_pageline+2) where a_noa = @a_noa
+	fetch next from cursor_table
+	into @a_noa,@a_count
+end
+close cursor_table
+deallocate cursor_table
+
 select
-	gno,a_noa,a_odate,a_kind,a_tggno,a_tggs,a_tel,a_fax,a_addr_a,a_addr_b,a_trantype,a_trandate,a_paytype,
+	gno,pageno,w_totpage,a_noa,a_odate,a_kind,a_tggno,a_tggs,a_tel,a_fax,a_addr_a,a_addr_b,a_trantype,a_trandate,a_paytype,
 	a_memo,b_productno,b_products,b_unit,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a_money),1)),4,12)) a_money,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a_tax),1)),4,12)) a_tax,
@@ -114,4 +130,4 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,b_mount),1)),4,12)) b_mount,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,b_price),1)),4,12)) b_price,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,b_total),1)),4,12)) b_total,b_memo
-from @tmp order by a_noa desc,pageno,gno,orderno;
+from @tmp order by a_tggno,a_noa desc,pageno,gno,orderno;
