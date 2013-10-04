@@ -3,11 +3,15 @@ declare @t_bstation nvarchar(50)
 declare @t_estation nvarchar(50)
 declare @t_bprocess nvarchar(50)
 declare @t_eprocess nvarchar(50)
+declare @t_edate nvarchar(50)
+declare @t_orde nvarchar(50)
 
 set @t_bstation = case when '#non' = [3] then '' else  [3] end
 set @t_estation = case when '#non' = [4] then CHAR(255) else  [4] end
 set @t_bprocess = case when '#non' = [5] then '' else  [5] end
 set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
+set @t_edate = case when '#non' = [7] then '999/99/99' else  [7] end
+set @t_orde = case when '#non' = [8] then '' else  [8] end
 ---------------------------------------------------------------------------------------------------------------------------------
 declare @tmp table(
 	gno  nvarchar(1),
@@ -34,7 +38,7 @@ declare @tmp table(
 insert into @tmp
 select '0',a.noq,a.workno,a.processno,a.process,b.stationno,b.station,a.productno,a.product,a.mount,a.hours,a.days,a.cuadate,a.uindate,a.uindate,c.hours,c.gen
 from cugs[1] a left join work[1] b on a.workno=b.noa  left join station c on b.stationno=c.noa
-where b.enda!='1' and (b.stationno between @t_bstation and @t_estation) 
+where b.enda!='1' and (b.stationno between @t_bstation and @t_estation)
 order by a.noa,a.noq
 
 --插入未排程的製令
@@ -118,8 +122,8 @@ begin
 	end 
 	else
 	begin
-		--有指定時間開工且日期大於可開工時間 且不在指定開工日內
-		if(@workdate!='' and @workdate>@t_enddate and((select count(*) from @tmpa where @workdate between workdate and enddate)=0))
+		--有指定時間開工且日期大於可開工時間 且不在指定開工日內,且開工日小於截止運算日
+		if(@workdate!='' and @workdate>@t_enddate and((select count(*) from @tmpa where @workdate between workdate and enddate)=0) and @t_enddate<@t_edate)
 		begin
 			set @s_workdate=@workdate
 			set @s_enddate=@workdate
@@ -164,6 +168,16 @@ begin
 			set @s_enddate=(select top 1 enddate from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)
 			set @s_bgens=(select top 1 bgens from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)-@mount
 			
+			--判斷工作日是否大於運算截止日
+			if(@s_workdate>@t_edate)
+			begin
+				delete @tmp
+				where sidno=@sidno
+				fetch next from cursor_table 
+				into @stationno,@gno,@ghours,@gens,@mount,@workdate,@enddate,@sidno,@workno
+				CONTINUE
+			end
+			
 			while (@s_bgens < 0)
 			begin
 				--往後一天
@@ -200,6 +214,16 @@ begin
 		begin
 			set @t_workdate=@t_enddate
 			set @bgens=@bgens-@mount
+			
+			--判斷工作日是否大於運算截止日
+			if(@t_workdate>@t_edate)
+			begin
+				delete @tmp
+				where sidno=@sidno
+				fetch next from cursor_table 
+				into @stationno,@gno,@ghours,@gens,@mount,@workdate,@enddate,@sidno,@workno
+				CONTINUE
+			end
 			
 			while (@bgens < 0)
 			begin
@@ -269,14 +293,37 @@ end
 close cursor_table 
 deallocate cursor_table 
 
-select gno,idno,workno,processno,processs,stationno,stations,productno,products
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),0,15)) mount 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,hours),1)),0,15)) hours 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,days),1)),0,15)) days 
-,workdate,enddate,datea
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ghours),1)),0,15)) ghours 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gens),1)),0,15)) gens 
-from @tmp
---where processno between @t_bprocess and @t_eprocess
-order by stationno,gno,idno;
+--刪除沒有製令的資料
+delete a
+from @tmp a
+where a.stationno not in (select stationno from @tmp b where gno='0' or gno='2' group by stationno)
+
+if(@t_orde='1')
+begin
+	select gno,idno,workno,processno,processs,stationno,stations,productno,products
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),0,15)) mount 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,hours),1)),0,15)) hours 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,days),1)),0,15)) days 
+	,workdate,enddate,datea
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ghours),1)),0,15)) ghours 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gens),1)),0,15)) gens 
+	from @tmp
+	--where processno between @t_bprocess and @t_eprocess
+	order by stationno,gno,processno,processs,idno
+end
+
+if(@t_orde='2')
+begin
+	select gno,idno,workno,processno,processs,stationno,stations,productno,products
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),0,15)) mount 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,hours),1)),0,15)) hours 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,days),1)),0,15)) days 
+	,workdate,enddate,datea
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ghours),1)),0,15)) ghours 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gens),1)),0,15)) gens 
+	from @tmp
+	--where processno between @t_bprocess and @t_eprocess
+	order by stationno,gno,idno
+end
+;
 
