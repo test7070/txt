@@ -243,80 +243,72 @@ z_tb:--z_tb
 	order by productno, gno, recno;
 	
 --*****************************************************************************************	
-z_stk:	--庫存表  --z_stk
+z_ucc1:	--庫存表  --ucc1
 	declare @t_bproductno nvarchar(50)
 	declare @t_eproductno nvarchar(50)
 	declare @t_typea nvarchar(15)
 	declare @t_bstoreno nvarchar(50) 
 	declare @t_estoreno nvarchar(50)
+	declare @t_group nvarchar(15)
 	
 	set @t_bproductno = case when '#non'=[4] then '' else [4] end
 	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
 	set @t_typea = case when '#non'=[11] then '' else [11] end
 	set @t_bstoreno = case when '#non' = [6] then '' else [6] end
 	set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
+	set @t_group = case when '#non'=[13] then '' else [13] end
 
 	declare @t_stkdate nvarchar(30)
 	set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 	set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
 	
-	--@t_typea=1@商品,2@製成品,3@半成品,4@原料,5@物料,6@下腳品,7@加工,8@零件,9@其它
+	declare @groups table(
+		groupsno nvarchar(20),
+		groups nvarchar(50)
+	)
 	
+	declare @groupstmp nvarchar(MAX)
+	set @groupstmp='[14]'
+	
+	while(charindex(',',@groupstmp)>0) 
+	begin 
+		insert @groups
+		select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),REPLACE(SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,CHARINDEX(',',@groupstmp)-CHARINDEX('@',@groupstmp)-1),' ','')
+		
+		set @groupstmp=SUBSTRING(@groupstmp,CHARINDEX(',',@groupstmp)+1,LEN(@groupstmp)) 
+	end
+	insert @groups
+	select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,LEN(@groupstmp)) 
+
 	declare @result table(
 		gno nvarchar(1),
+		xgroupno nvarchar(50),
 		productno nvarchar(30),
 		xproduct nvarchar(40),
 		unit nvarchar(10),
 		totmount float,
+		safemount float,
 		price float,
 		total float
 	)
 	
+	insert into @result
+	select '0' gno,b.groupano,a.productno,a.product xproduct,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
+	from (
+		select productno,MAX(product) product,sum(mount) mount 	from stkucc[1](@t_stkdate,'','') s
+		where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
+	) a left join ucc b on a.productno=b.noa  
+	left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
+	where a.productno in (select noa from ucc) 
+	and (len(@t_typea)=0 or b.typea=@t_typea) and (len(@t_group)=0 or b.typea=@t_group)
+	and a.productno between @t_bproductno and @t_eproductno
 
-	if(len(@t_typea)=0)
-	begin
-		insert into @result
-		select '0' gno,a.productno,a.product xproduct,a.unit,a.mount totmount,b.price,a.mount*b.price total 
-		from (
-			select s.productno,MAX(s.product) product,sum(s.mount) mount,(select top 1 unit from view_ucaucc where noa=s.productno) unit 
-			from stkucc[1](@t_stkdate,'','') s where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-		) a left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) b on a.productno=b.productno where a.productno!=''
-		and a.productno between @t_bproductno and @t_eproductno
-	end 
-	else
-	begin
-		if(@t_typea!='2' and @t_typea!='3')
-		begin
-			insert into @result
-			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,c.price,a.mount*c.price total
-			from (
-				select productno,MAX(product) product,sum(mount) mount 	from stkucc[1](@t_stkdate,'','') s
-				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-			) a left join ucc b on a.productno=b.noa  
-			left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
-			where a.productno in (select noa from ucc) and b.typea=@t_typea
-			and a.productno between @t_bproductno and @t_eproductno
-		end
-		else
-		begin
-			insert into @result
-			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,c.price,a.mount*c.price total
-			from (
-				select productno,MAX(product) product,sum(mount) mount from stkucc[1](@t_stkdate,'','') s
-				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-			) a left join (
-			select noa,product,unit,typea from uca union all select productno,productno+' 半成品',''unit,'2' typea from ucat where productno not in (select noa from uca) and productno!=''
-			) b on a.productno=b.noa left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
-			where a.productno in (select noa from uca union select productno from ucat) and b.typea=(case when @t_typea='2' then '1' else '2' end)
-			and a.productno between @t_bproductno and @t_eproductno
-		end
-	end
-
-	select gno,productno,xproduct,unit
+	select gno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups,productno,xproduct,unit
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
+		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(safemount,0)),1)),4,30)) safemount
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(price,2)),1)),0,30)) price
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(total,0)),1)),4,30)) total
-	from @result
+	from @result a order by xgroupno,productno
 ;
 --*****************************************************************************************
 z_stk1:	
@@ -564,4 +556,75 @@ select gno,storeno,stores,pno,product,unit
 ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
 from @tmp
 order by storeno,gno,pno
+;
+z_ucc2:	--產品列表  --ucc2
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_group nvarchar(15)
+	
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[11] then '' else [11] end
+	set @t_group = case when '#non'=[13] then '' else [13] end
+	
+	declare @groups table(
+		groupsno nvarchar(20),
+		groups nvarchar(50)
+	)
+	
+	declare @groupstmp nvarchar(MAX)
+	set @groupstmp='[14]'
+	
+	while(charindex(',',@groupstmp)>0) 
+	begin 
+		insert @groups
+		select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),REPLACE(SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,CHARINDEX(',',@groupstmp)-CHARINDEX('@',@groupstmp)-1),' ','')
+		
+		set @groupstmp=SUBSTRING(@groupstmp,CHARINDEX(',',@groupstmp)+1,LEN(@groupstmp)) 
+	end
+	insert @groups
+	select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,LEN(@groupstmp)) 
+	
+	
+	declare @types table(
+		typesno nvarchar(20),
+		types nvarchar(50)
+	)
+	
+	declare @typestmp nvarchar(MAX)
+	set @typestmp='[15]'
+	
+	while(charindex(',',@typestmp)>0) 
+	begin 
+		insert @types
+		select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),REPLACE(SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,CHARINDEX(',',@typestmp)-CHARINDEX('@',@typestmp)-1),' ','')
+		
+		set @typestmp=SUBSTRING(@typestmp,CHARINDEX(',',@typestmp)+1,LEN(@typestmp)) 
+	end
+	insert @types
+	select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,LEN(@typestmp)) 
+
+
+	declare @result table(
+		gno nvarchar(1),
+		xgroupno nvarchar(50),
+		productno nvarchar(30),
+		xproduct nvarchar(50),
+		typeano nvarchar(50),
+		spec nvarchar(50),
+		unit nvarchar(10),
+		inprice float,
+		saleprice float
+	)
+	
+	insert into @result
+	select '0',groupano,noa,product,typea,spec,unit,inprice,saleprice from ucc
+
+	select gno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups
+		,typeano,(select top 1 types from @types where typesno=a.typeano) typeas
+		,productno,xproduct,spec,unit
+		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(inprice,0)),1)),4,30)) inprice
+		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(saleprice,0)),1)),4,30)) saleprice
+	from @result a order by xgroupno,productno
 ;
