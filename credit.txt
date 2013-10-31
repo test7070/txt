@@ -1,0 +1,165 @@
+orde:-- orde_credit
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_custno nvarchar(20)
+	declare @t_ordeno nvarchar(20)
+	
+	set @t_custno = [1]
+	set @t_ordeno = [2]
+	----------------------------------------------------------------------------------
+	declare @listorde table(
+		tablea nvarchar(20),
+		tableas nvarchar(20),
+		accy nvarchar(20)
+	)
+	insert into @listorde(tablea,tableas,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'orde','ordes')
+	,replace(TABLE_NAME,'orde','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'orde[0-9][0-9][0-9]'
+	
+	declare @listvcc table(
+		tablea nvarchar(20),
+		tableas nvarchar(20),
+		accy nvarchar(20)
+	)
+	insert into @listvcc(tablea,tableas,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'vcc','vccs')
+	,replace(TABLE_NAME,'vcc','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'vcc[0-9][0-9][0-9]' 
+
+	----------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#orde_credit')is not null
+	BEGIN
+		set @cmd = 'drop table #orde_credit'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #orde_credit(
+		tno nvarchar(20),
+		team nvarchar(max),
+		custno nvarchar(20),
+		cust nvarchar(max),
+		nick nvarchar(max),
+		credit float,--可用額度
+		ordeMoney float,--訂單金額(只算未結案)
+		vccMoney float,--應收帳款
+		ummMoney float,--預付
+		gqbMoney float, --未兌現票據
+		total float
+	)
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @accy nvarchar(10)
+	
+	------ORDE 只算未結案的
+	declare cursor_table cursor for
+	select tablea,tableas,accy from @listorde
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd =""
+		+" select isnull(b.custno,'')from "+@tableas+" a"
+		+" left join "+@tablea+" b on a.noa=b.noa"
+		+" left join #orde_credit c on isnull(b.custno,'')=c.custno"
+		+" where c.custno is null and isnull(a.enda,0)=0 and isnull(b.enda,0)=0"
+		+" and isnull(b.custno,'')=@t_custno"
+		+" and a.noa!=@t_ordeno"
+		+" group by isnull(b.custno,'')"
+		insert into #orde_credit(custno)
+		execute sp_executesql @cmd,N'@t_custno nvarchar(20),@t_ordeno nvarchar(20)',@t_custno=@t_custno,@t_ordeno=@t_ordeno
+		
+		set @cmd =""
+		+" update #orde_credit set ordemoney = isnull(a.ordemoney,0)+isnull(b.total,0)"
+		+" from #orde_credit a"
+		+" left join (select isnull(b.custno,'') custno,sum(isnull(a.[total],0)) total from "+@tableas+" a "
+		+" 	left join "+@tablea+" b on a.noa=b.noa"
+		+" where isnull(a.enda,0)=0 and isnull(b.enda,0)=0"
+		+" and isnull(b.custno,'')=@t_custno"
+		+" and a.noa!=@t_ordeno"
+		+" group by ISNULL(b.custno,'')) b on a.custno=b.custno"
+		execute sp_executesql @cmd,N'@t_custno nvarchar(20),@t_ordeno nvarchar(20)',@t_custno=@t_custno,@t_ordeno=@t_ordeno
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy
+	end
+	close cursor_table
+	deallocate cursor_table
+	------UMM 預付
+	insert into #orde_credit(custno)
+	select isnull(a.custno,'') from umm a
+	left join #orde_credit b on a.custno=b.custno
+	where b.custno is null and isnull(a.custno,'')=@t_custno
+	group by isnull(a.custno,'')
+	
+	update #orde_credit set ummmoney = isnull(a.ummmoney,0)+isnull(b.total,0)
+	from #orde_credit a
+	left join (select isnull(custno,'') custno,SUM(ISNULL(opay,0)-isnull(unopay,0)) total from umm
+		where isnull(custno,'')=@t_custno
+		group by ISNULL(custno,'')) b on a.custno=b.custno
+	------GQB 收票未兌現票據
+	insert into #orde_credit(custno)
+	select isnull(a.compno,'') from gqb a
+	left join #orde_credit b on a.compno=b.custno
+	where b.custno is null and a.typea='1' and (ISNULL(a.enda,'')='' or upper(a.enda)='N')
+		and isnull(a.compno,'')=@t_custno
+	group by isnull(a.compno,'')
+	
+	update #orde_credit set gqbmoney = isnull(a.gqbmoney,0)+isnull(b.total,0)
+	from #orde_credit a
+	left join (select isnull(compno,'') custno,SUM(ISNULL([money],0)) total from gqb 
+		where typea='1' and (ISNULL(enda,'')='' or upper(enda)='N') and isnull(compno,'')=@t_custno
+		group by ISNULL(compno,'')) b on a.custno=b.custno
+	------vcc 應收帳款
+	declare cursor_table cursor for
+	select tablea,tableas,accy from @listvcc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd =""
+		+" select isnull(b.custno,'')from "+@tableas+" a"
+		+" left join "+@tablea+" b on a.noa=b.noa"
+		+" left join #orde_credit c on isnull(b.custno,'')=c.custno"
+		+" where c.custno is null"
+		+" and isnull(b.custno,'')=@t_custno"
+		+" group by isnull(b.custno,'')"
+		insert into #orde_credit(custno)
+		execute sp_executesql @cmd,N'@t_custno nvarchar(20),@t_ordeno nvarchar(20)',@t_custno=@t_custno,@t_ordeno=@t_ordeno
+		
+		set @cmd =""
+		+" update #orde_credit set vccmoney = isnull(a.vccmoney,0)+isnull(b.total,0)"
+		+" from #orde_credit a"
+		+" left join (select isnull(b.custno,'') custno,sum(isnull(a.[total],0)) total from "+@tableas+" a "
+		+" 	left join "+@tablea+" b on a.noa=b.noa where isnull(b.custno,'')=@t_custno group by ISNULL(b.custno,'')) b on a.custno=b.custno"
+		execute sp_executesql @cmd,N'@t_custno nvarchar(20),@t_ordeno nvarchar(20)',@t_custno=@t_custno,@t_ordeno=@t_ordeno
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@accy
+	end
+	close cursor_table
+	deallocate cursor_table
+	--扣掉已收
+	update #orde_credit set vccMoney = ISNULL(a.vccmoney,0)- ISNULL(b.total,0)
+	from #orde_credit a
+	left join (select isnull(b.custno,'') custno,SUM(ISNULL(a.paysale,0)) total 
+		from umms a left join umm b on a.noa=b.noa 
+		where isnull(b.custno,'')=@t_custno 
+		group by isnull(b.custno,'')) b on a.custno=b.custno
+	---------------------------------------
+	insert into #orde_credit(custno)
+	select noa from cust where noa=@t_custno and not exists(select custno from #orde_credit where custno=@t_custno)
+	
+	update #orde_credit set cust=b.comp,nick=b.nick,credit=isnull(b.credit,0),tno=ISNULL(b.grpno,''),team=ISNULL(c.team,'')
+	from #orde_credit a
+	left join cust b on a.custno=b.noa
+	left join team c on b.grpno=c.noa
+	update #orde_credit set total = ISNULL(credit,0)-ISNULL(ordeMoney,0)-ISNULL(vccmoney,0)-ISNULL(ummMoney,0)-ISNULL(gqbMoney,0)
+	
+	select * from #orde_credit
+	drop table #orde_credit;

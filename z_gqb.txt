@@ -1,0 +1,897 @@
+﻿z_gqb4:--z_gqb4	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_acc1 nvarchar(20)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_acc1 = case when '#non'=[16] then '' else [16] end
+	-------------------------------------------------------------------------------
+	declare @tmp1 table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		datea nvarchar(10),
+		accno nvarchar(20),
+		memo nvarchar(max),
+		dmoney float,
+		cmoney float
+	)
+	set @cmd =
+	" select a.accc5,isnull(b.acc2,''),a.accc2,a.accc3,a.accc7,isnull(a.dmoney,0),isnull(a.cmoney,0)"+
+	" from acccs"+@t_accy+" a"+
+	" left join acc"+@t_accy+" b on a.accc5=b.acc1"+
+	" where LEFT(a.accc5,4)='1112' "+
+	" and (a.accc2 <= right(@t_eydate,5))"+
+	" and (len(@t_acc1)=0 or @t_acc1=a.accc5)"
+	insert into @tmp1
+	execute sp_executesql @cmd,N'@t_eydate nvarchar(10),@t_acc1 nvarchar(20)'
+	,@t_eydate=@t_eydate,@t_acc1=@t_acc1
+	--收票
+	declare @tmp2 table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		indate nvarchar(10),
+		gqbno nvarchar(20),
+		memo nvarchar(max),
+		[money] float
+	)
+	set @cmd=
+	" select isnull(b.accl,''),isnull(c.acc2,''),isnull(d.indate,''),a.checkno,isnull(d.memo,''),isnull(d.[money],0) "+
+	" from chk2s a"+
+	" left join chk2 b on a.noa=b.noa"+
+	" left join acc"+@t_accy+" c on b.accl=c.acc1 "+
+	" left join gqb d on a.checkno=d.gqbno"+
+	" where isnull(a.sel,0)=1 and (case when d.enda='Y' then d.enda else 'N' end)!='Y' "+
+	" and (ISNULL(d.indate,'') <= @t_eydate)"+
+	" and (len(@t_acc1)=0 or @t_acc1=isnull(b.accl,''))"
+	insert into @tmp2
+	execute sp_executesql @cmd,N'@t_eydate nvarchar(10),@t_acc1 nvarchar(20)'
+	,@t_eydate=@t_eydate,@t_acc1=@t_acc1
+	
+	declare @tmp table(
+		sel int,
+		gno nvarchar(10),
+		pno nvarchar(10),
+		noa nvarchar(20),
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		datea nvarchar(10),
+		memo nvarchar(max),
+		dmoney float,
+		cmoney float,
+		total float
+	)
+	
+	insert into @tmp
+	select null,'0','1','',acc1,acc2,'','期初',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),0
+	from(
+		select acc1,acc2,dmoney,cmoney
+		from @tmp1 
+		where datea < right(@t_bydate,5)
+		union all
+		select acc1,acc2,[money],0
+		from @tmp2
+		where indate < @t_bydate) a
+	group by acc1,acc2
+	
+	insert into @tmp
+	select null,'0','2',accno,acc1,acc2,datea,memo,dmoney,cmoney,0
+	from @tmp1
+	where datea >= right(@t_bydate,5)
+	
+	insert into @tmp
+	select null,'0','3',gqbno,acc1,acc2,right(indate,5),'收票 '+memo,[money],0,0
+	from @tmp2
+	where indate >=@t_bydate
+	-------------------------------------------------------------------------------
+	insert into @tmp
+	select ROW_NUMBER()over(order by acc1,datea,pno),gno,pno,noa,acc1,acc2,datea,memo,dmoney,cmoney,total from @tmp
+	delete @tmp where sel is null
+	
+	declare @acc1 nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @dmoney float
+	declare @cmoney float
+	declare @total float
+	declare @sel int
+	
+	declare cursor_table cursor for
+	select acc1 from @tmp group by acc1
+	open cursor_table
+	fetch next from cursor_table
+	into @acc1
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @total = 0
+		declare cursor_table2 cursor for
+		select sel,noa,dmoney,cmoney from @tmp where acc1=@acc1 order by acc1,datea,pno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @sel,@noa,@dmoney,@cmoney
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @total = @total + @dmoney - @cmoney
+			update @tmp set total=@total where sel=@sel
+			
+			fetch next from cursor_table2
+			into @sel,@noa,@dmoney,@cmoney
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		fetch next from cursor_table
+		into @acc1
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmp
+	select null,'1','3','',acc1,acc2,char(255),'',0,0,0 from @tmp group by acc1,acc2
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(dmoney,0)),1)),4,12)) dm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(cmoney,0)),1)),4,12)) cm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(total,0)),1)),4,12)) tt
+	from @tmp 
+	order by acc1,datea,pno;
+
+z_gqb1:--z_gqb1
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_acc1 nvarchar(20)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_acc1 = case when '#non'=[16] then '' else [16] end
+	-------------------------------------------------------------------------------
+declare @string nvarchar(max) 
+declare @n int 
+declare @string2 nvarchar(max) 
+declare @n2 int 
+
+declare @stype table( 
+noa nvarchar(20), 
+typea nvarchar(20) 
+) 
+set @string = @c_typea 
+while(1=1) 
+begin 
+set @n = PATINDEX('%,%',@string) 
+if @n=0 
+begin 
+if LEN(@string)>0 
+begin 
+set @n2 = PATINDEX('%@%',@string) 
+insert into @stype select LEFT(@string,@n2-1),SUBSTRING(@string,@n2+1,len(@string)-@n2) 
+end 
+break 
+end 
+set @n2 = PATINDEX('%@%',@string) 
+set @string2 = LEFT(@string,@n-1) 
+insert into @stype select LEFT(@string2,@n2-1),SUBSTRING(@string2,@n2+1,len(@string2)-@n2) 
+set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n) 
+end 
+
+declare @tmp table( 
+gno nvarchar(1), 
+zz nvarchar(max), 
+noa nvarchar(20), 
+gqbno nvarchar(20), 
+datea nvarchar(10), 
+udate nvarchar(10), 
+indate nvarchar(10), 
+typea nvarchar(8), 
+tbk nvarchar(30), 
+bankno nvarchar(15), 
+bank nvarchar(30), 
+compno nvarchar(10), 
+comp nvarchar(40), 
+money decimal(14,2), 
+money1 decimal(14,2), 
+money2 decimal(14,2), 
+pcount1 int, 
+pcount2 int,
+memo nvarchar(max) 
+) 
+
+set @cmd = 
+" select '0' gno,"+@t_sort01+",noa,gqbno,datea,udate,indate,typea,tbank,bankno,bank,'',isnull(tcomp,'')+isnull(comp,''),[money]"+ 
+" , case when typea='1' then [money] else 0 end money1"+ 
+" , case when typea='2' then [money] else 0 end money2"+ 
+" , case when typea='1' then 1 else 0 end pcount1"+ 
+" , case when typea='2' then 1 else 0 end pcount2,memo"+ 
+" from gqb a"+ 
+" where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end) "+ 
+" and (isnull(datea,'') between @t_bdate and @t_edate) "+ 
+" and (isnull(indate,'') between @t_bindate and @t_eindate)"+ 
+" and (isnull(bankno,'') between @t_bbankno and @t_ebankno)"+ 
+" order by "+@t_sort01+",gqbno" 
+
+insert into @tmp 
+execute sp_executesql @cmd,N'@t_typea nvarchar(10),@t_status nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bindate nvarchar(10),@t_eindate nvarchar(10),@t_bbankno nvarchar(20),@t_ebankno nvarchar(20)' 
+,@t_typea=@t_typea,@t_status=@t_status,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bindate=@t_bindate,@t_eindate=@t_eindate,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno 
+-------------------------------------------------------------------------------------------------- 
+declare @zz nvarchar(max) 
+declare @money1 float 
+declare @money2 float 
+declare @pcount1 int 
+declare @pcount2 int 
+
+declare cursor_table cursor for 
+select zz,sum(isnull(money1,0)),sum(isnull(money2,0)),sum(isnull(pcount1,0)),sum(isnull(pcount2,0)) from @tmp group by zz 
+open cursor_table 
+fetch next from cursor_table 
+into @zz,@money1,@money2,@pcount1,@pcount2 
+while(@@FETCH_STATUS <> -1) 
+begin 
+insert into @tmp(gno,zz,gqbno,money1,money2,pcount1,pcount2)values('1',@zz,CHAR(255),@money1,@money2,@pcount1,@pcount2) 
+
+fetch next from cursor_table 
+into @zz,@money1,@money2,@pcount1,@pcount2 
+end 
+close cursor_table 
+deallocate cursor_table 
+
+select @money1=0,@money2=0,@pcount1=0,@pcount2=0 
+select @money1 = sum(isnull(money1,0)), @money2 = sum(isnull(money2,0)) 
+, @pcount1 = sum(isnull(pcount1,0)), @pcount2 = sum(isnull(pcount2,0)) from @tmp where gno='0' 
+
+insert into @tmp(gno,zz,money1,money2,pcount1,pcount2)values('2',CHAR(255),@money1,@money2,@pcount1,@pcount2) 
+
+select a.* 
+,b.typea cty 
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mm 
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1 
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2 
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pcount1),1)),4,12)) p1 
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pcount2),1)),4,12)) p2,memo 
+from @tmp a 
+left join @stype b on a.typea=b.noa 
+order by zz,gno,gqbno;
+	
+z_gqb3:--z_gqb3
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_acc1 nvarchar(20)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_acc1 = case when '#non'=[16] then '' else [16] end
+	-------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	declare @string2 nvarchar(max)
+	declare @n2 int 
+
+	declare @stype table(
+		noa nvarchar(20),
+		typea nvarchar(20)
+	)
+	set @string = @c_typea
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				set @n2 = PATINDEX('%@%',@string)
+				insert into @stype select LEFT(@string,@n2-1),SUBSTRING(@string,@n2+1,len(@string)-@n2)
+			end
+			break
+		end
+		set @n2 = PATINDEX('%@%',@string)
+		set @string2 = LEFT(@string,@n-1)
+		insert into @stype select LEFT(@string2,@n2-1),SUBSTRING(@string2,@n2+1,len(@string2)-@n2)
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	
+	declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(20),
+		gqbno nvarchar(20),
+		datea nvarchar(10),
+		udate nvarchar(10),
+		indate nvarchar(10),
+		tdate nvarchar(10),
+		typea nvarchar(8),
+		account nvarchar(20),
+		bankno nvarchar(15),
+		bank nvarchar(30),
+		tbankno nvarchar(8),
+		tbank nvarchar(40),
+		compno nvarchar(10),
+		comp nvarchar(40),
+		memo nvarchar(400),
+		[money] float,
+		pcount int
+	)
+	
+	insert into @tmp
+	select '0' gno,noa,gqbno,datea,udate,indate,tdate,typea
+	,account,bankno,bank,tbankno,tbank,compno,comp,memo,[money],1 pcount
+	from gqb
+	where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status= case when enda='Y' then enda else 'N' end) 
+		and (isnull(datea,'') between @t_bdate and @t_edate) 
+		and (isnull(indate,'') between @t_bindate and @t_eindate)
+		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
+		and typea = '1'	     
+	
+	declare @indate nvarchar(20)
+	declare @money float
+	declare @pcount int
+	
+	declare cursor_table cursor for
+	select indate,sum(isnull(money,0)),sum(isnull(pcount,0)) from @tmp group by indate
+	open cursor_table
+	fetch next from cursor_table
+	into @indate,@money,@pcount
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into @tmp(gno,indate,gqbno,[money],pcount)values('1',@indate,CHAR(255),@money,@pcount)
+		
+		fetch next from cursor_table
+		into @indate,@money,@pcount
+	end
+	close cursor_table
+	deallocate cursor_table    
+	
+	select @money=0,@pcount=0
+	select @money = sum(isnull([money],0)), @pcount = sum(isnull(pcount,0)) from @tmp where gno='0'
+	insert into @tmp(gno,indate,[money],pcount)values('2',CHAR(255),@money,@pcount)
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pcount),1)),4,12)) pp
+	from @tmp order by indate,gno,gqbno;
+
+z_gqb5:--z_gqb5	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_acc1 nvarchar(20)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_acc1 = case when '#non'=[16] then '' else [16] end
+	-------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	declare @string2 nvarchar(max)
+	declare @n2 int 
+
+	declare @stype table(
+		noa nvarchar(20),
+		typea nvarchar(20)
+	)
+	set @string = @c_typea
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				set @n2 = PATINDEX('%@%',@string)
+				insert into @stype select LEFT(@string,@n2-1),SUBSTRING(@string,@n2+1,len(@string)-@n2)
+			end
+			break
+		end
+		set @n2 = PATINDEX('%@%',@string)
+		set @string2 = LEFT(@string,@n-1)
+		insert into @stype select LEFT(@string2,@n2-1),SUBSTRING(@string2,@n2+1,len(@string2)-@n2)
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	
+	declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(20),
+		gqbno nvarchar(20),
+		datea nvarchar(10),
+		udate nvarchar(10),
+		indate nvarchar(10),
+		tdate nvarchar(10),
+		typea nvarchar(8),
+		account nvarchar(20),
+		bankno nvarchar(15),
+		bank nvarchar(30),
+		tbankno nvarchar(15),
+		tbank nvarchar(30),
+		compno nvarchar(10),
+		comp nvarchar(40),
+		memo nvarchar(50),
+		[money] float,
+		money1 float,
+		money2 float,
+		pcount1 int,
+		pcount2 int
+	)
+	
+	insert into @tmp
+	select '0' gno,noa,gqbno,datea,udate,indate,tdate,typea,account,bankno,bank,tbankno,tbank,compno,comp,memo
+		,isnull([money],0)
+		,case when typea ='1' then isnull([money],0) else 0 end money1
+		,case when typea ='3' then isnull([money],0) else 0 end money2
+		,case when typea ='1' then 1 else 0 end pcount1
+		,case when typea ='3' then 1 else 0 end pcount2
+	from gqb
+	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)
+	      and (isnull(datea,'') between @t_bdate and @t_edate) 
+		and (isnull(indate,'') between @t_bindate and @t_eindate)
+		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
+	    and  (typea ='1' or typea ='3')
+	order by compno,gno,datea,noa
+	-----------------------------------------------------------------
+	declare @compno nvarchar(20)
+	declare @money1 float
+	declare @money2 float
+	declare @pcount1 int
+	declare @pcount2 int
+	
+	declare cursor_table cursor for
+	select compno,sum(money1),sum(money2),sum(pcount1),sum(pcount2) from @tmp group by compno
+	open cursor_table
+	fetch next from cursor_table
+	into @compno,@money1,@money2,@pcount1,@pcount2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+		values('1',@compno,CHAR(255),@money1-@money2,@money1,@money2,@pcount1,@pcount2)
+		
+		fetch next from cursor_table
+		into @compno,@money1,@money2,@pcount1,@pcount2
+	end
+	close cursor_table
+	deallocate cursor_table    
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m0
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2
+	,pcount1 p1
+	,pcount2 p2
+	from @tmp order by compno,gno,datea,gqbno;
+		
+
+z_gqb6:--z_gab6
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_acc1 nvarchar(20)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_acc1 = case when '#non'=[16] then '' else [16] end
+	-------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	declare @string2 nvarchar(max)
+	declare @n2 int 
+
+	declare @stype table(
+		noa nvarchar(20),
+		typea nvarchar(20)
+	)
+	set @string = @c_typea
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				set @n2 = PATINDEX('%@%',@string)
+				insert into @stype select LEFT(@string,@n2-1),SUBSTRING(@string,@n2+1,len(@string)-@n2)
+			end
+			break
+		end
+		set @n2 = PATINDEX('%@%',@string)
+		set @string2 = LEFT(@string,@n-1)
+		insert into @stype select LEFT(@string2,@n2-1),SUBSTRING(@string2,@n2+1,len(@string2)-@n2)
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	
+	declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(20),
+		gqbno nvarchar(20),
+		datea nvarchar(10),
+		udate nvarchar(10),
+		indate nvarchar(10),
+		tdate nvarchar(10),
+		typea nvarchar(8),
+		account nvarchar(20),
+		bankno nvarchar(15),
+		bank nvarchar(30),
+		tbankno nvarchar(15),
+		tbank nvarchar(30),
+		compno nvarchar(10),
+		comp nvarchar(40),
+		memo nvarchar(50),
+		[money] float,
+		money1 float,
+		money2 float,
+		pcount1 int,
+		pcount2 int
+	)
+	
+	insert into @tmp 
+select '0' gno,a.noa,a.gqbno,a.datea,a.udate,a.indate,a.tdate,a.typea,a.account,a.bankno,a.bank,a.tbankno,a.tbank
+,a.compno,case when len(b.nick)>0 then b.nick else left(a.comp,4) end,a.memo 
+,isnull(a.money,0) 
+,case when typea ='2' then isnull(a.money,0) else 0 end money1 
+,case when typea ='4' then isnull(a.money,0) else 0 end money2 
+,case when typea ='2' then 1 else 0 end pcount1 
+,case when typea ='4' then 1 else 0 end pcount2 
+from gqb a
+left join view_cust_tgg b on a.compno = b.noa
+where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) and 
+(isnull(a.datea,0) between @t_bdate and @t_edate) and (isnull(a.indate,0) between @t_bindate and @t_eindate) and
+ (isnull(a.bankno,0) between @t_bbankno and @t_ebankno) and 
+(a.typea ='2' or a.typea ='4') 
+order by a.compno,gno,a.datea,a.noa 
+	-----------------------------------------------------------------
+	declare @compno nvarchar(20)
+	declare @money1 float
+	declare @money2 float
+	declare @pcount1 int
+	declare @pcount2 int
+	
+	declare cursor_table cursor for
+	select compno,sum(money1),sum(money2),sum(pcount1),sum(pcount2) from @tmp group by compno
+	open cursor_table
+	fetch next from cursor_table
+	into @compno,@money1,@money2,@pcount1,@pcount2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+		values('1',@compno,CHAR(255),@money1-@money2,@money1,@money2,@pcount1,@pcount2)
+		
+		fetch next from cursor_table
+		into @compno,@money1,@money2,@pcount1,@pcount2
+	end
+	close cursor_table
+	deallocate cursor_table    
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m0
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2
+	,pcount1 p1
+	,pcount2 p2
+	from @tmp order by compno,gno,datea,gqbno;
+
+z_gqb8:--z_gqb8開票明細表
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_acc1 nvarchar(20)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_acc1 = case when '#non'=[16] then '' else [16] end
+	-------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	declare @string2 nvarchar(max)
+	declare @n2 int 
+
+	declare @stype table(
+		noa nvarchar(20),
+		typea nvarchar(20)
+	)
+	set @string = @c_typea
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				set @n2 = PATINDEX('%@%',@string)
+				insert into @stype select LEFT(@string,@n2-1),SUBSTRING(@string,@n2+1,len(@string)-@n2)
+			end
+			break
+		end
+		set @n2 = PATINDEX('%@%',@string)
+		set @string2 = LEFT(@string,@n-1)
+		insert into @stype select LEFT(@string2,@n2-1),SUBSTRING(@string2,@n2+1,len(@string2)-@n2)
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	declare @tmp table(
+			gno nvarchar(1),
+			n nvarchar(10),
+			noa nvarchar(30),
+			gqbno nvarchar(20),
+			bank nvarchar(max),
+			account nvarchar(max),
+			indate nvarchar(10),
+			moneys int,
+			memo nvarchar(max)
+	)
+	insert into @tmp
+	select '0' gno,RANK()over(order by gqbno ) as n,noa,gqbno,bank,account,indate,money,
+	case when LEN(left(memo,CHARINDEX(' ',memo)))=0 and len(SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))) = 0 then tcomp 
+		 when len(isnull(tcomp,'')) = 0 then memo
+		 when LEN(left(memo,CHARINDEX(' ',memo)))>0 or len(SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))) > 0 then 
+			(case when tcomp=left(memo,CHARINDEX(' ',memo)) and tcomp = SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp
+			      when len(left(memo,CHARINDEX(' ',memo))) = 0 then (case when tcomp = SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp else tcomp+SPACE(1)+SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))end)
+			      when len(SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))) = 0 then (case when tcomp=left(memo,CHARINDEX(' ',memo)) then tcomp else tcomp+SPACE(1)+left(memo,CHARINDEX(' ',memo)) end) 
+				  when tcomp = left(memo,CHARINDEX(' ',memo)) and tcomp != SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp + SPACE(1) + SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo))
+				  when tcomp != left(memo,CHARINDEX(' ',memo)) and tcomp = SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)) then tcomp + SPACE(1) + left(memo,CHARINDEX(' ',memo))
+			 else (tcomp+SPACE(1)+left(memo,CHARINDEX(' ',memo))+SPACE(1)+SUBSTRING(memo,CHARINDEX(' ',memo)+1,len(memo)))
+			      end
+			 )
+			 end
+		  
+	from gqb
+	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end) 
+		and (isnull(datea,'') between @t_bdate and @t_edate) 
+		and (isnull(indate,'') between @t_bindate and @t_eindate)
+		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
+		and (ISNULL(gqbno,'') between @t_bgqbno and @t_egqbno)
+		and (typea = '2' or typea='4')
+-------------------------------------------------------------------------------------
+	insert into @tmp
+	select '1' gno,'','','','','','',sum(moneys),''
+	from @tmp
+	
+	if len(@t_bdate)>0
+		set @cmd='開票日期：'+@t_bdate+'～'+@t_edate
+	else if len(@t_bindate)>0
+		set @cmd='到期日期：'+@t_bindate+'～'+@t_eindate
+	else
+		set @cmd=''
+	select @cmd titlea,gno,n,noa,gqbno,bank,account,indate,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) moneys,memo
+	from @tmp;
+----------------------------------------------------------------------------------------------------------
+z_gqb9:--z_gqb9票據收票明細
+declare @t_bxchkdate nvarchar(20) 
+declare @t_exchkdate nvarchar(20) 
+declare @t_xbcno nvarchar(20) 
+declare @t_xecno nvarchar(20) 
+set @t_bxchkdate = case when '#non' = [17] then '' else [17] end 
+set @t_exchkdate = case when '#non' = [18] then CHAR(255) else [18] end 
+set @t_xbcno = case when '#non' = [19] then '' else [19] end 
+set @t_xecno = case when '#non' = [20] then CHAR(255) else [20] end 
+declare @tmpa table( 
+		gno nvarchar(1), 
+		noa nvarchar(20), 
+		cno nvarchar(20), 
+		tbank nvarchar(30), 
+		accoun2 nvarchar(50), 
+		acomp nvarchar(50), 
+		gqbno nvarchar(20), 
+		account nvarchar(50), 
+		bank nvarchar(50), 
+		datea nvarchar(10), 
+		indate nvarchar(20), 
+		[money] int 
+) 
+insert into @tmpa 
+select '0' gno,a.noa,a.cno,a.bank,a.account,a.acomp,b.checkno,b.account,b.bank,a.datea,b.datea,b.money 
+from chk2 a 
+left join chk2s b on a.noa = b.noa 
+where (a.datea between @t_bxchkdate and @t_exchkdate) and 
+(a.cno between @t_xbcno and @t_xecno)and (b.ins = '1')
+order by a.datea 
+
+declare @tmp table( 
+	gno nvarchar(1), 
+	noa nvarchar(20), 
+	cno nvarchar(20), 
+	acomp nvarchar(90),
+	tbank2 nvarchar(50), 
+	tbank nvarchar(50), 
+	accoun2 nvarchar(50), 
+	a nvarchar(3),----申請日期_年 
+	b nvarchar(2),----申請日期_月 
+	c nvarchar(2),----申請日期_日 
+	d nvarchar(50),----付款行 
+	e nvarchar(50),----發票人帳號 
+	f nvarchar(50),----票據號碼 
+	g nvarchar(3),----到期日_年 
+	h nvarchar(2),----到期日_月 
+	i nvarchar(2),----到期日_日 
+	j nvarchar(30),----票面金額拾 
+	k nvarchar(30),----票面金額億 
+	l nvarchar(30),----票面金額仟 
+	m nvarchar(30),----票面金額佰 
+	n nvarchar(30),----票面金額十 
+	o nvarchar(30),----票面金額萬 
+	p nvarchar(30),----票面金額千 
+	q nvarchar(30),----票面金額百 
+	r nvarchar(30),----票面金額十 
+	s nvarchar(30),----票面金額元 
+	t nvarchar(1),-----撤票或領回退票年 
+	u nvarchar(1),-----撤票或領回退票月 
+	v nvarchar(1),-----撤票或領回退票日 
+	[money] int ,
+	indate nvarchar(10)
+) 
+insert into @tmp 
+select gno,noa,cno,acomp,tbank,case substring(tbank,1,charindex('-',tbank)-1) when '合庫' then '合庫-南高雄' when '國泰世華' then '世華-苓雅' end tbank,accoun2, 
+substring(datea,1, charindex('/', datea)-1) a, 
+substring(datea, charindex('/', datea)+1,2) b, 
+case when substring(RIGHT(datea,2),1,1) = '0' then SUBSTRING(RIGHT(datea,2),2,1) else RIGHT(datea,2) end c, 
+bank,account,gqbno,LEFT(indate,3) g, 
+substring(indate, charindex('/', indate)+1,2) h, 
+case when substring(RIGHT(indate,2),1,1) = '0' then SUBSTRING(RIGHT(indate,2),2,1) else RIGHT(indate,2) end i, 
+case when money >= 1000000000 then LEFT(money,1) else '-' end, 
+case when money >= 100000000 then left(RIGHT(money,9),1) else '-' end, 
+case when money >= 10000000 then left(RIGHT(money,8),1) else '-' end, 
+case when money >= 1000000 then left(RIGHT(money,7),1) else '-' end, 
+case when money >= 100000 then left(RIGHT(money,6),1) else '-' end, 
+case when money >= 10000 then left(RIGHT(money,5),1) else '-' end, 
+case when money >= 1000 then left(RIGHT(money,4),1) else '-' end, 
+case when money >= 100 then left(RIGHT(money,3),1) else '-' end, 
+case when money >= 10 then left(RIGHT(money,2),1) else '-' end, 
+case when money >= 1 then right(money,1) else '-' end, 
+'','','',money,indate
+from @tmpa 
+
+insert into @tmp 
+select '1' gno,'',cno,acomp,tbank2,'',accoun2,'','','','','','','','','','','','','','','','','','','','','','',0,char(255)
+from @tmp 
+group by cno,acomp,tbank2,accoun2 
+
+--要改要問
+select * from @tmp order by cno,acomp,indate,tbank2,accoun2,gno;
