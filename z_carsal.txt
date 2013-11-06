@@ -1,4 +1,5 @@
 z_carsal5:--z_carsal5	
+	SET QUOTED_IDENTIFIER OFF
 	declare @t_accy nvarchar(20)
 	declare @t_mon nvarchar(10)
 	declare @t_bdriverno nvarchar(20)
@@ -59,11 +60,141 @@ z_carsal5:--z_carsal5
 	select '1',CHAR(255),'','','',SUM(ISNULL(plus,0)),SUM(ISNULL(minus,0)),'' 
 	from @tmp 
 	where gno='0' 
+	-------------------------------------------------------------------------------------
+	declare @tmp2 table(
+		recno float,
+		gno nvarchar(10),
+		driverno nvarchar(20),
+		driver nvarchar(40),
+		datea nvarchar(10),
+		item nvarchar(max),
+		plus float,
+		minus float,
+		memo nvarchar(max),
+		cplus nvarchar(max),
+		cminus nvarchar(max)
+	)
+	declare @recno float
+	declare @gno nvarchar(10)
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(40)
+	declare @datea nvarchar(10)
+	declare @item nvarchar(20)
+	declare @plus float
+	declare @minus float
+	declare @memo nvarchar(max)
+	declare @cplus nvarchar(max)
+	declare @cminus nvarchar(max)
 
-	select * 
+	declare @tString table(
+		recno float,
+		item nvarchar(max),
+		memo nvarchar(max)
+	)
+	declare @tmpString nvarchar(max)
+	declare @maxcount1 int
+	declare @maxcount2 int
+	set @maxcount1 = 20
+	set @maxcount2 = 30
+	declare @n int
+	declare @string nvarchar(max)
+	declare @tmprecno float
+	declare @ttrecno float
+	
+	declare cursor_table cursor for
+	select row_number()over(order by driverno,gno,datea) 
+	,gno,driverno,driver,datea,item,plus,minus,memo
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plus),1)),4,12)) cplus 
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minus),1)),4,12)) cminus 
-	from @tmp order by driverno,gno,datea ;
+	from @tmp --where driverno='SD25' and datea='102/09/08' 
+	order by driverno,gno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@gno,@driverno,@driver,@datea,@item,@plus,@minus,@memo,@cplus,@cminus
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		delete @tString
+		set @tmpString = ''
+		set @string = @item
+		set @tmprecno = @recno
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = isnull(@tmpString,'') + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount1)
+			begin
+				insert into @tString(recno,item)values(@tmprecno,@tmpString)
+				set @tmprecno = @tmprecno + 0.001
+				set @n = 0
+				set @tmpString = ""
+			end		
+		end
+		set @string = @memo
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = isnull(@tmpString,'') + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount2)
+			begin
+				if exists(select * from @tString where memo is null)
+				begin
+					select top 1 @tmprecno=recno from @tString where memo is null
+					update @tString set memo=@tmpString where recno=@recno
+				end
+				else
+				begin
+					set @tmprecno = @tmprecno + 0.001
+					insert into @tString(recno,memo)values(@tmprecno,@tmpString)
+				end
+				set @n = 0
+				set @tmpString = ""
+			end		
+		end
+		-------------------------------------------------------
+		if(LEN(@item)>0 or LEN(@memo)>0)
+		begin
+			select @ttrecno = Max(recno) from @tstring
+			declare cursor_table2 cursor for
+			select recno,item,memo from @tstring
+			open cursor_table2
+			fetch next from cursor_table2
+			into @tmpRecno,@string,@tmpString
+			while(@@FETCH_STATUS <> -1)
+			begin		
+				if(@recno=@tmprecno)
+				begin
+					insert into @tmp2(recno,gno,driverno,driver,datea,item,plus,minus,memo,cplus,cminus)
+					select @tmpRecno,case when @recno=@ttrecno then '2' else '3' end
+						,@driverno,@driver,@datea,@string,@plus,@minus,@tmpString,@cplus,@cminus
+				end
+				else
+				begin
+					insert into @tmp2(recno,gno,driverno,driver,datea,item,plus,minus,memo,cplus,cminus)
+					select @tmpRecno,case when @tmprecno=@ttrecno then '5' else '4' end
+					,@driverno,@driver,@datea,@string,0,0,@tmpString,'',''
+				end
+				fetch next from cursor_table2
+				into @tmpRecno,@string,@tmpString
+			end
+			close cursor_table2
+			deallocate cursor_table2
+		end
+		else
+		begin
+			insert into @tmp2(recno,gno,driverno,driver,datea,item,plus,minus,memo,cplus,cminus)
+			select @recno,case when @gno='1' then '1' else '2'end
+				,@driverno,@driver,@datea,@item,@plus,@minus,@memo,@cplus,@cminus
+		end
+	
+		fetch next from cursor_table
+		into @recno,@gno,@driverno,@driver,@datea,@item,@plus,@minus,@memo,@cplus,@cminus
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * from @tmp2 ;
 
 z_carsal1:--z_carsal1	
 	declare @t_accy nvarchar(20)
