@@ -18,61 +18,86 @@ declare @t_bsmon nvarchar(10)
 declare @t_esmon nvarchar(10)
 set @t_bsmon = case when '#non' = [3] then '' else [3] end
 set @t_esmon = case when '#non' = [4] then '' else [4] end
-declare @tmp table( 
+
+declare @tmpa table( 
 	gno nvarchar(1), 
 	custno nvarchar(20), 
-	comp nvarchar(max),
-	addr nvarchar(max),
-	zipcode nvarchar(15), 
+	comp nvarchar(50), 
 	money float, 
 	total float, 
-	payed float, 
-	popay float,
-	opay float,
-	unopay float
+	payed float,
+	addr nvarchar(max), 
+	zipcode nvarchar(15)
 ) 
 
-insert into @tmp
-select '0'gno,a.noa,a.comp,a.addr_home,a.zip_home
-	--前期
-	--trd
-	,isnull((select SUM(unpay) from view_trd102 where custno=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) < @t_bsmon),0)
-	--vcc
-	+isnull((select SUM(unpay) from view_vcc102 where (case when custno2!='' then custno2 else custno end)=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) < @t_bsmon and (left(kind,4)!='健勞勞退')),0)
-	-isnull((select sum(paysale) from umms where len(vccno)>8 and right(vccno,6)<@t_bsmon and left(vccno,len(vccno)-7)=a.noa),0)
-	--cara
-	+isnull((select outmoney-inmoney from cara ca left join caras cb on ca.noa=cb.noa where ca.carownerno=a.noa and ca.mon=@t_bsmon and cb.caritemno='001'),0)
-	money
-	--本期
-	--trd
-	,isnull((select SUM(total) from view_trd102 where custno=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) between @t_bsmon and @t_esmon),0)
-	--vcc
-	+isnull((select SUM(total) from view_vcc102 where (case when custno2!='' then custno2 else custno end)=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) between @t_bsmon and @t_esmon and (left(kind,4)!='健勞勞退')),0)
-	--cara
-	+isnull((select outmoney from cara ca left join caras cb on ca.noa=cb.noa where ca.carownerno=a.noa and ca.mon between @t_bsmon and @t_esmon and cb.caritemno!='001'),0)
-	total
-	--trd
-	,isnull((select SUM(payed) from view_trd102 where custno=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) between @t_bsmon and @t_esmon),0)
-	--vcc
-	+isnull((select SUM(payed) from view_vcc102 where (case when custno2!='' then custno2 else custno end)=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) between @t_bsmon and @t_esmon and (left(kind,4)!='健勞勞退')),0)
-	+isnull((select sum(paysale) from umms where len(vccno)>8 and right(vccno,6) between @t_bsmon and @t_esmon and left(vccno,len(vccno)-7)=a.noa),0)
-	--cara
-	+isnull((select inmoney from cara ca left join caras cb on ca.noa=cb.noa where ca.carownerno=a.noa and ca.mon between @t_bsmon and @t_esmon and cb.caritemno!='001'),0)
-	payed
-	--前期預收
-	,isnull((select SUM(opay-unopay) from umm where custno=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) < @t_bsmon),0) popay
-	--本期預收
-	,isnull((select SUM(opay)  from umm where custno=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) between @t_bsmon and @t_esmon),0) opay
-	--本期預收沖帳
-	,isnull((select SUM(unopay)  from umm where custno=a.noa and (case when len(mon)=0 then left(datea,6) else mon end) between @t_bsmon and @t_esmon),0) unopay
-from (select noa,comp,addr_home,zip_home from cust union all select noa,namea,addr_home,zip_home from carOwner)a
-delete @tmp where money=0 and total=0 and payed=0
+--前期
+insert into @tmpa (gno,custno,money,total,payed)
+select '9',custno,SUM(money),0,0 from (
+	--trd 
+	select aa.custno,SUM(isnull(unpay,0)) money from view_trd[1] aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) < @t_bsmon group by  aa.custno
+	union all
+	--vcc 
+	select (case when aa.custno2!='' then aa.custno2 else aa.custno end) custno
+	,SUM(isnull((case when aa.typea='1' then 1 else -1 end)*unpay,0))-isnull((select sum(ub.paysale) from umms ub left join umm ua on ub.noa=ua.noa where len(vccno)>8 and right(vccno,6)<@t_bsmon and left(vccno,len(vccno)-7)=(case when aa.custno2!='' then aa.custno2 else aa.custno end)),0) 
+	from view_vcc[1] aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) < @t_bsmon and (left(kind,4)!='健勞勞退') 
+	group by (case when aa.custno2!='' then aa.custno2 else aa.custno end) 
+	union all
+	--cara 
+	select ca.carownerno,outmoney-inmoney from cara ca left join caras cb on ca.noa=cb.noa where ca.mon=@t_bsmon and cb.caritemno='001'
+)tmp group by custno
+
+--本期
+
+insert into @tmpa (gno,custno,money,total,payed)
+select '9',custno,0,SUM(total),0 from (
+	--trd 
+	select aa.custno,SUM(isnull(total,0)) total from view_trd[1] aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) between @t_bsmon and @t_esmon group by  aa.custno
+	union all
+	--vcc 
+	select (case when aa.custno2!='' then aa.custno2 else aa.custno end) custno
+	,SUM(isnull((case when aa.typea='1' then 1 else -1 end)*total,0))
+	from view_vcc[1] aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) between @t_bsmon and @t_esmon and (left(kind,4)!='健勞勞退') 
+	group by (case when aa.custno2!='' then aa.custno2 else aa.custno end) 
+	union all
+	--cara 
+	select ca.carownerno,sum(outmoney) from cara ca left join caras cb on ca.noa=cb.noa where ca.mon between @t_bsmon and @t_esmon and cb.caritemno!='001' group by ca.carownerno
+)tmp group by custno
+
+--本期已付
+insert into @tmpa (gno,custno,money,total,payed)
+select '9',custno,0,0,SUM(payed) from (
+	--trd 
+	select aa.custno,SUM(isnull(payed,0)) payed from view_trd[1] aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) between @t_bsmon and @t_esmon group by  aa.custno
+	union all
+	--vcc 
+	select (case when aa.custno2!='' then aa.custno2 else aa.custno end) custno
+	,SUM(isnull((case when aa.typea='1' then 1 else -1 end)*payed,0))
+	+isnull((select sum(ub.paysale) from umms ub left join umm ua on ub.noa=ua.noa where len(vccno)>8 and right(vccno,6) between @t_bsmon and @t_esmon and left(vccno,len(vccno)-7)=(case when aa.custno2!='' then aa.custno2 else aa.custno end)),0) 
+	from view_vcc[1] aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) between @t_bsmon and @t_esmon and (left(kind,4)!='健勞勞退') 
+	group by (case when aa.custno2!='' then aa.custno2 else aa.custno end)
+	union all
+	--cara 
+	select ca.carownerno,sum(inmoney) from cara ca left join caras cb on ca.noa=cb.noa where ca.mon between @t_bsmon and @t_esmon and cb.caritemno!='001' group by ca.carownerno
+)tmp group by custno
+
+insert into @tmpa (gno,custno,money,total,payed)
+select '0',custno,SUM(money),SUM(total),SUM(payed) from @tmpa group by custno
+
+delete @tmpa where gno='9'
+
+delete @tmpa where money=0 and total=0 and payed=0 
+
+update @tmpa
+set comp=(select nick from cust where noa=custno union select namea from carOwner where noa=custno union select namea from sss where noa=custno)
+,addr=(select top 1 addr_home from ((select addr_home from cust where noa=custno union select addr_home from carOwner where noa=custno union select addr_home from sss where noa=custno))tmp)
+,zipcode=(select top 1 zip_home from ((select zip_home from cust where noa=custno union select zip_home from carOwner where noa=custno union select '' from sss where noa=custno))tmp)
+
 select 
-	'0' gno,a.custno,a.comp,
-	SUBSTRING(a.zipcode,1,1) z1,
-	SUBSTRING(a.zipcode,2,1) z2,
-	SUBSTRING(a.zipcode,3,1) z3,
-	SUBSTRING(a.zipcode,4,1) z4,
-	SUBSTRING(a.zipcode,5,1) z5,
-	a.addr
-from @tmp a where isnull((money+total-payed),0) > 0;
+'0' gno,a.custno,a.comp, 
+SUBSTRING(a.zipcode,1,1) z1, 
+SUBSTRING(a.zipcode,2,1) z2, 
+SUBSTRING(a.zipcode,3,1) z3, 
+SUBSTRING(a.zipcode,4,1) z4, 
+SUBSTRING(a.zipcode,5,1) z5, 
+a.addr 
+from @tmpa a where isnull((money+total-payed),0) > 0 ;
