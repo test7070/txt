@@ -69,7 +69,7 @@ z_ucca1:--z_ucca1
 			set @t_mount=0
 		
 			set @totmount=
-			--isnull((select beginmount from ucca where noa=@productno),0)	+
+			isnull((select beginmount from uccas where noa=@productno and cno=@cno),0)	+
 			(isnull((select sum(mount)mount from vccas where cno=@cno and productno=@productno and datea<@t_bdate),0)-
 			isnull((select sum(mount)mount from rc2as where cno=@cno and productno=@productno and datea<@t_bdate),0))
 		end
@@ -143,8 +143,11 @@ declare @tmp table(
 ) 
 
 --期初抓inas 
---insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
---select '0','',noa,product,unit,beginmount,beginmoney,0,0,0,0 from ucca
+insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
+select '9','',a.noa,a.product,a.unit,b.beginmount,b.beginmoney,0,0,0,0 
+from ucca a left join uccas b on a.noa=b.noa
+where a.noa between @t_bproductno and @t_eproductno
+and CHARINDEX(b.cno,@t_cno)>0
 
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
 select '9', a.cno,b.productno,b.product,b.unit,-1*b.mount,-1*b.money ,0,0,0,0
@@ -252,6 +255,12 @@ declare @tmp table(
 	unit nvarchar(10),
 	mount float 
 ) 
+--期初
+insert into @tmp (gno,cno,pno,product,unit,mount) 
+select '9', b.cno,a.noa,a.product,a.unit,b.beginmount
+from ucca a left join uccas b on a.noa=b.noa 
+where a.noa between @t_bproductno and @t_eproductno
+and CHARINDEX(b.cno,@t_cno)>0
 
 insert into @tmp (gno,cno,pno,product,unit,mount) 
 select '9', a.cno,b.productno,b.product,b.unit,-1*b.mount
@@ -278,4 +287,93 @@ select '1',cno from @tmp group by cno
 select 
 gno,cno,(select nick from acomp where noa=a.cno) acomp,pno,product,unit
 ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(mount,0)),1)),4,12)) mount
+from @tmp a order by cno,gno,pno;
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+z_ucca4:--z_ucca4
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	declare @t_cno nvarchar(50)
+	declare @t_enddate nvarchar(50)
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[6] then '' else [6] end
+	set @t_cno = case when '#non'=[7] then '' else [7] end
+	set @t_enddate = case when '#non'=[8] then '' else [8] end
+	
+	--*****************************************************************************************	
+declare @tmp table( 
+	gno nvarchar(1),
+	cno nvarchar(50),
+	pno nvarchar(50),
+	vcc_mount float,
+	vcc_money float,
+	invo_mount float,
+	invo_money float,
+	uninvo_mount float,
+	uninvo_money float,
+	vcc4_mount float
+) 
+
+insert @tmp(gno,cno,pno,vcc_mount,vcc_money)
+select '9',a.cno,b.productno,sum((case when a.typea='1' then 1 else -1 end)*b.mount)
+,sum((case when a.typea='1' then 1 else -1 end)*b.total)
+from vcc[1] a left join vccs[1] b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate 
+and b.productno between @t_bproductno and @t_eproductno
+and CHARINDEX(a.cno,@t_cno)>0
+group by a.cno,b.productno
+
+insert @tmp(gno,cno,pno,vcc4_mount)
+select '9',a.cno,b.productno,sum((case when a.typea='1' then 1 else -1 end)*b.mount)
+from vcc[1] a left join vccs[1] b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate 
+and b.productno between @t_bproductno and @t_eproductno
+and CHARINDEX(a.cno,@t_cno)>0 and a.stype='4'
+group by a.cno,b.productno
+
+insert @tmp(gno,cno,pno,invo_mount,invo_money)
+select '9',a.cno,c.nou,sum(b.mount),sum(b.money)
+from vcca a left join vccas b on a.noa=b.noa 
+left join ucca c on b.productno=c.noa 
+where a.noa in(
+	select a.invono from vcc[1] a left join vccs[1] b on a.noa=b.noa
+	where a.datea between @t_bdate and @t_edate and b.productno between @t_bproductno and @t_eproductno
+	and CHARINDEX(a.cno,@t_cno)>0 group by a.invono
+)
+group by a.cno,c.nou
+
+insert @tmp(gno,cno,pno,vcc_mount,vcc_money,invo_mount,invo_money,vcc4_mount)
+select '0',cno,pno,sum(vcc_mount),sum(vcc_money),sum(invo_mount),sum(invo_money),sum(vcc4_mount)
+from @tmp
+group by cno,pno
+
+delete @tmp where gno='9'
+
+update @tmp
+set uninvo_money=isnull(vcc_money,0)-isnull(invo_money,0),
+uninvo_mount=isnull(vcc_mount,0)-isnull(invo_mount,0)
+
+insert @tmp
+select '1',cno,'',sum(round(vcc_mount,0)),sum(round(vcc_money,0))
+,sum(round(invo_mount,0)),sum(round(invo_money,0))
+,sum(round(uninvo_mount,0)),sum(round(uninvo_money,0)),sum(round(vcc4_mount,0)) from @tmp
+group by cno
+
+
+select gno,cno,(select nick from acomp where noa=a.cno)acomp,
+pno,(select product from ucc where noa=a.pno)product
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcc_mount,0)),1)),4,12)) vcc_mount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcc_money,0)),1)),4,12)) vcc_money
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(invo_mount,0)),1)),4,12)) invo_mount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(invo_money,0)),1)),4,12)) invo_money
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(uninvo_mount,0)),1)),4,12)) uninvo_mount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(uninvo_money,0)),1)),4,12)) uninvo_money
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcc4_mount,0)),1)),4,12)) vcc4_mount
 from @tmp a order by cno,gno,pno;
