@@ -1066,3 +1066,52 @@ print 'bbm+bbs+bbt:'
 		set @cmdt = "create view view_"+@table+'t'+ CHAR(13)+"as" + CHAR(13) + @cmdt
 		execute sp_executesql @cmdt
 	end
+	
+--============================================================================================
+print 'other:'
+	print 'view_transstatus'
+	delete @tmp
+	insert into @tmp(tablea,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'trans','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'trans[0-9][0-9][0-9]'
+	
+	declare cursor_table cursor for
+	select tablea,accy from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_trds'+@accy)
+		begin
+			
+			if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_tres'+@accy)
+			begin
+				if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_transstatus'+@accy)
+				begin
+					set @cmd = "drop view view_transstatus"+@accy
+					execute sp_executesql @cmd
+				end
+				set @cmd = "create view view_transstatus"+@accy
+				+CHAR(13)+"as"
+				+CHAR(13)+SPACE(4)+"select case when b.noa is null then 0 else 1 end istrd"
+				+CHAR(13)+SPACE(4)+SPACE(4)+",case when c.noa is null then 0 else 1 end istre"
+				+CHAR(13)+SPACE(4)+SPACE(4)+",case when (e.noa is not null) and d.isoutside=0 and f.lock=1 then 1 else 0 end iscarsal"
+				+CHAR(13)+SPACE(4)+SPACE(4)+",a.*"
+				+CHAR(13)+SPACE(4)+"from "+@tablea+" a"
+				+CHAR(13)+SPACE(4)+"left join view_trds"+@accy+" b on a.noa=b.tranno and a.noq=b.trannoq"
+				+CHAR(13)+SPACE(4)+"left join view_tres"+@accy+" c on a.noa=c.tranno and a.noq=c.trannoq"
+				+CHAR(13)+SPACE(4)+"left join calctypes d on a.calctype = d.noa+d.noq"
+				+CHAR(13)+SPACE(4)+"left join carsals e on e.noa=LEFT(a.datea,6) and a.driverno=e.driverno"
+				+CHAR(13)+SPACE(4)+"left join carsal f on e.noa=f.noa"
+				execute sp_executesql @cmd
+			end
+		end
+
+		fetch next from cursor_table
+		into @tablea,@accy
+	end
+	close cursor_table
+	deallocate cursor_table
