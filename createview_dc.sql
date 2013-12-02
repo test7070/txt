@@ -941,7 +941,7 @@ print 'bbm+bbs:'
 print 'bbm+bbs+bbt:'
 	--tranorde
 	set @table = 'tranorde'
-	print space(4)+@table
+	print space(4)+@table+'  view_tranordeXXX不一樣須注意需在transvcce後'
 	delete @tmp
 	insert into @tmp(tablea,tableas,tableat,accy)
 	SELECT TABLE_NAME 
@@ -980,6 +980,7 @@ print 'bbm+bbs+bbt:'
 		--
 		set @cmd = @cmd + case when LEN(@cmd)=0 then '' else CHAR(13)+ space(4)+'union all'+CHAR(13) end
 			+ space(4)+"select '"+@accy+"' accy,* from "+@tablea
+		
 		--s
 		set @cmds = @cmds + case when LEN(@cmds)=0 then '' else CHAR(13)+ space(4)+'union all'+CHAR(13) end
 			+ space(4)+"select '"+@accy+"' accy,* from "+@tableas
@@ -992,20 +993,18 @@ print 'bbm+bbs+bbt:'
 			set @cmdaccy = "drop view view_"+@table+@accy
 			execute sp_executesql @cmdaccy
 		end
-		set @cmdaccy = ''
-		set @accy2 = right('000'+CAST(@accy as int)-1,3)
-		if exists(select * from @tmp where accy=@accy2)
+		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_transvcce'+@accy)
 		begin
-			set @cmdaccy = space(4)+"select '"+@accy2+"' accy,* from "+@table+@accy2
+			set @cmdaccy = "create view view_"+@tablea 
+				+char(13) + "as" 
+				+char(13) + SPACE(4)+"select '"+@accy+"' accy,isnull(b.mount,0) vccecount,a.*" 
+				+char(13) + SPACE(4)+"from "+@tablea+" a "
+				+char(13) + SPACE(4)+"left join ("
+				+char(13) + SPACE(4)+SPACE(4)+"select ordeno,SUM(ISNULL(mount,0)) mount"
+				+char(13) + SPACE(4)+SPACE(4)+"from view_transvcce"+@accy+" group by ordeno"
+				+char(13) + SPACE(4)+") b on a.noa=b.ordeno"
+			execute sp_executesql @cmdaccy 
 		end
-		set @cmdaccy = @cmdaccy + case when len(@cmdaccy)>0 then CHAR(13)+ space(4)+'union all'+CHAR(13) else '' end +SPACE(4)+"select '"+@accy+"' accy,* from "+@tablea
-		set @accy2 = right('000'+CAST(@accy as int)+1,3)
-		if exists(select * from @tmp where accy=@accy2)
-		begin
-			set @cmdaccy = @cmdaccy + CHAR(13)+ space(4)+'union all'+CHAR(13)+space(4)+"select '"+@accy2+"' accy,* from "+@table+@accy2
-		end
-		set @cmdaccy = "create view view_"+@table+@accy+ CHAR(13)+"as" + CHAR(13) + @cmdaccy	
-		execute sp_executesql @cmdaccy 
 		--accys
 		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_'+@table+'s'+@accy)
 		begin
