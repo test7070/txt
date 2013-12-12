@@ -171,6 +171,7 @@ z_pay02:--z_pay02
 	set @t_btggno = case when '#non' = [6] then '' else [6] end
 	set @t_etggno = case when '#non' = [7] then CHAR(255) else [7] end
 	---------------------------------------------------------------------------------
+	---------------------------------------------------------------------------------
 	declare @tmp1 table(
 		tggno nvarchar(20),
 		mon nvarchar(10),--帳款月份	
@@ -210,6 +211,15 @@ z_pay02:--z_pay02
 		unpay float
 	)
 	
+	
+	declare @tmp6 table(--物料
+		tggno nvarchar(20),
+		mon nvarchar(10),--帳款月份	
+		[money] float,
+		tax float,
+		total float
+	)
+	
 	insert into @tmp1(tggno,mon,[money],tax,total)
 	select tggno,mon
 	,SUM(case when typea='1' then ISNULL([money],0) else -ISNULL([money],0) end)
@@ -230,36 +240,55 @@ z_pay02:--z_pay02
 	insert into @tmp3(tggno,mon,paysale)
 	select case when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]%' then SUBSTRING(a.rc2no,0,charindex('-',a.rc2no)) 
 		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(c.tggno,''))>0 then c.tggno
+		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(d.tggno,''))>0 then d.tggno
 		else b.tggno end
 	,case when len(ISNULL(a.rc2no,''))=0 then '' 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]-TAX' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6) 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6)
-		else isnull(c.mon,'') end
+		when isnull(c.mon,'')>0 then isnull(c.mon,'')
+		else isnull(d.mon,'') end
 	,SUM(ISNULL(a.paysale,0))
 	from pays a
 	left join pay b on a.noa=b.noa
 	left join view_rc2 c on a.accy=c.accy and a.rc2no=c.noa
+	left join bccin d on a.rc2no=d.noa
 	where b.noa is not null
 	and ISNULL(a.paysale,0)!=0
-	and case when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]%' then SUBSTRING(a.rc2no,0,charindex('-',a.rc2no)) 
-		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(c.tggno,''))>0 then c.tggno
-		else b.tggno end between @t_btggno and @t_etggno
 	and case when len(ISNULL(a.rc2no,''))=0 then '' 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]-TAX' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6) 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6)
-		else isnull(c.mon,'') end <= @t_emon
+		when isnull(c.mon,'')>0 then isnull(c.mon,'')
+		else isnull(d.mon,'') end <= @t_emon
 	group by case when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]%' then SUBSTRING(a.rc2no,0,charindex('-',a.rc2no)) 
 		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(c.tggno,''))>0 then c.tggno
+		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(d.tggno,''))>0 then d.tggno
 		else b.tggno end
-		,case when len(ISNULL(a.rc2no,''))=0 then '' 
+	,case when len(ISNULL(a.rc2no,''))=0 then '' 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]-TAX' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6) 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6)
-		else isnull(c.mon,'') end
+		when isnull(c.mon,'')>0 then isnull(c.mon,'')
+		else isnull(d.mon,'') end
 	
+	insert into @tmp6(tggno,mon,[money],tax,total)
+	select tggno,mon
+	,SUM(case when typea='1' then ISNULL([money],0) else -ISNULL([money],0) end)
+	,SUM(case when typea='1' then ISNULL([tax],0) else -ISNULL([tax],0) end)
+	,SUM(case when typea='1' then ISNULL([total],0) else -ISNULL([total],0) end)
+	from bccin
+	where tggno between @t_btggno and @t_etggno
+	and mon<=@t_emon
+	group by tggno,mon
 	---------------------------------------------------------------------------------------
 	insert into @tmp4(tggno,mon,[money],tax)
 	select tggno,mon,[money],tax from @tmp1
+	---------------------------------------------------------------------------------------
+	update @tmp4 set [money] = isnull(a.[money],0) + isnull(b.[money],0),tax = isnull(a.tax,0) + isnull(b.tax,0)
+	from @tmp4 a
+	left join @tmp6 b on a.tggno=b.tggno and a.mon=b.mon
 	
+	insert into @tmp4(tggno,mon,[money],tax)
+	select tggno,mon,[money],tax from @tmp6 a
+	where not exists(select * from @tmp4 where tggno=a.tggno and mon=a.mon)
 	---------------------------------------------------------------------------------------
 	update @tmp4 set tax = isnull(a.tax,0) + isnull(b.tax,0)
 	from @tmp4 a
@@ -386,29 +415,52 @@ z_pay03:--z_pay03
 	insert into @tmp3(tggno,mon,paysale)
 	select case when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]%' then SUBSTRING(a.rc2no,0,charindex('-',a.rc2no)) 
 		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(c.tggno,''))>0 then c.tggno
+		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(d.tggno,''))>0 then d.tggno
 		else b.tggno end
 	,case when len(ISNULL(a.rc2no,''))=0 then '' 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]-TAX' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6) 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6)
-		else isnull(c.mon,'') end
+		when isnull(c.mon,'')>0 then isnull(c.mon,'')
+		else isnull(d.mon,'') end
 	,SUM(ISNULL(a.paysale,0))
 	from pays a
 	left join pay b on a.noa=b.noa
 	left join view_rc2 c on a.accy=c.accy and a.rc2no=c.noa
+	left join bccin d on a.rc2no=d.noa
 	where b.noa is not null
 	and ISNULL(a.paysale,0)!=0
 	and case when len(ISNULL(a.rc2no,''))=0 then '' 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]-TAX' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6) 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6)
-		else isnull(c.mon,'') end <= @t_emon
+		when isnull(c.mon,'')>0 then isnull(c.mon,'')
+		else isnull(d.mon,'') end <= @t_emon
 	group by case when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]%' then SUBSTRING(a.rc2no,0,charindex('-',a.rc2no)) 
 		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(c.tggno,''))>0 then c.tggno
+		when len(ISNULL(a.rc2no,''))=0 and len(ISNULL(d.tggno,''))>0 then d.tggno
 		else b.tggno end
-		,case when len(ISNULL(a.rc2no,''))=0 then '' 
+	,case when len(ISNULL(a.rc2no,''))=0 then '' 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]-TAX' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6) 
 		when a.rc2no like '%-[0-9][0-9][0-9]/[0-9][0-9]' then SUBSTRING(a.rc2no,charindex('-',a.rc2no)+1,6)
-		else isnull(c.mon,'') end
+		when isnull(c.mon,'')>0 then isnull(c.mon,'')
+		else isnull(d.mon,'') end
 	delete @tmp3 where not(tggno between @t_btggno and @t_etggno)
+	
+	declare @tmp4 table(
+		tggno nvarchar(20),
+		mon nvarchar(10),
+		[money] float,
+		bkmoney float,
+		tax float
+	)
+	insert into @tmp4(tggno,mon,[money],bkmoney,tax)
+	select tggno,mon
+	,SUM(case when typea='1' then ISNULL([money],0) else 0 end)
+	,SUM(case when typea!='1' then ISNULL([money],0) else 0 end)
+	,SUM(case when typea='1' then ISNULL([tax],0) else -ISNULL([tax],0) end)
+	from bccin
+	where tggno between @t_btggno and @t_etggno
+	and mon <= @t_emon
+	group by tggno,mon
 	--------------------------------------------------------------------------------------------------
 	declare @tmp table(
 		tggno nvarchar(20),
@@ -425,7 +477,18 @@ z_pay03:--z_pay03
 	from @tmp1
 	where mon between @t_bmon and @t_emon
 	group by tggno
+	---------------------------------------------------------------------------------------
+	update @tmp set [money] = isnull(a.[money],0) + isnull(b.[money],0)
+		,[bkmoney] = isnull(a.[bkmoney],0) + isnull(b.[bkmoney],0)
+		,tax = isnull(a.tax,0) + isnull(b.tax,0)
+	from @tmp a
+	right join @tmp4 b on a.tggno=b.tggno and b.mon between @t_bmon and @t_emon
 	
+	insert into @tmp(tggno,[money],bkmoney,tax)
+	select tggno,[money],bkmoney,tax
+	from @tmp4 a
+	where not exists(select * from @tmp where tggno=a.tggno)
+	and a.mon between @t_bmon and @t_emon
 	---------------------------------------------------------------------------------------
 	update @tmp set tax = ISNULL(a.tax,0)+ISNULL(b.tax,0)
 	from @tmp a
@@ -451,7 +514,6 @@ z_pay03:--z_pay03
 	and a.mon between @t_bmon and @t_emon
 	------------------------------------------------------------------------------------------
 	--unpay
-	
 	update @tmp set unpay = ISNULL(a.unpay,0)+ISNULL(b.unpay,0)
 	from @tmp a
 	right join (select tggno ,SUM(ISNULL([money],0)-ISNULL(bkmoney,0)+isnull(tax,0)) unpay
@@ -468,6 +530,20 @@ z_pay03:--z_pay03
 	where not exists(select * from @tmp where tggno=a.tggno)
 	and ISNULL(a.unpay,0)!=0
 	
+	update @tmp set unpay = ISNULL(a.unpay,0)+ISNULL(b.unpay,0)
+	from @tmp a
+	right join (select tggno ,SUM(ISNULL([money],0)-ISNULL(bkmoney,0)+isnull(tax,0)) unpay
+		from @tmp4
+		where mon<@t_bmon
+		group by tggno) b on a.tggno=b.tggno
+	insert into @tmp(tggno,[money],bkmoney,tax,total,payed,unpay)
+	select a.tggno,0,0,0,0,0,a.unpay
+	from (select tggno ,SUM(ISNULL([money],0)-ISNULL(bkmoney,0)+isnull(tax,0)) unpay
+		from @tmp4
+		where mon<@t_bmon
+		group by tggno) a
+	where not exists(select * from @tmp where tggno=a.tggno)
+	and ISNULL(a.unpay,0)!=0
 	
 	update @tmp set unpay = ISNULL(a.unpay,0)+ISNULL(b.unpay,0)
 	from @tmp a
@@ -557,6 +633,7 @@ z_pay03:--z_pay03
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if exists(select top 1 * from @tmp1 where tggno=@tggno and mon between @t_bmon and @t_emon)
+		or exists(select top 1 * from @tmp4 where tggno=@tggno and mon between @t_bmon and @t_emon)
 		begin
 			insert into @result(gno,pno,tggno
 				,typea,datea,rc2no,productno,product,csize,unit,[weight],mount,price,moneys)
@@ -571,6 +648,21 @@ z_pay03:--z_pay03
 			,b.total
 			from view_rc2 a
 			left join view_rc2s b on a.noa=b.noa
+			where a.tggno=@tggno 
+			and a.mon between @t_bmon and @t_emon
+			order by a.datea,a.noa,b.noq
+			
+			insert into @result(gno,pno,tggno
+				,typea,datea,rc2no,productno,product,csize,unit,[weight],mount,price,moneys)
+			select '1','1',@tggno
+			,case when a.typea='1' then '物' else '退' end
+			,a.datea,a.noa,b.bccno,b.bccname,'',b.unit
+			,null
+			,b.mount 
+			,b.price
+			,b.total
+			from bccin a
+			left join bccins b on a.noa=b.noa
 			where a.tggno=@tggno 
 			and a.mon between @t_bmon and @t_emon
 			order by a.datea,a.noa,b.noq
