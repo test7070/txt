@@ -61,7 +61,7 @@ select 'rc2',ra.datea,rb.productno,rb.storeno
 ,(case when ra.typea='1' then 1 else -1 end)*rb.total/(case when ra.taxtype='3' then 1.05 else 1 end) 
 from view_rc2[1] ra left join view_rc2s[1] rb on ra.noa=rb.noa where
 rb.storeno+'_'+rb.productno in(select storeno+'_'+pno from @tmpa where tablea='ucce')
-and ra.datea<@t_bdate and ra.datea>(select datea from @tmpa where pno=rb.productno and storeno=rb.storeno and tablea='ucce')
+and ra.datea<@t_bdate and ra.datea>=(select datea from @tmpa where pno=rb.productno and storeno=rb.storeno and tablea='ucce')
 and rb.productno!=''
 
 insert @tmpa
@@ -69,14 +69,10 @@ select 'vcc',va.datea,vb.productno,vb.storeno
 ,(case when va.typea='1' then 1 else -1 end)*vb.mount
 ,(case when va.typea='1' then 1 else -1 end)*vb.weight
 ,(case when va.typea='1' then 1 else -1 end)*vb.mount*
-isnull((select sum(total)/sum(mount) from 
-(select datea,productno,(case when typea='1' then 1 else -1 end) * mount mount,
-(case when typea='1' then 1 else -1 end) * total total from view_rc2s[1]
-union all select datea,productno,mount,total from view_ucces[1])tmp 
-where productno=vb.productno and datea <=va.datea),0)
+isnull((select price from view_costs where productno=vb.productno and mon=left(va.datea,6)),0) 
 from view_vcc[1] va left join view_vccs[1] vb on va.noa=vb.noa where
 vb.storeno+'_'+vb.productno in(select storeno+'_'+pno from @tmpa where tablea='ucce')
-and va.datea<@t_bdate and va.datea>(select datea from @tmpa where pno=vb.productno and storeno=vb.storeno and tablea='ucce')
+and va.datea<@t_bdate and va.datea>=(select datea from @tmpa where pno=vb.productno and storeno=vb.storeno and tablea='ucce')
 and vb.productno!=''
 
 --無盤點-插入資料起始日之前的資料
@@ -94,14 +90,44 @@ select 'vcc',va.datea,vb.productno,vb.storeno
 ,(case when va.typea='1' then 1 else -1 end)*vb.mount
 ,(case when va.typea='1' then 1 else -1 end)*vb.weight
 ,(case when va.typea='1' then 1 else -1 end)*vb.mount*
-isnull((select sum(total)/sum(mount) from 
-(select datea,productno,(case when typea='1' then 1 else -1 end) * mount mount,
-(case when typea='1' then 1 else -1 end) * total total from view_rc2s[1]
-union all select datea,productno,mount,total from view_ucces[1])tmp 
-where productno=vb.productno and datea <=va.datea),0)
+isnull((select price from view_costs where productno=vb.productno and mon=left(va.datea,6)),0) 
 from view_vcc[1] va left join view_vccs[1] vb on va.noa=vb.noa where
 vb.storeno+'_'+vb.productno not in(select storeno+'_'+pno from @tmpa where tablea='ucce')
 and va.datea<@t_bdate and vb.productno!=''
+
+declare @pno nvarchar(90)
+declare @MAXMON nvarchar(50)
+declare @MINMON nvarchar(50)
+declare cursor_table cursor for
+--檢查每個月數量為0 則清空金額
+select pno,MAX(LEFT(datea,6)),MIN(LEFT(datea,6)) from @tmpa group by pno
+open cursor_table
+fetch next from cursor_table
+into @pno,@MAXMON,@MINMON
+while(@@FETCH_STATUS <> -1)
+begin
+	while (@MINMON<=@MAXMON)
+	begin
+		if(select sum((case when tablea='vcc' then -1 else 1 end)*mount) mount
+		from @tmpa where pno=@pno and left(datea,6)<=@MINMON)=0
+		begin
+			update @tmpa
+			set money=0
+			where pno=@pno and left(datea,6)<=@MINMON
+		end
+		
+		
+		set @MINMON=cast(cast(LEFT(@MINMON,3)as int)+1911 as nvarchar(20))+'/'+right(@MINMON,2)+'/01'
+		set @MINMON=CONVERT (VARCHAR(7),DATEADD(m,+1,@MINMON),12 )+0890000
+		set @MINMON=left(@MINMON,3)+'/'+substring(@MINMON,4,2)
+		
+	end
+	
+	fetch next from cursor_table
+	into @pno,@MAXMON,@MINMON
+end
+close cursor_table
+deallocate cursor_table
 
 --插入期初庫存
 insert into @tmp(gno,pno,product,unit,bmount,bweight,bmoney)
@@ -199,11 +225,13 @@ set a.rcmount=isnull((select rmount from @tmpr where pno=a.pno),0)
 ,a.vcmoney=isnull((select vmoney from @tmpv where pno=a.pno),0)
 from @tmp a
 
+update @tmp set bmoney=0 where bmount<=0
+update @tmp set bmoney=0 where bmoney<=0
 
 --計算成本
 update @tmp
 set vccost=
-case when bmount+rcmount=0 then 0 else ((bmoney+rcmoney)/(bmount+rcmount))*vcmount end
+case when bmount+rcmount=0 then 0 else round((bmoney+rcmoney)/(bmount+rcmount),2)*vcmount end
 
 --毛利率
 update @tmp
@@ -212,9 +240,10 @@ set profit=case when vcmoney=0 then 0 else ((vcmoney-vccost)/vcmoney)*100 end
 --期末
 update @tmp
 set lmount=bmount+rcmount-vcmount,lweight=bweight+rcweight-vcweight
-,lmoney=case when (bmount+rcmount-vcmount)=0 then 0 else bmoney+rcmoney-vccost end
-update @tmp
-set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+,lmoney=case when (bmount+rcmount-vcmount)<=0 then 0 else bmoney+rcmoney-vccost end
+
+update @tmp set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+update @tmp set lmoney=0 where lprice<=0
 
 delete @tmp
 where bmount=0 and bmoney=0 and rcmount=0 and rcmoney=0 and vcmount=0 and vcmoney=0 and vccost=0 --and bweight=0 and rcweight=0 and vcweight=0
