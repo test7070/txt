@@ -939,9 +939,9 @@ print 'bbm+bbs:'
 	end
 --============================================================================================
 print 'bbm+bbs+bbt:'
-	--tranorde
+	----------------------------------------------
 	set @table = 'tranorde'
-	print space(4)+@table+'  view_tranordeXXX不一樣,須注意需在transvcce後,view_tranordesXXX也不一樣'
+	print space(4)+@table
 	delete @tmp
 	insert into @tmp(tablea,tableas,tableat,accy)
 	SELECT TABLE_NAME 
@@ -980,7 +980,6 @@ print 'bbm+bbs+bbt:'
 		--
 		set @cmd = @cmd + case when LEN(@cmd)=0 then '' else CHAR(13)+ space(4)+'union all'+CHAR(13) end
 			+ space(4)+"select '"+@accy+"' accy,* from "+@tablea
-		
 		--s
 		set @cmds = @cmds + case when LEN(@cmds)=0 then '' else CHAR(13)+ space(4)+'union all'+CHAR(13) end
 			+ space(4)+"select '"+@accy+"' accy,* from "+@tableas
@@ -993,18 +992,20 @@ print 'bbm+bbs+bbt:'
 			set @cmdaccy = "drop view view_"+@table+@accy
 			execute sp_executesql @cmdaccy
 		end
-		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_transvcce'+@accy)
+		set @cmdaccy = ''
+		set @accy2 = right('000'+CAST(@accy as int)-1,3)
+		if exists(select * from @tmp where accy=@accy2)
 		begin
-			set @cmdaccy = "create view view_"+@tablea 
-				+char(13) + "as" 
-				+char(13) + SPACE(4)+"select '"+@accy+"' accy,isnull(b.mount,0) vccecount,a.*" 
-				+char(13) + SPACE(4)+"from "+@tablea+" a "
-				+char(13) + SPACE(4)+"left join ("
-				+char(13) + SPACE(4)+SPACE(4)+"select ordeno,SUM(ISNULL(mount,0)) mount"
-				+char(13) + SPACE(4)+SPACE(4)+"from view_transvcce"+@accy+" group by ordeno"
-				+char(13) + SPACE(4)+") b on a.noa=b.ordeno"
-			execute sp_executesql @cmdaccy 
+			set @cmdaccy = space(4)+"select '"+@accy2+"' accy,* from "+@table+@accy2
 		end
+		set @cmdaccy = @cmdaccy + case when len(@cmdaccy)>0 then CHAR(13)+ space(4)+'union all'+CHAR(13) else '' end +SPACE(4)+"select '"+@accy+"' accy,* from "+@tablea
+		set @accy2 = right('000'+CAST(@accy as int)+1,3)
+		if exists(select * from @tmp where accy=@accy2)
+		begin
+			set @cmdaccy = @cmdaccy + CHAR(13)+ space(4)+'union all'+CHAR(13)+space(4)+"select '"+@accy2+"' accy,* from "+@table+@accy2
+		end
+		set @cmdaccy = "create view view_"+@table+@accy+ CHAR(13)+"as" + CHAR(13) + @cmdaccy	
+		execute sp_executesql @cmdaccy 
 		--accys
 		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_'+@table+'s'+@accy)
 		begin
@@ -1015,13 +1016,13 @@ print 'bbm+bbs+bbt:'
 		set @accy2 = right('000'+CAST(@accy as int)-1,3)
 		if exists(select * from @tmp where accy=@accy2)
 		begin
-			set @cmdaccy = space(4)+"select '"+@accy2+"' accy,*,RIGHT(caseno,4) zcaseno from "+@table+'s'+@accy2
+			set @cmdaccy = space(4)+"select '"+@accy2+"' accy,* from "+@table+'s'+@accy2
 		end
-		set @cmdaccy = @cmdaccy + case when len(@cmdaccy)>0 then CHAR(13)+ space(4)+'union all'+CHAR(13) else '' end +SPACE(4)+"select '"+@accy+"' accy,*,RIGHT(caseno,4) zcaseno from "+@tableas
+		set @cmdaccy = @cmdaccy + case when len(@cmdaccy)>0 then CHAR(13)+ space(4)+'union all'+CHAR(13) else '' end +SPACE(4)+"select '"+@accy+"' accy,* from "+@tableas
 		set @accy2 = right('000'+CAST(@accy as int)+1,3)
 		if exists(select * from @tmp where accy=@accy2)
 		begin
-			set @cmdaccy = @cmdaccy + CHAR(13)+ space(4)+'union all'+CHAR(13)+space(4)+"select '"+@accy2+"' accy,*,RIGHT(caseno,4) zcaseno from "+@table+'s'+@accy2
+			set @cmdaccy = @cmdaccy + CHAR(13)+ space(4)+'union all'+CHAR(13)+space(4)+"select '"+@accy2+"' accy,* from "+@table+'s'+@accy2
 		end
 		set @cmdaccy = "create view view_"+@table+'s'+@accy+ CHAR(13)+"as" + CHAR(13) + @cmdaccy
 		execute sp_executesql @cmdaccy 
@@ -1066,7 +1067,6 @@ print 'bbm+bbs+bbt:'
 		set @cmdt = "create view view_"+@table+'t'+ CHAR(13)+"as" + CHAR(13) + @cmdt
 		execute sp_executesql @cmdt
 	end
-	
 --============================================================================================
 print 'other:'
 	print 'view_transstatus'
@@ -1115,3 +1115,92 @@ print 'other:'
 	end
 	close cursor_table
 	deallocate cursor_table
+	
+	--view_tranorde_dc
+	print 'view_tranorde_dc'
+	delete @tmp
+	insert into @tmp(tablea,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'tranorde','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'tranorde[0-9][0-9][0-9]'
+	
+	declare cursor_table cursor for
+	select tablea,accy from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_tranorde'+@accy)
+		begin
+			
+			if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_transvcce'+@accy)
+			begin
+				if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_tranorde_dc'+@accy)
+				begin
+					set @cmd = "drop view view_tranorde_dc"+@accy
+					execute sp_executesql @cmd
+				end
+				set @cmd = "create view view_tranorde_dc"+@accy
+				+char(13) + "as" 
+				+char(13) + SPACE(4)+"select isnull(b.mount,0) vccecount,a.*" 
+				+char(13) + SPACE(4)+"from view_"+@tablea+" a "
+				+char(13) + SPACE(4)+"left join ("
+				+char(13) + SPACE(4)+SPACE(4)+"select ordeno,SUM(ISNULL(mount,0)) mount"
+				+char(13) + SPACE(4)+SPACE(4)+"from view_transvcce"+@accy+" group by ordeno"
+				+char(13) + SPACE(4)+") b on a.noa=b.ordeno"
+				execute sp_executesql @cmd
+			end
+		end
+
+		fetch next from cursor_table
+		into @tablea,@accy
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--view_tranorde_ef
+	print 'view_tranorde_ef'
+	delete @tmp
+	insert into @tmp(tablea,accy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'tranorde','')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'tranorde[0-9][0-9][0-9]'
+	
+	declare cursor_table cursor for
+	select tablea,accy from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_tranorde'+@accy)
+		begin
+			
+			if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_trans'+@accy)
+			begin
+				if exists(select * from INFORMATION_SCHEMA.VIEWS where TABLE_NAME='view_tranorde_ef'+@accy)
+				begin
+					set @cmd = "drop view view_tranorde_ef"+@accy
+					execute sp_executesql @cmd
+				end
+				set @cmd = "create view view_tranorde_ef"+@accy
+				+char(13) + "as" 
+				+char(13) + SPACE(4)+"select isnull(b.mount,0) vccecount,a.*" 
+				+char(13) + SPACE(4)+"from view_"+@tablea+" a "
+				+char(13) + SPACE(4)+"left join ("
+				+char(13) + SPACE(4)+SPACE(4)+"select ordeno,SUM(ISNULL(mount,0)) mount"
+				+char(13) + SPACE(4)+SPACE(4)+"from view_trans"+@accy+" group by ordeno"
+				+char(13) + SPACE(4)+") b on a.noa=b.ordeno"
+				execute sp_executesql @cmd
+			end
+		end
+
+		fetch next from cursor_table
+		into @tablea,@accy
+	end
+	close cursor_table
+	deallocate cursor_table
+	
