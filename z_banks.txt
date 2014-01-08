@@ -1,0 +1,92 @@
+z_banks01:--z_banks01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then char(255) else [2] end
+	set @t_bacc1 = case when '#non'=[3] then '' else [3] end
+	set @t_eacc1 = case when '#non'=[4] then char(255) else [4] end
+	----------------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and LEFT(@t_edate,3))
+	----------------------------------------------------------------------------------------------　						
+	declare @tmp table(
+		gno nvarchar(10),
+		accy nvarchar(10),
+		acc1 nvarchar(20),--銀行名稱
+		acc2 nvarchar(max),
+		
+		money1 float,--昨日餘額
+		money2 float,--存入金額
+		money3 float,--提領金額
+		money4 float,--本期結餘
+		money5 float,--銀行調節
+		money6 float --可用餘額
+	)
+	----------------------------------------------------------------------------------------------	
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @tableacc nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),replace(tablea,'accc','acc'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@tableacc,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select '1',@accy"+
+		" ,case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end"+
+		" ,c.acc2"+
+		" ,SUM(case when left(a.accc5,4)='1112' and @yy+'/'+b.accc2 < @t_bdate then a.dmoney-a.cmoney else 0 end) money1"+
+		" ,SUM(case when left(a.accc5,4)='1112' and @yy+'/'+b.accc2 >= @t_bdate then a.dmoney else 0 end) money2"+
+		" ,SUM(case when left(a.accc5,4)='1112' and @yy+'/'+b.accc2 >= @t_bdate then a.cmoney else 0 end) money3"+
+		" ,SUM(case when left(a.accc5,4)='1112' then a.dmoney-a.cmoney else 0 end) money4"+
+		" ,SUM(case when left(a.accc5,4)='1117' then a.dmoney-a.cmoney else 0 end) money5"+
+		" ,SUM(a.dmoney-a.cmoney) money6"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join "+@tableacc+" c on case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end=c.acc1"+
+		" where @yy+'/'+b.accc2 <= @t_edate"+
+		" and (left(a.accc5,4)='1112' or left(a.accc5,4)='1117')"+
+		" and (case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end between @t_bacc1 and @t_eacc1)"+
+		" group by case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end,c.acc2"
+		
+		insert into @tmp(gno,accy,acc1,acc2,money1,money2,money3,money4,money5,money6)
+		execute sp_executesql @cmd,N'@accy nvarchar(10),@yy nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@accy=@accy,@yy=@yy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@tableacc,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) mm1	
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) mm2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money3),1)),4,12)) mm3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money4),1)),4,12)) mm4
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money5),1)),4,12)) mm5
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money6),1)),4,12)) mm6
+	from @tmp order by accy,acc1;
+	
