@@ -1,0 +1,148 @@
+z_banktmp01:--z_banktmp01	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	declare @t_datea nvarchar(10)
+	
+	set @t_bacc1=case when '#non'=[1] then '' else [1] end 
+	set @t_eacc1=case when '#non'=[2] then char(255) else [2] end 
+	set @t_datea=case when '#non'=[3] then '' else [3] end 
+	---------------------------------------------------------------------------------------
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%' 
+
+	delete @listaccc where yy != LEFT(@t_datea,3)
+	---------------------------------------------------------------------------------------
+	declare @tmp table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		money1 float, --banktmp
+		money2 float, --acccs
+		money3 float  --1112 、 1117
+	)
+	
+	declare @tmpa table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		[money] float
+	)
+	
+	declare @tmpb table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		[money] float
+	)
+	
+	declare @tmpc table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		[money] float
+	)
+	----------------------------------------------------------------------------------------------	
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @tableacc nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),replace(tablea,'accc','acc'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@tableacc,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @cmd =
+		" select "+
+		" case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end"+
+		" ,c.acc2"+
+		" ,SUM(a.dmoney-a.cmoney)"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join "+@tableacc+" c on case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end=c.acc1"+
+		" where @yy+'/'+b.accc2 <= @t_datea"+
+		" and (left(a.accc5,4)='1112' or left(a.accc5,4)='1117')"+
+		" and case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end between @t_bacc1 and @t_eacc1"+
+		" group by case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end,c.acc2"
+		
+		insert into @tmpa(acc1,acc2,[money])
+		execute sp_executesql @cmd,N'@accy nvarchar(10),@yy nvarchar(10),@t_datea nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@accy=@accy,@yy=@yy,@t_datea=@t_datea,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		
+		--------------------------------------------------------------------------------------------------
+		set @cmd =
+		" select "+
+		" a.accc5,c.acc2"+
+		" ,SUM(a.dmoney-a.cmoney)"+
+		" from "+@tableas+" a"+
+		" left join "+@tablea+" b on a.accc3=b.accc3"+
+		" left join "+@tableacc+" c on case when left(a.accc5,4)='1117' then substring(a.accc5,6,4)+'.'+substring(a.accc5,10,len(a.accc5)-9) else a.accc5 end=c.acc1"+
+		" where @yy+'/'+b.accc2 <= @t_datea"+
+		" and left(a.accc5,4)='1112' "+
+		" and a.accc5 between @t_bacc1 and @t_eacc1"+
+		" group by a.accc5,c.acc2"
+		
+		insert into @tmpb(acc1,acc2,[money])
+		execute sp_executesql @cmd,N'@accy nvarchar(10),@yy nvarchar(10),@t_datea nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@accy=@accy,@yy=@yy,@t_datea=@t_datea,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		-----------------------------------------------------------------------------------------------------
+		set @cmd =
+		" select a.acc1,a.acc2,a.money3"+
+		" from("+
+		" 	select ROW_NUMBER()over(partition by c.acc1 order by a.datea desc,a.noa desc,a.noq desc) recno"+
+		" 	,c.acc1,d.acc2,a.money3"+
+		" 	from banktmps a"+
+		" 	left join banktmp b on a.noa=b.noa"+
+		" 	left join bank c on b.bankno=c.noa"+
+		" 	left join "+@tableacc+" d on c.acc1=d.acc1"+
+		" 	where a.datea<=@t_datea and c.acc1 between @t_bacc1 and @t_eacc1)a"+
+		" where a.recno = 1"
+		
+		insert into @tmpc(acc1,acc2,[money])
+		execute sp_executesql @cmd,N'@accy nvarchar(10),@yy nvarchar(10),@t_datea nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20)'
+		,@accy=@accy,@yy=@yy,@t_datea=@t_datea,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@tableacc,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------------------
+	insert into @tmp(acc1,acc2,money3)
+	select acc1,acc2,[money] from @tmpa
+	
+	-------------------------------------------------------------
+	update @tmp set money2=b.[money]
+	from @tmp a
+	right join @tmpb b on a.acc1=b.acc1
+	insert into @tmp(acc1,acc2,money2)
+	select a.acc1,a.acc2,a.[money]
+	from @tmpb a
+	outer apply (select * from @tmp where acc1=a.acc1) b
+	where b.acc1 is null
+	--------------------------------------------------------------
+	update @tmp set money1=b.[money]
+	from @tmp a
+	left join @tmpc b on a.acc1=b.acc1
+	insert into @tmp(acc1,acc2,money2)
+	select a.acc1,a.acc2,a.[money]
+	from @tmpc a
+	outer apply (select * from @tmp where acc1=a.acc1) b
+	where b.acc1 is null
+	
+	select '1' gno,*
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) mm1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) mm2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money3),1)),4,12)) mm3
+	from @tmp order by acc1;
