@@ -41,6 +41,18 @@ z_ucca1:--z_ucca1
 		select '0'gno,ra.cno,ra.datea,ra.noa,rb.productno,rb.product,rb.unit,'進貨'typea ,ra.tggno,ra.comp,rb.mount,0 totmount
 		from rc2a ra left join rc2as rb on ra.noa=rb.noa
 		where (len(@t_cno)=0 or ra.cno=@t_cno) and (ra.datea between @t_bdate and @t_edate ) and (rb.productno between @t_bproductno and @t_eproductno)
+		
+		union all 
+		select '0'gno,ba.cno,ba.datea,ba.noa,bb.productno,bb.product,bb.unit,'銷貨退回'typea ,ba.tggno,ba.comp,bb.mount,0 totmount 
+		from vccb ba left join vccbs bb on ba.noa=bb.noa 
+		where (len(@t_cno)=0 or ba.cno=@t_cno) and (ba.datea between @t_bdate and @t_edate ) and (bb.productno between @t_bproductno and @t_eproductno) 
+		and ba.typea='1'
+		union all 
+		select '0'gno,ba.cno,ba.datea,ba.noa,bb.productno,bb.product,bb.unit,'進貨退回'typea ,ba.tggno,ba.comp,bb.mount,0 totmount 
+		from vccb ba left join vccbs bb on ba.noa=bb.noa 
+		where (len(@t_cno)=0 or ba.cno=@t_cno) and (ba.datea between @t_bdate and @t_edate ) and (bb.productno between @t_bproductno and @t_eproductno) 
+		and ba.typea='3'
+		
 	)tmp order by cno,productno,datea,noa,typea
 
 	declare @recno int
@@ -50,8 +62,8 @@ z_ucca1:--z_ucca1
 	declare @t_productno nvarchar(50)='ZZZZ#ZZZZ'
 	declare @typea nvarchar(50)
 	declare @mount float
-	declare @t_mount float
-	declare @totmount float
+	declare @t_mount float =0
+	declare @totmount float=0
 
 	declare cursor_table cursor for
 	select recno,cno,productno,typea,mount from @result order by recno
@@ -60,30 +72,52 @@ z_ucca1:--z_ucca1
 	into @recno,@cno,@productno,@typea,@mount
 	while(@@FETCH_STATUS <> -1)
 	begin
+		if (@t_productno='ZZZZ#ZZZZ') 
+		begin
+			set @t_mount=0
 		
-		if(@cno!=@t_xcno or @productno!=@t_productno)
+			set @totmount= 
+			isnull((select beginmount from uccas where noa=@productno and cno=@cno),0)	
+			+isnull((select sum(mount)mount from rc2as where cno=@cno and productno=@productno and datea<@t_bdate),0)
+			-isnull((select sum(mount)mount from vccas where cno=@cno and productno=@productno and datea<@t_bdate),0)
+			+isnull((select sum(case when a.typea='1' then 1* b.mount else -1* b.mount end) from vccb a left join vccbs b on a.noa=b.noa where a.cno=@cno and b.productno=@productno and a.datea<@t_bdate),0)
+		end
+		
+		if(@cno!=@t_xcno or @productno!=@t_productno) and  @t_productno!='ZZZZ#ZZZZ' 
 		begin
 			insert @result(gno,cno,productno,mount,totmount)
 			select '1',@t_xcno,@t_productno,@t_mount,@totmount
 			
 			set @t_mount=0
 		
-			set @totmount=
-			isnull((select beginmount from uccas where noa=@productno and cno=@cno),0)	+
-			(isnull((select sum(mount)mount from vccas where cno=@cno and productno=@productno and datea<@t_bdate),0)-
-			isnull((select sum(mount)mount from rc2as where cno=@cno and productno=@productno and datea<@t_bdate),0))
+			set @totmount= 
+			isnull((select beginmount from uccas where noa=@productno and cno=@cno),0)	
+			+isnull((select sum(mount)mount from rc2as where cno=@cno and productno=@productno and datea<@t_bdate),0)
+			-isnull((select sum(mount)mount from vccas where cno=@cno and productno=@productno and datea<@t_bdate),0)
+			+isnull((select sum(case when a.typea='1' then 1* b.mount else -1* b.mount end) from vccb a left join vccbs b on a.noa=b.noa where a.cno=@cno and b.productno=@productno and a.datea<@t_bdate),0)
+			
 		end
-		
-		set @t_mount=@t_mount+@mount
-		
+			
 		if @typea='銷貨'
 		begin
+			set @t_mount=@t_mount-@mount
 			set @totmount=@totmount-@mount
 		end
 		if @typea='進貨'
 		begin
+			set @t_mount=@t_mount+@mount
 			set @totmount=@totmount+@mount
 		end
+		if @typea='銷貨退回' 
+		begin 
+			set @t_mount=@t_mount+@mount
+			set @totmount=@totmount+@mount 
+		end 
+		if @typea='進貨退回' 
+		begin 
+			set @t_mount=@t_mount-@mount
+			set @totmount=@totmount-@mount 
+		end 
 		
 		update @result
 		set totmount=@totmount
@@ -98,6 +132,12 @@ z_ucca1:--z_ucca1
 	end
 	close cursor_table
 	deallocate cursor_table
+	
+	if (@t_productno!='ZZZZ#ZZZZ') 
+	begin
+		insert @result(gno,cno,productno,mount,totmount)
+		select '1',@t_xcno,@t_productno,@t_mount,@totmount
+	end
 
 	select gno,recno,cno,datea,noa,productno,products,unit,typea,custno,comp
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(mount,0)),1)),4,30)) mount
@@ -142,7 +182,7 @@ declare @tmp table(
 	lmoney float
 ) 
 
---期初抓inas 
+--期初抓ucca
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
 select '9',b.cno,a.noa,a.product,a.unit,b.beginmount,b.beginmoney,0,0,0,0 
 from ucca a left join uccas b on a.noa=b.noa
@@ -150,29 +190,49 @@ where a.noa between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or b.cno=@t_cno)
 
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
-select '9', a.cno,b.productno,b.product,b.unit,-1*b.mount,-1*b.money/(case when a.taxtype='3' then 1.05 else 1 end) ,0,0,0,0
+select '9', a.cno,b.productno,b.product,b.unit,-1*b.mount,-1*b.money ,0,0,0,0
 from vcca a left join vccas b on a.noa=b.noa 
 where a.datea < @t_bdate and b.productno between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or a.cno=@t_cno)
 
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
-select '9', a.cno,b.productno,b.product,b.unit,b.mount,b.money/(case when a.taxtype='3' then 1.05 else 1 end),0,0,0,0 
+select '9', a.cno,b.productno,b.product,b.unit,b.mount,b.money,0,0,0,0 
 from rc2a a left join rc2as b on a.noa=b.noa 
 where a.datea < @t_bdate and b.productno between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or a.cno=@t_cno)
+
+insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
+select '9', a.cno,b.productno,b.product,b.unit
+,(case when a.typea='1' then b.mount else -1*b.mount end)
+,(case when a.typea='1' then b.total else -1*b.total end),0,0,0,0 
+from vccb a left join vccbs b on a.noa=b.noa 
+where a.datea < @t_bdate and b.productno between @t_bproductno and @t_eproductno
+and (len(@t_cno)=0 or a.cno=@t_cno) and (a.typea='1' or a.typea='3')
 -------------------------------
 
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
-select '9', a.cno,b.productno,b.product,b.unit,0,0,0,0,b.mount,b.money/(case when a.taxtype='3' then 1.05 else 1 end) 
+select '9', a.cno,b.productno,b.product,b.unit,0,0,0,0,b.mount,b.money
 from vcca a left join vccas b on a.noa=b.noa 
 where a.datea between @t_bdate and @t_edate and b.productno between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or a.cno=@t_cno)
 
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
-select '9', a.cno,b.productno,b.product,b.unit,0,0,b.mount,b.money/(case when a.taxtype='3' then 1.05 else 1 end),0,0 
+select '9', a.cno,b.productno,b.product,b.unit,0,0,0,0,-1*b.mount,-1*b.total
+from vccb a left join vccbs b on a.noa=b.noa 
+where a.datea between @t_bdate and @t_edate and b.productno between @t_bproductno and @t_eproductno
+and (len(@t_cno)=0 or a.cno=@t_cno) and a.typea='1'
+
+insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
+select '9', a.cno,b.productno,b.product,b.unit,0,0,b.mount,b.money,0,0 
 from rc2a a left join rc2as b on a.noa=b.noa 
 where a.datea between @t_bdate and @t_edate and b.productno between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or a.cno=@t_cno)
+
+insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
+select '9', a.cno,b.productno,b.product,b.unit,0,0,-1*b.mount,-1*b.total,0,0 
+from vccb a left join vccbs b on a.noa=b.noa 
+where a.datea between @t_bdate and @t_edate and b.productno between @t_bproductno and @t_eproductno
+and (len(@t_cno)=0 or a.cno=@t_cno) and a.typea='3'
 
 insert into @tmp (gno,cno,pno,product,unit,bmount,bmoney,rcmount,rcmoney,vcmount,vcmoney) 
 select '0'gno,cno,pno,MAX(product),MAX(unit),SUM(bmount),SUM(bmoney) 
@@ -180,6 +240,9 @@ select '0'gno,cno,pno,MAX(product),MAX(unit),SUM(bmount),SUM(bmoney)
 from @tmp group by cno,pno
 
 delete @tmp where gno='9'
+
+update @tmp set bmoney=0 where bmount<=0
+update @tmp set bmoney=0 where bmoney<=0
 
 --計算成本 
 update @tmp 
@@ -197,6 +260,12 @@ set lmount=bmount+rcmount-vcmount
 update @tmp 
 set lprice=case when lmount=0 then 0 else lmoney/lmount end 
 
+update @tmp set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+update @tmp set lmoney=0 where lprice<=0
+
+delete @tmp
+where bmount=0 and bmoney=0 and rcmount=0 and rcmoney=0 and vcmount=0 and vcmoney=0 and vccost=0
+
 insert into @tmp 
 select '1',cno,'','','',sum(bmount),sum(bmoney) 
 ,sum(rcmount),sum(rcmoney) 
@@ -206,20 +275,20 @@ from @tmp group by cno
 
 select 
 gno,cno,(select nick from acomp where noa=a.cno) acomp,pno,product,unit
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(bmount,0)),1)),4,12)) bmount
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(bmoney,0)),1)),4,12)) bmoney
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(bmount,0)),1)),4,30)) bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(bmoney,0)),1)),4,30)) bmoney
 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(rcmount,0)),1)),4,12)) rcmount
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(rcmoney,0)),1)),4,12)) rcmoney
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(rcmount,0)),1)),4,30)) rcmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(rcmoney,0)),1)),4,30)) rcmoney
 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcmount,0)),1)),4,12)) vcmount
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcmoney,0)),1)),4,12)) vcmoney
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vccost,0)),1)),4,12)) vccost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vcmount,0)),1)),4,30)) vcmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vcmoney,0)),1)),4,30)) vcmoney
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vccost,0)),1)),4,30)) vccost
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(profit,2)),1)),0,30)) profit
 
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(lmount,0)),1)),4,12)) lmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lmount,0)),1)),4,30)) lmount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lprice,2)),1)),0,30)) lprice
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(lmoney,0)),1)),4,12)) lmoney
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lmoney,0)),1)),4,30)) lmoney
 
 from @tmp a order by cno,gno,pno;
 
@@ -273,6 +342,13 @@ select '9', a.cno,b.productno,b.product,b.unit,b.mount
 from rc2a a left join rc2as b on a.noa=b.noa 
 where a.datea <= @t_enddate and b.productno between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or a.cno=@t_cno)
+
+
+insert into @tmp (gno,cno,pno,product,unit,mount) 
+select '9', a.cno,b.productno,b.product,b.unit,(case when a.typea='1' then b.mount else -1*b.mount end)
+from vccb a left join vccbs b on a.noa=b.noa 
+where a.datea <= @t_enddate and b.productno between @t_bproductno and @t_eproductno
+and (len(@t_cno)=0 or a.cno=@t_cno) and (a.typea='1' or a.typea='3')
 -------------------------------
 
 insert into @tmp (gno,cno,pno,product,unit,mount) 
@@ -326,7 +402,7 @@ declare @tmp table(
 
 insert @tmp(gno,cno,pno,vcc_mount,vcc_money)
 select '9',a.cno,b.productno,sum((case when a.typea='1' then 1 else -1 end)*b.mount)
-,sum((case when a.typea='1' then 1 else -1 end)*b.total)
+,sum(round((case when a.typea='1' then 1 else -1 end)*b.total/(case when a.taxtype='3' then 1.05 else 1 end),0))
 from view_vcc a left join view_vccs b on a.noa=b.noa
 where a.datea between @t_bdate and @t_edate 
 and b.productno between @t_bproductno and @t_eproductno
@@ -341,16 +417,14 @@ and b.productno between @t_bproductno and @t_eproductno
 and (len(@t_cno)=0 or a.cno=@t_cno) and a.stype='4'
 group by a.cno,b.productno
 
-insert @tmp(gno,cno,pno,invo_mount,invo_money)
-select '9',a.cno,c.nou,sum(b.mount),sum(b.money)
+insert @tmp(gno,cno,pno,invo_mount,invo_money) 
+select '9',a.cno,c.nou,sum(b.mount),sum(b.money) 
 from vcca a left join vccas b on a.noa=b.noa 
 left join ucca c on b.productno=c.noa 
-where a.noa in(
-	select a.invono from view_vcc a left join view_vccs b on a.noa=b.noa
-	where a.datea between @t_bdate and @t_edate and b.productno between @t_bproductno and @t_eproductno
-	and (len(@t_cno)=0 or a.cno=@t_cno) group by a.invono
-)
-group by a.cno,c.nou
+where (b.productno between @t_bproductno and @t_eproductno )
+ and a.datea between @t_bdate and @t_edate 
+and (len(@t_cno)=0 or a.cno=@t_cno) and left(a.noa,2)!='00' --排除虛擬發票
+group by a.cno,c.nou 
 
 insert @tmp(gno,cno,pno,vcc_mount,vcc_money,invo_mount,invo_money,vcc4_mount)
 select '0',cno,pno,sum(vcc_mount),sum(vcc_money),sum(invo_mount),sum(invo_money),sum(vcc4_mount)
