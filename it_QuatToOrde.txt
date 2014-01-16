@@ -1,0 +1,60 @@
+-------英特瑞報價轉訂單
+set quoted_identifier off
+declare @cmd nvarchar(max)
+declare @t_quatno nvarchar(max) = 'Q1021120005' ----報價單號
+declare @t_datea nvarchar(10) ----訂單日期
+declare @t_orde_deli nvarchar(10) = 'E' -----訂單編號前置詞
+declare @t_accy nvarchar(10)
+declare @t_tmpNoa nvarchar(max)
+declare @t_newnoq nvarchar(max)
+set @t_quatno = ltrim(rtrim(@t_quatno))
+if(len(@t_quatno)>0)
+begin
+	set @t_accy = (select top 1 accy from view_quat where noa=@t_quatno)
+	set @t_tmpNoa = (select top 1 postname from view_quat where noa=@t_quatno)
+	--------刪除之前quat所產的的訂單 <<Start>>
+	if(isnull(@t_tmpNoa,'') != '')
+	begin
+		set @cmd = "delete orde"+@t_accy + " where noa='" + @t_tmpNoa + "'"
+		execute(@cmd)
+		set @cmd = "delete ordes"+@t_accy + " where noa='" + @t_tmpNoa + "'"
+		execute(@cmd)
+	end
+	--------刪除之前quat所產的的訂單 <<End>>
+	--------取得最新訂單編號 <<Start>>
+	set @t_datea = (select top 1 odate from view_quat where noa=@t_quatno)
+	set @t_datea = @t_orde_deli+replace(@t_datea,'/','')
+	set @t_tmpNoa = (select max(noa) from view_orde where (accy=@t_accy) and (left(noa,len(@t_datea))=@t_datea))
+	if(isnull(@t_tmpNoa,'')='')
+	begin
+		set @t_tmpNoa = @t_datea+'001'
+	end
+	else
+	begin
+		set @t_newnoq = RIGHT(REPLICATE('0', 3) + CAST((cast(right(@t_tmpNoa,3) as int)+1) as NVARCHAR), 3)
+		set @t_tmpNoa = @t_datea+@t_newnoq
+	end
+	--------取得最新訂單編號 <<End>>
+	--------插入BBM <<Start>>
+	set @cmd = "insert into orde"+@t_accy+"(odate,datea,stype,noa,cno,acomp,coin,floata,contract,isproj,custno,comp,nick,
+	paytype,trantype,salesno,sales,tel,fax,post,addr,post2,addr2,apv,money,tax,taxtype,total,totalus,worker,worker2,memo)
+		select odate,'',stype,N'"+@t_tmpNoa+"',cno,acomp,coin,floata,contract,isproj,custno,comp,b.nick,
+		paytype,trantype,salesno,sales,tel,fax,post,addr,post2,addr2,apv,money,tax,taxtype,total,totalus,worker,worker2,memo
+		from quat"+@t_accy+" a outer apply(select nick from cust where noa=a.custno) b where noa=N'"+@t_quatno+"'"
+	execute(@cmd)
+	--------插入BBM <<End>>
+	--------插入BBS <<Start>>
+	set @cmd = "insert into ordes"+@t_accy+"(noa,no2,productno,product,unit,mount,price,total,c1,notv,memo,quatno,no3)
+		select N'"+@t_tmpNoa+"',no3,productno,product,unit,mount,price,total,0,0,memo,noa,no3
+		from quats"+@t_accy+" where noa=N'"+@t_quatno+"'"
+	execute(@cmd)
+	--------插入BBS <<End>>
+	--------更新BBS未交量為mount <<Start>>
+	set @cmd = "update ordes"+@t_accy+" set notv=mount where noa=N'"+@t_tmpNoa+"'"
+	execute(@cmd)
+	--------更新BBS未交量為mount <<End>>
+	--------更新quat的postname為訂單編號 <<Start>>
+	set @cmd = "update quat"+@t_accy+" set postname=N'"+@t_tmpNoa+"' where noa=N'"+@t_quatno+"'"
+	execute(@cmd)
+	--------更新quat的postname為訂單編號 <<End>>
+end
