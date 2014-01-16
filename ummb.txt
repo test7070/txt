@@ -1,0 +1,470 @@
+﻿ummb:--ummb --永勝
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(20)=[2]--單據編號[2]
+declare @year nvarchar(20)=[1]--年度[1]
+declare @condition nvarchar(20)=[3]--[3]動作 0 刪除, 1 新增
+declare @acomp nvarchar(MAX)=[4]--[4]公司
+-----------------------------------------------------
+declare @cmd nvarchar(max)
+--bbm------------------------------
+--1退貨2換貨3換單4已收抵貨
+declare @typea nvarchar(20)=(select typea from ummb where noa=@noa)
+--退貨扣款日
+declare @bkdate nvarchar(10)=(select bkdate from ummb where noa=@noa)
+--退貨單號
+declare @bkvccno nvarchar(50)=''
+--指定出貨日
+declare @vccdate nvarchar(10)=(select vccdate from ummb where noa=@noa)
+--新出貨單號
+declare @saleno nvarchar(50)=''
+--回寫退貨單號
+declare @r_bkvccno nvarchar(200)=''
+--換單出貨單號
+declare @bvccno nvarchar(200)=(select vccno from ummb where noa=@noa)
+--換單帳款月份
+declare @bmon nvarchar(200)=(select chgdate from ummb where noa=@noa)
+
+--bbs-------------------------------
+declare @noq nvarchar(50)=''
+declare @productno nvarchar(50)=''
+declare @product nvarchar(100)=''
+declare @price float=0
+declare @bkmount float=0
+declare @bkmoney float=0
+declare @salemount float=0
+declare @salemoney float=0
+declare @memo nvarchar(MAX)=''
+declare @vccno nvarchar(50)=''
+declare @vccnoq nvarchar(50)=''
+declare @t_vccno nvarchar(50)=''
+
+---------------------------------------------------
+
+if(@condition='0')
+begin
+	if(@typea='1' or @typea='2' or @typea='4')
+	begin
+		--刪除出貨單依據memo,但如果被改掉就沒辦法刪除
+		--永勝依據出貨單的車行刪除
+		if(left(@acomp,2)='永勝')
+		begin
+			set @year=(select top 1 accy from view_vcc where cardeal=@noa)
+		
+			set @cmd="delete vccs"+@year+" where noa in (select noa from vcc"+@year+" where cardeal='"+@noa+"')"
+			EXEC sp_executeSQL @cmd
+			set @cmd="delete vcc"+@year+" where cardeal='"+@noa+"'"
+			EXEC sp_executeSQL @cmd
+		end
+		else
+		begin
+			set @cmd="delete vccs"+@year+" where noa in (select noa from vcc"+@year+" where charindex('"+@noa+"',memo)>0)"
+			EXEC sp_executeSQL @cmd
+			set @cmd="delete vcc"+@year+" where charindex('"+@noa+"',memo)>0 "
+			EXEC sp_executeSQL @cmd
+		end
+		
+		--清除已收
+		if(@typea='4')
+			delete umms where noa=@noa
+		
+		--清空退貨單號
+		update ummb set bkvccno='',saleno='' where noa=@noa
+	end
+	if(@typea='3')
+	begin
+		set @year=(select top 1 accy from view_vcc where noa=@bvccno)
+		set @cmd="update vcc"+@year+"
+		set mon=right(left(noa,4),3)+'/'+right(left(noa,6),2),cardeal='',datea=right(left(noa,4),3)+'/'+right(left(noa,6),2)+'/'+right(left(noa,8),2)
+		where noa='"+@bvccno+"'"
+		EXECUTE sp_executesql @cmd
+	end
+	
+end --condition=0 end
+
+if(@condition='1')
+begin
+	--1退貨2換貨4已收抵貨 bbs 有資料
+	if((@typea='1' or @typea='2' or @typea='4') and (select COUNT(*) from ummbs where noa=@noa)>0)
+	begin
+		--找尋目前退貨日最後一個出貨號碼
+		set @cmd="select @bkvccno=(select isnull(MAX(noa),0) from view_vcc where noa like 'D"+REPLACE(@bkdate,'/','')+"%')"
+		EXEC sp_executeSQL @cmd, N'@bkvccno nvarchar(50) OUTPUT', @bkvccno OUTPUT
+		
+		--處理退貨
+		declare cursor_table cursor for
+		select noq,productno,product,bkmount,price,bkmoney,memo,vccno,vccnoq 
+		from ummbs where noa=@noa and isnull(bkmount,0)>0 and len(vccno)>0  order by vccno,vccnoq
+		open cursor_table
+		fetch next from cursor_table
+		into @noq,@productno,@product,@bkmount,@price,@bkmoney,@memo,@vccno,@vccnoq
+		while(@@FETCH_STATUS <> -1)
+		begin
+			--計算上一張bbm的金額
+			if(@t_vccno!=@vccno and @t_vccno!='')
+			begin
+				set @cmd="update vcc"+@year+"
+				set money=(select SUM(total) from vccs"+@year+" where noa='"+@bkvccno+"')
+				,tax=0,total=(select SUM(total) from vccs"+@year+" where noa='"+@bkvccno+"')
+				where noa='"+@bkvccno+"'"
+				EXECUTE sp_executesql @cmd
+				
+				--判斷稅別
+				if((select taxtype from view_vcc where noa=@bkvccno)='1')
+				begin
+					set @cmd="update vcc"+@year+"
+					set tax=round(money*0.05,0)
+					,total=money+round(money*0.05,0)
+					where noa='"+@bkvccno+"'"
+					EXECUTE sp_executesql @cmd
+				end
+				else if((select taxtype from view_vcc where noa=@bkvccno)='3')
+				begin
+					set @cmd="update vcc"+@year+"
+					set tax=round(total/1.05*0.05,0)
+					,money=total-round(total/1.05*0.05,0)
+					where noa='"+@bkvccno+"'"
+					EXECUTE sp_executesql @cmd
+				end
+				else if((select taxtype from view_vcc where noa=@bkvccno)='6')
+				begin
+					set @cmd="update vcc"+@year+"
+					set tax=0,money=0,total=0
+					where noa='"+@bkvccno+"'"
+					EXECUTE sp_executesql @cmd
+				end
+				
+				--寫入payed
+				if(@typea='2')--換貨--未收
+				begin
+					set @cmd="update vcc"+@year+"
+					set payed=0,unpay=total,stype='6'
+					where noa='"+@bkvccno+"'"
+					EXECUTE sp_executesql @cmd
+				end
+				if(@typea='4')--抵貨--已收
+				begin
+					set @cmd="update vcc"+@year+"
+					set payed=total,unpay=0,stype='8'
+					where noa='"+@bkvccno+"'"
+					EXECUTE sp_executesql @cmd
+					
+					insert umms(noa,noq,vccno,paysale)
+					select @noa,right('000'+cast(cast((select isnull(MAX(noq),0) from umms where noa=@noa)as int)+1 as nvarchar(10)),3)
+					,@bkvccno,(select (case when typea='1' then 1 else -1 end*total) from view_vcc where noa=@bkvccno)
+					
+				end
+			end
+			
+			if(@t_vccno!=@vccno)
+			begin
+				--新的退貨單號(後面號碼+1)
+				set @bkvccno='D'+REPLACE(@bkdate,'/','')+
+				+right('000'+cast(cast(RIGHT(@bkvccno,3) as int)+1 as nvarchar(10)),3)
+				--寫入要回寫的退貨單號
+				set @r_bkvccno=@r_bkvccno+(case when len(@r_bkvccno)>0 then ','+@bkvccno else @bkvccno end)
+				
+				--bbm
+				set @cmd="insert vcc"+@year+" (noa,typea,stype,datea,mon,cno,acomp,custno,comp,ordeno
+				,paytype,tel,fax,trantype,post,addr,post2,addr2,salesno,sales,salesno2,sales2,taxtype,memo,worker)
+				select @bkvccno noa,'2' typea
+				,(select stype from view_vcc where noa=@vccno) stype
+				,@bkdate datea,LEFT(@bkdate,6) mon
+				,(select cno from view_vcc where noa=@vccno) cno
+				,(select acomp from view_vcc where noa=@vccno) acomp
+				,(select custno from view_vcc where noa=@vccno) custno
+				,(select comp from view_vcc where noa=@vccno) comp
+				,(select ordeno from view_vcc where noa=@vccno) ordeno
+				,(select paytype from view_vcc where noa=@vccno) paytype
+				,(select tel from view_vcc where noa=@vccno) tel
+				,(select fax from view_vcc where noa=@vccno) fax
+				,(select trantype from view_vcc where noa=@vccno) trantype
+				,(select post from view_vcc where noa=@vccno) post
+				,(select addr from view_vcc where noa=@vccno) addr
+				,(select post2 from view_vcc where noa=@vccno) post2
+				,(select addr2 from view_vcc where noa=@vccno) addr2
+				,(select salesno from view_vcc where noa=@vccno) salesno
+				,(select sales from view_vcc where noa=@vccno) sales
+				,(select salesno2 from view_vcc where noa=@vccno) salesno2
+				,(select sales2 from view_vcc where noa=@vccno) sales2
+				,(select taxtype from view_vcc where noa=@vccno) taxtype
+				,'由收款立帳轉來 '+@noa memo
+				,(select case when worker2!='' then worker2 else worker end from ummb where noa=@noa) worker"
+				EXECUTE sp_executesql @cmd
+				,N'@bkvccno nvarchar(50),@bkdate nvarchar(10),@vccno nvarchar(50),@noa nvarchar(20)'
+				,@bkvccno=@bkvccno,@bkdate=@bkdate,@vccno=@vccno,@noa=@noa
+				
+				if(left(@acomp,2)='永勝')--寫入ummb單號
+				begin
+					set @cmd="update vcc"+@year+"
+					set cardeal='"+@noa+"'
+					where noa='"+@bkvccno+"'"
+					EXECUTE sp_executesql @cmd
+				end
+			end
+				
+			--bbs--如果是永勝退回數量要同時回寫到lengthb
+			set @cmd="insert vccs"+@year+" (noa,noq,typea,datea,mon,cno,custno
+			,uno,productno,product,spec,unit,mount,price,total,class,memo,ordeno,no2
+			,storeno,store,radius,lengthb,width,dime,size,style)
+			select @bkvccno noa,@noq noq,'2',@bkdate datea,LEFT(@bkdate,6) mon
+			,(select cno from view_vcc where noa=@vccno) cno
+			,(select custno from view_vcc where noa=@vccno) custno
+			,(select uno from view_vccs where noa=@vccno and noq=@vccnoq) uno
+			,@productno,@product
+			,(select spec from view_vccs where noa=@vccno and noq=@vccnoq) spec
+			,(select unit from view_vccs where noa=@vccno and noq=@vccnoq) unit
+			,@bkmount,@price,@bkmoney
+			,(select class from view_vccs where noa=@vccno and noq=@vccnoq) class
+			,@memo
+			,(select ordeno from view_vccs where noa=@vccno and noq=@vccnoq) ordeno
+			,(select no2 from view_vccs where noa=@vccno and noq=@vccnoq) no2
+			,(select storeno from view_vccs where noa=@vccno and noq=@vccnoq) storeno
+			,(select store from view_vccs where noa=@vccno and noq=@vccnoq) store
+			,(select radius from view_vccs where noa=@vccno and noq=@vccnoq) radius
+			,case when left(@acomp,2)='永勝' then @bkmount else
+			 (select lengthb from view_vccs where noa=@vccno and noq=@vccnoq) end lengthb
+			,case when left(@acomp,2)='永勝' then 0 else
+			(select width from view_vccs where noa=@vccno and noq=@vccnoq) end width
+			,case when left(@acomp,2)='永勝' then 0 else
+			(select dime from view_vccs where noa=@vccno and noq=@vccnoq) end dime
+			,(select size from view_vccs where noa=@vccno and noq=@vccnoq) size
+			,(select style from view_vccs where noa=@vccno and noq=@vccnoq) style"
+			EXECUTE sp_executesql @cmd
+			,N'@bkvccno nvarchar(50),@noq nvarchar(50),@bkdate nvarchar(10),@vccno nvarchar(50),@vccnoq nvarchar(50)
+			,@productno nvarchar(50),@product nvarchar(100),@bkmount float,@price float,@bkmoney float
+			,@memo nvarchar(MAX),@acomp nvarchar(MAX)'
+			,@bkvccno=@bkvccno,@noq=@noq,@bkdate=@bkdate,@vccno=@vccno,@vccnoq=@vccnoq
+			,@productno=@productno,@product=@product,@bkmount=@bkmount,@price=@price,@bkmoney=@bkmoney
+			,@memo=@memo,@acomp=@acomp
+			
+			set @t_vccno=@vccno
+		
+			fetch next from cursor_table
+			into @noq,@productno,@product,@bkmount,@price,@bkmoney,@memo,@vccno,@vccnoq
+		end
+		close cursor_table
+		deallocate cursor_table
+			
+		--計算最後一張bbm的金額
+		set @cmd="update vcc"+@year+"
+		set money=(select SUM(total) from vccs"+@year+" where noa='"+@bkvccno+"')
+		,tax=0,total=(select SUM(total) from vccs"+@year+" where noa='"+@bkvccno+"')
+		where noa='"+@bkvccno+"'"
+		EXECUTE sp_executesql @cmd
+		
+		--判斷稅別
+		if((select taxtype from view_vcc where noa=@bkvccno)='1')
+		begin
+			set @cmd="update vcc"+@year+"
+			set tax=round(money*0.05,0)
+			,total=money+round(money*0.05,0)
+			where noa='"+@bkvccno+"'"
+			EXECUTE sp_executesql @cmd
+		end
+		else if((select taxtype from view_vcc where noa=@bkvccno)='3')
+		begin
+			set @cmd="update vcc"+@year+"
+			set tax=round(total/1.05*0.05,0)
+			,money=total-round(total/1.05*0.05,0)
+			where noa='"+@bkvccno+"'"
+			EXECUTE sp_executesql @cmd
+		end
+		else if((select taxtype from view_vcc where noa=@bkvccno)='6')
+		begin
+			set @cmd="update vcc"+@year+"
+			set tax=0,money=0,total=0
+			where noa='"+@bkvccno+"'"
+			EXECUTE sp_executesql @cmd
+		end
+		
+		--寫入payed
+		if(@typea='2')--換貨--未收
+		begin
+			set @cmd="update vcc"+@year+"
+			set payed=0,unpay=total,stype='6'
+			where noa='"+@bkvccno+"'"
+			EXECUTE sp_executesql @cmd
+		end
+		if(@typea='4')--抵貨--已收
+		begin
+			set @cmd="update vcc"+@year+"
+			set payed=total,unpay=0,stype='8'
+			where noa='"+@bkvccno+"'"
+			EXECUTE sp_executesql @cmd
+			
+			insert umms(noa,noq,vccno,paysale)
+			select @noa,right('000'+cast(cast((select isnull(MAX(noq),0) from umms where noa=@noa)as int)+1 as nvarchar(10)),3)
+			,@bkvccno,(select (case when typea='1' then 1 else -1 end*total) from view_vcc where noa=@bkvccno)
+		end
+		
+		--回寫收款立帳
+		update ummb set bkvccno=@r_bkvccno where noa=@noa
+		
+		--處理退貨 end
+		
+		--處理出貨
+		if((@typea='2' or @typea='4')and len(@vccno)>0)--@vccno=換貨和抵貨的號碼
+		begin
+			if(len(isnull(@vccdate,''))=0)--當指定出貨日沒有輸入則與退貨日同一天
+				set @vccdate=@bkdate
+			
+			--找尋目前退貨日最後一個出貨號碼
+			set @cmd="select @saleno=(select isnull(MAX(noa),0) from view_vcc"+@year+" where noa like 'D"+REPLACE(@vccdate,'/','')+"%')"
+			EXEC sp_executeSQL @cmd, N'@saleno nvarchar(50) OUTPUT', @saleno OUTPUT
+			
+			--新的出貨單號(後面號碼+1)
+			set @saleno='D'+REPLACE(@vccdate,'/','')+
+			+right('000'+cast(cast(RIGHT(@saleno,3) as int)+1 as nvarchar(10)),3)
+			
+			--bbm
+			set @cmd="insert vcc"+@year+" (noa,typea,stype,datea,mon,cno,acomp,custno,comp,ordeno
+			,paytype,tel,fax,trantype,post,addr,post2,addr2,salesno,sales,salesno2,sales2,taxtype,memo,worker)
+			select @saleno noa,'1' typea
+			,(select stype from view_vcc where noa=@vccno) stype
+			,@vccdate datea,LEFT(@vccdate,6) mon
+			,(select cno from view_vcc where noa=@vccno) cno
+			,(select acomp from view_vcc where noa=@vccno) acomp
+			,(select custno from view_vcc where noa=@vccno) custno
+			,(select comp from view_vcc where noa=@vccno) comp
+			,(select ordeno from view_vcc where noa=@vccno) ordeno
+			,(select paytype from view_vcc where noa=@vccno) paytype
+			,(select tel from view_vcc where noa=@vccno) tel
+			,(select fax from view_vcc where noa=@vccno) fax
+			,(select trantype from view_vcc where noa=@vccno) trantype
+			,(select post from view_vcc where noa=@vccno) post
+			,(select addr from view_vcc where noa=@vccno) addr
+			,(select post2 from view_vcc where noa=@vccno) post2
+			,(select addr2 from view_vcc where noa=@vccno) addr2
+			,(select salesno from view_vcc where noa=@vccno) salesno
+			,(select sales from view_vcc where noa=@vccno) sales
+			,(select salesno2 from view_vcc where noa=@vccno) salesno2
+			,(select sales2 from view_vcc where noa=@vccno) sales2
+			,(select taxtype from view_vcc where noa=@vccno) taxtype
+			,'由收款立帳轉來 '+@noa memo
+			,(select case when worker2!='' then worker2 else worker end from ummb where noa=@noa) worker"
+			EXECUTE sp_executesql @cmd
+			,N'@saleno nvarchar(50),@vccdate nvarchar(10),@vccno nvarchar(50),@noa nvarchar(20)'
+			,@saleno=@saleno,@vccdate=@vccdate,@vccno=@vccno,@noa=@noa
+			
+			if(left(@acomp,2)='永勝')--寫入ummb單號
+			begin
+				set @cmd="update vcc"+@year+"
+				set cardeal='"+@noa+"'
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+			end
+			
+			--bbs
+			declare cursor_table cursor for
+			select noq,productno,product,salemount,price,salemoney,memo
+			from ummbs where noa=@noa and isnull(salemount,0)>0 and len(vccno)=0  order by noq
+			open cursor_table
+			fetch next from cursor_table
+			into @noq,@productno,@product,@salemount,@price,@salemoney,@memo
+			while(@@FETCH_STATUS <> -1)
+			begin
+				--bbs
+				set @cmd="insert vccs"+@year+" (noa,noq,typea,datea,mon,cno,custno
+				,productno,product,spec,unit,mount,price,total,memo,storeno,store)
+				select @saleno noa,@noq noq,'1',@vccdate datea,LEFT(@vccdate,6) mon
+				,(select cno from view_vcc where noa=@vccno) cno
+				,(select custno from view_vcc where noa=@vccno) custno
+				,@productno,@product
+				,(select spec from ucc where noa=@productno) spec
+				,(select unit from ucc where noa=@productno) unit
+				,@salemount,@price,@salemoney,@memo
+				,(select MAX(storeno) from view_vccs where noa=@vccno) storeno
+				,(select store from store where noa=(select MAX(storeno) from view_vccs where noa=@vccno)) store"
+				EXECUTE sp_executesql @cmd
+				,N'@saleno nvarchar(50),@noq nvarchar(50),@vccdate nvarchar(10),@vccno nvarchar(50)
+				,@productno nvarchar(50),@product nvarchar(100),@salemount float,@price float,@salemoney float,@memo nvarchar(MAX)'
+				,@saleno=@saleno,@noq=@noq,@vccdate=@vccdate,@vccno=@vccno
+				,@productno=@productno,@product=@product,@salemount=@salemount,@price=@price,@salemoney=@salemoney,@memo=@memo
+			
+				fetch next from cursor_table
+				into @noq,@productno,@product,@salemount,@price,@salemoney,@memo
+			end
+			close cursor_table
+			deallocate cursor_table
+			
+			--如果是永勝出貨數量要同時回寫到lengthb
+			if(left(@acomp,2)='永勝')
+			begin
+				set @cmd="update vccs"+@year+"
+				set lengthb=mount
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+			end
+			
+			--更新bbm金額
+			set @cmd="update vcc"+@year+"
+			set money=(select SUM(total) from vccs"+@year+" where noa='"+@saleno+"')
+			,tax=0,total=(select SUM(total) from vccs"+@year+" where noa='"+@saleno+"')
+			where noa='"+@saleno+"'"
+			EXECUTE sp_executesql @cmd
+			
+			--判斷稅別
+			if((select taxtype from view_vcc where noa=@saleno)='1')
+			begin
+				set @cmd="update vcc"+@year+"
+				set tax=round(money*0.05,0)
+				,total=money+round(money*0.05,0)
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+			end
+			else if((select taxtype from view_vcc where noa=@saleno)='3')
+			begin
+				set @cmd="update vcc"+@year+"
+				set tax=round(total/1.05*0.05,0)
+				,money=total-round(total/1.05*0.05,0)
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+			end
+			else if((select taxtype from view_vcc where noa=@saleno)='6')
+			begin
+				set @cmd="update vcc"+@year+"
+				set tax=0,money=0,total=0
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+			end
+			
+			--寫入payed
+			if(@typea='2')--換貨--未收
+			begin
+				set @cmd="update vcc"+@year+"
+				set payed=0,unpay=total,stype='6'
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+			end
+			if(@typea='4')--抵貨--已收
+			begin
+				set @cmd="update vcc"+@year+"
+				set payed=total,unpay=0,stype='8'
+				where noa='"+@saleno+"'"
+				EXECUTE sp_executesql @cmd
+				
+				insert umms(noa,noq,vccno,paysale)
+				select @noa,right('000'+cast(cast((select isnull(MAX(noq),0) from umms where noa=@noa)as int)+1 as nvarchar(10)),3)
+				,@saleno,(select (case when typea='1' then 1 else -1 end*total) from view_vcc where noa=@saleno)
+			end
+			
+			--回寫收款立帳
+			update ummb set saleno=@saleno where noa=@noa
+			
+		end
+		--處理出貨 end
+		
+	end --1退貨2換貨4已收抵貨 end
+	
+	if(@typea='3')--3換單--只需回寫換單月份
+	begin
+		set @year=(select top 1 accy from view_vcc where noa=@bvccno)
+	
+		set @cmd="update vcc"+@year+"
+		set mon='"+left(@bmon,6)+"',cardeal='"+@noa+"',datea='"+@bmon+"',stype='3'
+		where noa='"+@bvccno+"'"
+		EXECUTE sp_executesql @cmd
+	end
+end --condition=1 end
+
+;
