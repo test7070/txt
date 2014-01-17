@@ -1363,10 +1363,10 @@ print 'other:'
 				set @cmd = "create view view_tranorde_dc"+@accy
 				+char(13) + "as" 
 				+char(13) + SPACE(4)+"select isnull(b.mount,0) vccecount,a.*" 
-				+char(13) + SPACE(4)+"from view_"+@tablea+" a "
+				+char(13) + SPACE(4)+"from view_tranorde a "
 				+char(13) + SPACE(4)+"left join ("
 				+char(13) + SPACE(4)+SPACE(4)+"select ordeno,SUM(ISNULL(mount,0)) mount"
-				+char(13) + SPACE(4)+SPACE(4)+"from view_transvcce"+@accy+" group by ordeno"
+				+char(13) + SPACE(4)+SPACE(4)+"from view_transvcce group by ordeno"
 				+char(13) + SPACE(4)+") b on a.noa=b.ordeno"
 				execute sp_executesql @cmd
 			end
