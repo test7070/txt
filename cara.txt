@@ -1,0 +1,316 @@
+﻿cara:-----------------------------------cara結轉開始
+declare @now_date nvarchar(10)--現在日期
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+declare @nextmon nvarchar(20)--要結轉的月份
+set @nextmon=[1]
+declare @discounot float--要折抵的%數
+set @discounot=[2]
+declare @bcarno nvarchar(20)--要結轉的開始車輛
+set @bcarno=[3]
+declare @ecarno nvarchar(20)--要結轉的結束車輛
+set @ecarno=[4]
+declare @sssno nvarchar(MAX)--要結轉的管理人員
+set @sssno=[5]
+
+set @discounot = 100 - @discounot
+
+declare @endday nvarchar(20)--當月最後一天日期
+set @endday=cast(cast(LEFT(@nextmon,3)as int)+1911 as nvarchar(20))+'/'+right(@nextmon,2)+'/01'
+set @endday=(select day(dateadd(ms,-3,DATEADD(m, DATEDIFF(m,0,@endday)+1,0))))
+
+declare @premon nvarchar(20)--上個月
+set @premon=cast(cast(LEFT(@nextmon,3)as int)+1911 as nvarchar(20))+'/'+right(@nextmon,2)+'/01'
+set @premon=CONVERT (VARCHAR(7),DATEADD(m,-1,@premon),12 )+0890000
+set @premon=left(@premon,3)+'/'+substring(@premon,4,2)
+
+if(@ecarno='')
+set @ecarno=CHAR(255)
+
+if(len(@sssno)=0)
+begin
+	--全部監理部人員
+	set @sssno=(select noa+'.' from sss where partno='07' FOR XML PATH(''))
+	set @sssno=LEFT(@sssno,LEN(@sssno)-1)
+end
+else
+begin
+	if(RIGHT(@sssno,1)='.')
+		set @sssno=left(@sssno,len(@sssno)-1)
+end
+
+declare @listsssno table(
+	sssno nvarchar(20)
+)
+
+while(PATINDEX('%.%',@sssno)>0)
+begin
+insert into @listsssno
+select left(@sssno,PATINDEX('%.%',@sssno)-1)
+
+set @sssno=RIGHT(@sssno,LEN(@sssno)-PATINDEX('%.%',@sssno))
+end
+
+insert into @listsssno
+select @sssno
+
+declare @bbm table(
+	noa nvarchar(20),
+	carowner nvarchar(20),
+	cno nvarchar(20),
+	comp2 nvarchar(20),
+	carno nvarchar(20),
+	iprev float,
+	iset float,
+	bprev float,
+	mon nvarchar(20),
+	interest float,
+	isource nvarchar(20),
+	bin float,
+	pdate nvarchar(20),
+	itotal float,
+	btotal float,
+	lastmon nvarchar(20),
+	total float,
+	datea nvarchar(20),
+	carseek nvarchar(20),
+	paytotal float,
+	accno nvarchar(15),
+	carownerno nvarchar(20),
+	sssno nvarchar(20)
+)
+declare @bbs table(
+	noa nvarchar(30),
+	noq nvarchar(20),
+	datea nvarchar(20),
+	caritemno nvarchar(20),
+	caritem nvarchar(200),
+	outmoney float,
+	inmoney float,
+	memo nvarchar(200),
+	cost float,
+	acc1 nvarchar(10),
+	acc2 nvarchar(10),
+	checkno nvarchar(50),
+	account nvarchar(50),
+	bankno nvarchar(20),
+	bank nvarchar(50),
+	title nvarchar(50),
+	indate nvarchar(10),
+	pdate nvarchar(20),
+	udate nvarchar(10),
+	mon nvarchar(10),
+	carno nvarchar(20),
+	ummnoa nvarchar(50),
+	sheetyn nvarchar(1),
+	fareyn nvarchar(1),
+	paydate nvarchar(10),
+	taxmemo nvarchar(200)
+)
+
+--建立寫入BBM(102/06/18 宛蓉 牌照燃料費不管金額都要結轉到單據)
+insert into @bbm
+select a.carno+'-'+@nextmon,c.namea,'','',a.carno,
+(case when a.isource=1 then a.itotal else a.iset end) iprev ,0,a.btotal bprev,@nextmon,0,1,0,'',0,0,0,total,@now_date,'',0,'',b.carownerno,b.sssno
+from 
+(select carno,isource,itotal,iset,btotal,total from (select * from cara where carno+mon in(select carno+MAX(mon) from cara group by carno))a 
+where total!=0 and carowner!='' and mon!=@nextmon 
+union
+select carno,1 isource,0,0,0,0 from car2 a left join carinsure b on a.noa=b.noa
+where (outdate='' or outdate is null) and (a.suspdate='' or a.suspdate is null) and (enddate='' or enddate is null)
+and carownerno!='' and carno not in 
+(select carno from (select * from cara where carno+mon in(select carno+MAX(mon) from cara group by carno))a where total!=0 and carowner!='')
+and carno not in (select carno from (select * from cara where carno+mon in(select carno+MAX(mon) from cara group by carno))a where carowner!='' and mon=@nextmon )
+--and (manage>0 OR (ulicense>0 and ulicensemon!='') OR (dlicense>0 and dlicensemon!='') OR (spring>0 and springmon!='') OR (summer>0 and summermon!='') OR (falla>0 and fallamon!='') OR (winter>0 and wintermon!='')
+and (manage>0 OR (ulicensemon!='') OR (dlicensemon!='') OR (springmon!='') OR (summermon!='') OR (fallamon!='') OR (wintermon!='')
+OR b.inmon=@nextmon)) a 
+left join car2 b on a.carno=b.noa left join carOwner c on b.carownerno=c.noa
+where a.carno between @bcarno and @ecarno and b.sssno in (select * from @listsssno)
+
+
+--建立bbs
+declare @noa nvarchar(20)
+declare @carno nvarchar(20)
+declare @total float
+declare @iprev float
+declare @bprev float
+declare @irange float
+declare @irate float
+declare @noq int
+declare @t_noq nvarchar(3)
+
+declare @outdate nvarchar(10)
+declare @suspdate nvarchar(10)
+declare @enddate nvarchar(10)
+declare @wastedate nvarchar(10)
+declare @cartype nvarchar(10)
+declare @carownerno nvarchar(60)
+
+set @noq=1
+declare cursor_table cursor for
+	select a.noa,a.carno,a.total,a.iprev,a.bprev,b.cartype,a.carownerno from @bbm a left join car2 b on a.carno=b.noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@carno,@total,@iprev,@bprev,@cartype,@carownerno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@cartype!='2')--20130325公司車沒有上月欠款、利息及借支，當月會直接變運輸部的費用
+		begin
+			--上月欠款
+			--1020918婉容上月車主不同結轉車主上月欠款歸0
+			if(@carownerno!=(select carownerno from cara where carno=@carno and mon=@premon))
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/01','001','上月欠款',0,0,'新車主',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+			end
+			else
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/01','001','上月欠款',@total,0,'',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+			end
+			
+			set @noq=@noq+1
+			
+			
+			--上月利息
+			set @irange=(select irange from car2 where noa=@carno)
+			set @irate=(select irate from car2 where noa=@carno)
+			if(@iprev>@irange and @irate>0 and (select auto from car2 where noa=@carno)='Y')
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'002','上月利息',round((@iprev-@irange)*@irate,0),0,'',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+			end
+			
+			--借支利息
+			set @irate=(select irate from car2 where noa=@carno)
+			if(@bprev>0 and @irate>0 and(select auto from car2 where noa=@carno)='Y')
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'202','借支利息',round(@bprev*@irate,0),0,'',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+			end
+		end
+		
+		set @outdate=(select outdate from car2 where noa=@carno)
+		set @suspdate=(select suspdate from car2 where noa=@carno)
+		set @enddate=(select enddate from car2 where noa=@carno)
+		set @wastedate=(select wastedate from car2 where noa=@carno)
+		--1020619睿庭 只要遷出,報廢,繳銷,報停就不會有下面費用
+		if((@outdate=''or @outdate is null) and (@suspdate=''or @suspdate is null) and (@enddate=''or @enddate is null) and (@wastedate=''or @wastedate is null))
+		begin
+			--行費
+			if((select manage from car2 where noa=@carno)>0 )
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/01','401','行費',(select manage from car2 where noa=@carno),0,'',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+			end
+			--上牌照稅
+			if(right(@nextmon,2)=(select ulicensemon from car2 where noa=@carno) and (select COUNT(*) from caras where carno=@carno and caritemno='501' and memo like '%'+left(@nextmon,3)+'%' and memo like'%上%' and left(mon,3)=left(@nextmon,3))=0)
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'501','牌照稅',round((select ulicense from car2 where noa=@carno)*@discounot/100,0),0,@nextmon+'上期牌照稅',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+				
+			end
+			
+			--下牌照稅
+			if(right(@nextmon,2)=(select dlicensemon from car2 where noa=@carno) and (select COUNT(*) from caras where carno=@carno and caritemno='501' and memo like '%'+left(@nextmon,3)+'%' and memo like'%下%' and left(mon,3)=left(@nextmon,3))=0)
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'501','牌照稅',round((select dlicense from car2 where noa=@carno)*@discounot/100,0),0,@nextmon+'下期牌照稅',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+				
+			end
+			
+			--春季燃料費
+			if(right(@nextmon,2)=(select springmon from car2 where noa=@carno) and (select COUNT(*) from caras where carno=@carno and caritemno='502' and memo like '%'+left(@nextmon,3)+'%' and memo like'%春%' and left(mon,3)=left(@nextmon,3))=0)
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'502','燃料費',round((select spring from car2 where noa=@carno)*@discounot/100,0),0,@nextmon+'春季燃料費',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+				
+			end
+			
+			--夏季燃料費
+			if(right(@nextmon,2)=(select summermon from car2 where noa=@carno) and (select COUNT(*) from caras where carno=@carno and caritemno='502' and memo like '%'+left(@nextmon,3)+'%' and memo like'%夏%' and left(mon,3)=left(@nextmon,3))=0)
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'502','燃料費',round((select summer from car2 where noa=@carno)*@discounot/100,0),0,@nextmon+'夏季燃料費',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+				
+			end
+			
+			--秋季燃料費
+			if(right(@nextmon,2)=(select fallamon from car2 where noa=@carno) and (select COUNT(*) from caras where carno=@carno and caritemno='502' and memo like '%'+left(@nextmon,3)+'%' and memo like'%秋%' and left(mon,3)=left(@nextmon,3))=0)
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'502','燃料費',round((select falla from car2 where noa=@carno)*@discounot/100,0),0,@nextmon+'秋季燃料費',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+				
+			end
+			
+			--冬季燃料費
+			if(right(@nextmon,2)=(select wintermon from car2 where noa=@carno) and (select COUNT(*) from caras where carno=@carno and caritemno='502' and memo like '%'+left(@nextmon,3)+'%' and memo like'%冬%' and left(mon,3)=left(@nextmon,3))=0)
+			begin
+				insert into @bbs
+				select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'502','燃料費',round((select winter from car2 where noa=@carno)*@discounot/100,0),0,@nextmon+'冬季燃料費',0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+				set @noq=@noq+1
+				
+			end
+		end
+		
+		--保險費
+		if((select money from carinsure where noa=@carno and inmon=@nextmon)>0)
+		begin
+			insert into @bbs
+			select @noa,right('000'+CAST(@noq as nvarchar(3)),3),@nextmon+'/'+@endday,'306','保險費',(select money from carinsure where noa=@carno and inmon=@nextmon),0,(select '保險起日:'+bdate from carinsure where noa=@carno and inmon=@nextmon),0,'','','','','','','','','','',@nextmon,@carno,'','','','',''
+			set @noq=@noq+1
+		end
+		
+		--更新bbm總計
+		update @bbm
+		set total=(select isnull(sum(outmoney),0)-isnull(SUM(inmoney),0) from @bbs where noa=@noa),
+		paytotal=(select isnull(sum(outmoney),0)-isnull(SUM(inmoney),0) from @bbs where noa=@noa),
+		interest=(select isnull(sum(outmoney),0)-isnull(SUM(inmoney),0) from @bbs where noa=@noa and caritemno!='001' and caritemno!='002' and caritemno!='102' and caritemno!='201' and caritemno!='202' and caritemno!='203' and caritemno!='306' and caritemno!='401'),
+		bin=isnull((select isnull(sum(outmoney),0) from @bbs where noa=@noa and caritemno='201'),0)-isnull((select isnull(sum(outmoney),0) from @bbs where noa=@noa and (caritemno='102' OR caritemno='112')),0)
+		where noa=@noa
+		
+		update @bbm
+		set itotal=(case when (iprev+interest) <0 or total<=0 then 0 else (iprev+interest) end),
+		btotal=bprev+bin
+		where noa=@noa
+
+		if((select total from @bbm where noa=@noa)=0
+		and isnull((select outmoney-inmoney from @bbs where noa=@noa and noq='001'),0)=0 
+		and (select COUNT(*) from @bbs where noa=@noa and noq='001' and CHARINDEX('新車主',memo)>0)=0
+		and (select COUNT(*) from @bbs where noa=@noa)<=1 
+		and @cartype!='2')
+		begin
+			delete @bbm	where noa=@noa
+			delete @bbs	where noa=@noa
+		end
+		
+		--20130402更換以一個車牌插入以避免指令等候逾時的問題
+		insert into cara(noa,carowner,cno,comp2,carno,iprev,iset,bprev,mon,interest,isource,bin,pdate,itotal,btotal,lastmon,total,datea,carseek,paytotal,accno,carownerno,sssno)
+		select noa,carowner,cno,comp2,carno,iprev,iset,bprev,mon,interest,isource,bin,pdate,itotal,btotal,lastmon,total,datea,carseek,paytotal,accno,carownerno,sssno from @bbm
+		where noa=@noa
+		insert into caras(noa,noq,datea,caritemno,caritem,outmoney,inmoney,memo,cost,acc1,acc2,checkno,account,bankno,bank,title,indate,pdate,udate,mon,carno,ummnoa,sheetyn,fareyn,paydate,taxmemo)
+		select noa,noq,datea,caritemno,caritem,outmoney,inmoney,memo,cost,acc1,acc2,checkno,account,bankno,bank,title,indate,pdate,udate,mon,carno,ummnoa,sheetyn,fareyn,paydate,taxmemo from @bbs
+		where noa=@noa
+		
+		--插入舊車牌
+		update cara
+		set oldcarno=STUFF(REPLACE((select ','+b.oldcarno from carChange b where cara.carno=b.noa FOR XML PATH('')),' ',''),1,1,'')
+		where noa=@noa
+		
+		fetch next from cursor_table
+		into @noa,@carno,@total,@iprev,@bprev,@cartype,@carownerno
+		set @noq=1
+	end
+	close cursor_table
+	deallocate cursor_table
+
+-----------------------------------cara結轉結束
+;
