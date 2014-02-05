@@ -226,9 +226,9 @@ z_gqb1:--z_gqb1
 	end 
 	
 	declare @tmp table( 
-		recno int,
-		pno nvarchar(1),
-		gno nvarchar(1), 
+		pno nvarchar(10),
+		qno nvarchar(10),
+		gno nvarchar(10), 
 		zz nvarchar(max), 
 		noa nvarchar(20), 
 		gqbno nvarchar(20), 
@@ -250,8 +250,8 @@ z_gqb1:--z_gqb1
 	) 
 	
 	set @cmd = 
-	" select row_number()over(partition by "+@t_sort01+" order by gqbno)"+
-	" ,'1' pno,'0' gno,"+@t_sort01+",noa,gqbno,datea,udate,indate,typea,tbank,bankno,bank,'',isnull(tcomp,'')+isnull(comp,''),[money]"+ 
+	" select '1','1','1'"+
+	" ,"+@t_sort01+",noa,gqbno,datea,udate,indate,typea,tbank,bankno,bank,'',isnull(tcomp,'')+isnull(comp,''),[money]"+ 
 	" , case when typea='1' then [money] else 0 end money1"+ 
 	" , case when typea='2' then [money] else 0 end money2"+ 
 	" , case when typea='1' then 1 else 0 end pcount1"+ 
@@ -266,36 +266,170 @@ z_gqb1:--z_gqb1
 	insert into @tmp 
 	execute sp_executesql @cmd,N'@t_typea nvarchar(10),@t_status nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bindate nvarchar(10),@t_eindate nvarchar(10),@t_bbankno nvarchar(20),@t_ebankno nvarchar(20)' 
 	,@t_typea=@t_typea,@t_status=@t_status,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bindate=@t_bindate,@t_eindate=@t_eindate,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno 
-	-------------------------------------------------------------------------------------------------- 
-	declare @zz nvarchar(max) 
-	declare @money1 float 
-	declare @money2 float 
-	declare @pcount1 int 
-	declare @pcount2 int 
+
+	------------------------------------------------------------------------------------------------
+	declare @zz nvarchar(max)
+	declare @noa nvarchar(max)
+	declare @gqbno nvarchar(max)
+	declare @comp nvarchar(max)
+	declare @tbk nvarchar(max)
+	declare @bank nvarchar(max)
+	declare @memo nvarchar(max)
 	
-	declare cursor_table cursor for 
-	select zz,sum(isnull(money1,0)),sum(isnull(money2,0)),sum(isnull(pcount1,0)),sum(isnull(pcount2,0)) from @tmp group by zz 
-	open cursor_table 
-	fetch next from cursor_table 
-	into @zz,@money1,@money2,@pcount1,@pcount2 
-	while(@@FETCH_STATUS <> -1) 
-	begin 
-		insert into @tmp(pno,gno,zz,gqbno,money1,money2,pcount1,pcount2)values('2','1',@zz,CHAR(255),@money1,@money2,@pcount1,@pcount2) 
+	declare @maxcount int = 16 -- memo
+	declare @maxcount2 int = 12 -- comp
+	declare @maxcount3 int = 13 -- tbk
+	declare @maxcount4 int = 13 -- bank
 	
-		fetch next from cursor_table 
-		into @zz,@money1,@money2,@pcount1,@pcount2 
-	end 
-	close cursor_table 
-	deallocate cursor_table 
+	declare cursor_table cursor for
+	select zz,noa,gqbno,comp,tbk,bank,memo from @tmp where gno='1'
+	open cursor_table
+	fetch next from cursor_table
+	into @zz,@noa,@gqbno,@comp,@tbk,@bank,@memo
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		set @comp=ltrim(rtrim(REPLACE(REPLACE(REPLACE(@comp,char(10),' '),char(13),' '),'  ','')))
+		set @memo=ltrim(rtrim(REPLACE(REPLACE(REPLACE(@memo,char(10),' '),char(13),' '),'  ','')))
+		select @n=0,@n2=0,@string=''
+
+		while(LEN(@memo)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@memo,1))>5000 then 2 else 1 end	
+			set @string = @string + LEFT(@memo,1)
+			set @memo = substring(@memo,2,len(@memo)-1)
+			if(LEN(@memo)=0 or @n>=@maxcount)
+			begin
+				set @n2 = @n2 + 1
+				if @n2 = 1
+				begin
+					update @tmp set memo = @string,gno='1' where noa=@noa
+				end
+				else
+				begin
+					insert into @tmp(pno,qno,gno,zz,noa,gqbno,memo)values('1',@n2,'3',@zz,@noa,@gqbno,@string)
+				end
+				set @n = 0
+				set @string = ""
+			end		
+		end
+		
+		select @n=0,@n2=0,@string=''
+		while(LEN(@comp)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@comp,1))>5000 then 2 else 1 end	
+			set @string = @string + LEFT(@comp,1)
+			set @comp = substring(@comp,2,len(@comp)-1)
+			if(LEN(@comp)=0 or @n>=@maxcount2)
+			begin
+				set @n2 = @n2 + 1
+				if @n2 = 1
+				begin
+					update @tmp set comp = @string where noa=@noa and gno=@n2
+				end
+				else
+				begin
+					if exists(select * from @tmp where noa=@noa and qno=@n2)
+					begin
+						update @tmp set comp = @string where noa=@noa and qno=@n2
+					end
+					else
+					begin
+						insert into @tmp(pno,qno,gno,zz,noa,gqbno,comp)values('1',@n2,'3',@zz,@noa,@gqbno,@string)
+					end
+				end
+				set @n = 0
+				set @string = ""
+			end		
+		end
+		
+		select @n=0,@n2=0,@string=''
+		while(LEN(@tbk)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@tbk,1))>5000 then 2 else 1 end	
+			set @string = @string + LEFT(@tbk,1)
+			set @tbk= substring(@tbk,2,len(@tbk)-1)
+			if(LEN(@tbk)=0 or @n>=@maxcount3)
+			begin
+				set @n2 = @n2 + 1
+				if @n2 = 1
+				begin
+					update @tmp set tbk = @string where noa=@noa and gno=@n2
+				end
+				else
+				begin
+					if exists(select * from @tmp where noa=@noa and qno=@n2)
+					begin
+						update @tmp set tbk = @string where noa=@noa and qno=@n2
+					end
+					else
+					begin
+						insert into @tmp(pno,qno,gno,zz,noa,gqbno,tbk)values('1',@n2,'3',@zz,@noa,@gqbno,@string)
+					end
+				end
+				set @n = 0
+				set @string = ""
+			end		
+		end
+		
+		select @n=0,@n2=0,@string=''
+		while(LEN(@bank)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@bank,1))>5000 then 2 else 1 end	
+			set @string = @string + LEFT(@bank,1)
+			set @bank= substring(@bank,2,len(@bank)-1)
+			if(LEN(@bank)=0 or @n>=@maxcount4)
+			begin
+				set @n2 = @n2 + 1
+				if @n2 = 1
+				begin
+					update @tmp set bank = @string where noa=@noa and gno=@n2
+				end
+				else
+				begin
+					if exists(select * from @tmp where noa=@noa and qno=@n2)
+					begin
+						update @tmp set bank = @string where noa=@noa and qno=@n2
+					end
+					else
+					begin
+						insert into @tmp(pno,qno,gno,zz,noa,gqbno,bank)values('1',@n2,'3',@zz,@noa,@gqbno,@string)
+					end
+				end
+				set @n = 0
+				set @string = ""
+			end		
+		end
+		fetch next from cursor_table
+		into @zz,@noa,@gqbno,@comp,@tbk,@bank,@memo
+	end
+	close cursor_table
+	deallocate cursor_table
 	
-	select @money1=0,@money2=0,@pcount1=0,@pcount2=0 
-	select @money1 = sum(isnull(money1,0)), @money2 = sum(isnull(money2,0)) 
-	, @pcount1 = sum(isnull(pcount1,0)), @pcount2 = sum(isnull(pcount2,0)) from @tmp where gno='0' 
+	update @tmp set 
+		gno=case when a.gno='1' and b.qno=1 then '1' 
+				when a.gno='1' then '2'
+				when a.qno=b.qno then '4' else '3' end
+	from @tmp a
+	outer apply (select max(qno) qno from @tmp where noa=a.noa) b
 	
-	insert into @tmp(pno,gno,zz,money1,money2,pcount1,pcount2)values('3','2',CHAR(255),@money1,@money2,@pcount1,@pcount2) 
+	insert into @tmp(pno,gno,zz,[money],money1,money2,pcount1,pcount2)
+	select '2','5',zz,SUM(ISNULL([money],0)),SUM(ISNULL([money1],0)),SUM(ISNULL([money2],0)),SUM(ISNULL([pcount1],0)),SUM(ISNULL([pcount2],0)) from @tmp where pno='1' group by zz
 	
-	update @tmp set gno=case when len(bank)<=6 then '3' else '4' end where gno='0'
+	insert into @tmp(pno,gno,zz,[money],money1,money2,pcount1,pcount2)
+	select '4','6',CHAR(255),SUM(ISNULL([money],0)),SUM(ISNULL([money1],0)),SUM(ISNULL([money2],0)),SUM(ISNULL([pcount1],0)),SUM(ISNULL([pcount2],0)) from @tmp where pno='1'
 	
+	insert into @tmp(pno,gno,zz,[money],money1,money2,pcount1,pcount2)
+	select '5','7',CHAR(255),SUM(ISNULL([money],0)),SUM(ISNULL([money1],0)),SUM(ISNULL([money2],0)),SUM(ISNULL([pcount1],0)),SUM(ISNULL([pcount2],0)) from @tmp where pno='1'
+	------------------------------------------------------------------------------------------
+	--補空白行
+	--declare @t_pagecount int = 45
+	--select @n = COUNT(1) from @tmp
+	--while @n%@t_pagecount!=0
+	--begin
+	--	insert into @tmp(pno,gno,zz)values('3','8',CHAR(255))
+	--	set @n= @n +1
+	--end
+	------------------------------------------------------------------------------------------
 	select a.* 
 	,b.typea cty 
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mm 
@@ -305,7 +439,7 @@ z_gqb1:--z_gqb1
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pcount2),1)),4,12)) p2,memo 
 	from @tmp a 
 	left join @stype b on a.typea=b.noa 
-	order by zz,pno,recno;
+	order by a.zz,a.pno,a.gqbno,a.noa,a.qno;
 		
 z_gqb3:--z_gqb3
 		SET QUOTED_IDENTIFIER OFF

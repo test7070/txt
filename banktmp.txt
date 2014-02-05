@@ -1,0 +1,125 @@
+export:--export
+	declare @t_bdate nvarchar(20) = [1]
+	declare @t_edate nvarchar(20) = [2]
+	declare @t_userno nvarchar(20) = [3]
+	declare @t_worker nvarchar(20) = [4]
+	-----------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(10),
+		bankno nvarchar(20),
+		datea nvarchar(10),
+		checkno nvarchar(30)
+	)
+	insert into @tmp(typea,bankno,datea,checkno)
+	select c.typea,b.bankno
+	,case when a.memo='代收轉今' or a.memo='次交轉今' then right('00'+cast(year(dateadd(dd,1,cast(cast(cast(left(a.datea,3) as int)+1911 as nvarchar)+RIGHT(a.datea,6) as date)))-1911 as nvarchar),3)
+		+RIGHT(convert(nvarchar,dateadd(dd,1,cast(cast(cast(left(a.datea,3) as int)+1911 as nvarchar)+RIGHT(a.datea,6) as date)),111),6)
+		else a.datea end
+	,a.checkno
+	from banktmps a
+	right join banktmp b on a.noa=b.noa
+	right join gqb c on a.checkno=c.gqbno
+	left join ufs d on a.checkno=d.checkno
+	where len(a.checkno)>0 and d.noa is null
+	and a.datea between @t_bdate and @t_edate
+	group by c.typea,b.bankno
+	,case when a.memo='代收轉今' or a.memo='次交轉今' then right('00'+cast(year(dateadd(dd,1,cast(cast(cast(left(a.datea,3) as int)+1911 as nvarchar)+RIGHT(a.datea,6) as date)))-1911 as nvarchar),3)
+		+RIGHT(convert(nvarchar,dateadd(dd,1,cast(cast(cast(left(a.datea,3) as int)+1911 as nvarchar)+RIGHT(a.datea,6) as date)),111),6)
+		else a.datea end
+	,a.checkno
+	
+	if exists(select checkno from @tmp group by checkno having COUNT(1)>1)
+	begin
+		select checkno,isnull(checkno,'')+'支票重覆' errmsg from @tmp group by checkno having COUNT(1)>1
+		return
+	end
+	-----------------------------------------------------------------------------------
+	declare @uf table(
+		noa nvarchar(20),
+		typea nvarchar(10),
+		bankno nvarchar(30),
+		bank nvarchar(50),
+		datea nvarchar(10),
+		account nvarchar(30),
+		[money] float,
+		worker nvarchar(20)
+	)
+	declare @ufs table(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		sel int,
+		checkno nvarchar(30),
+		bankno nvarchar(20),
+		bank nvarchar(50),
+		account nvarchar(50),
+		datea nvarchar(10),
+		[money] float
+	)
+	declare @typea nvarchar(10)
+	declare @bankno nvarchar(30)
+	declare @datea nvarchar(20)
+	declare @noa nvarchar(20)
+	
+	declare cursor_table cursor for
+	select typea,bankno,datea from @tmp group by typea,bankno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @typea,@bankno,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select top 1 @noa = a.noa
+		from(
+			select noa from uf where left(noa,9)='HA'+REPLACE(@datea,'/','') 
+			union
+			select noa from @uf where left(noa,9)='HA'+REPLACE(@datea,'/','')  )a
+		order by noa desc
+		if @noa is null
+		begin
+			set @noa= 'HA'+REPLACE(@datea,'/','') + '001'
+		end
+		else
+		begin
+			set @noa = LEFT(@noa,9)+ right('00'+cast(cast(RIGHT(@noa,3)as int)+1 as nvarchar),3)
+		end
+
+		insert into @uf(noa,typea,bankno,bank,datea,account,[money],worker)
+		select @noa,@typea,a.bankno,c.bank,a.datea,c.account,sum(b.[money]),@t_worker
+		from @tmp a
+		right join gqb b on a.checkno=b.gqbno
+		right join bank c on a.bankno=c.noa
+		where a.typea=@typea and a.bankno=@bankno and a.datea = @datea
+		group by a.typea,a.bankno,c.bank,a.datea,c.account
+		
+		insert into @ufs(noa,noq,sel,checkno,bankno,bank,account,datea,[money])
+		select @noa,RIGHT('00'+cast(row_number()over(order by a.checkno) as nvarchar),3)
+			,1,a.checkno,b.bankno,b.bank,b.account,b.indate,b.[money]
+		from @tmp a
+		right join gqb b on a.checkno=b.gqbno
+		where a.typea=@typea and a.bankno=@bankno and a.datea = @datea
+		
+		fetch next from cursor_table
+		into @typea,@bankno,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------
+	begin try 
+		insert into uf(noa,typea,bankno,bank,datea,account,[money],worker)
+		select noa,typea,bankno,bank,datea,account,[money],worker from @uf
+		insert into ufs(noa,noq,sel,checkno,bankno,bank,account,datea,[money])
+		select noa,noq,sel,checkno,bankno,bank,account,datea,[money] from @ufs
+		
+		insert into drun(datea,timea,usera,action,noa,tablea,title)
+		select convert(nvarchar,getdate(),111),left(convert(nvarchar,getdate(),108),5)
+			,@t_userno,'Insert',noa,'uf','自動兌現'
+		from @uf
+		
+	end try
+	begin catch
+		select '資料寫入錯誤' errmsg 
+		return
+	end catch
+	select a.*,b.nn mount
+	from @uf a 
+	outer apply (select count(1) nn from @ufs) b
+	order by a.noa;
