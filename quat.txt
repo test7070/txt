@@ -3,8 +3,13 @@ quat2orde:--quat2orde
 set quoted_identifier off
 declare @cmd nvarchar(max)
 declare @t_quatno nvarchar(max) = [1] ----報價單號
-declare @t_accy nvarchar(10) = [2] -----年度
-declare @t_datea nvarchar(10) ----訂單日期
+declare @t_accy nvarchar(10) = [2] ----報價單年度
+declare @t_today nvarchar(10) = convert(nvarchar,getdate(),111) -----今日日期
+set @t_today = cast(cast(left(@t_today,4) as int)-1911 as nvarchar) + substring(@t_today,5,len(@t_today)-4)
+declare @t_insaccy nvarchar(10) = left(@t_today,3)
+declare @t_quataccy nvarchar(10)
+declare @searchNoaAccy nvarchar(10)
+declare @t_datea nvarchar(10)
 declare @t_orde_deli nvarchar(10) = 'E' -----訂單編號前置詞
 declare @t_vcc_deli nvarchar(10) = 'D' -----出貨單前置詞
 declare @t_tmpNoa nvarchar(max)
@@ -14,7 +19,8 @@ declare @t_defaultStroeno nvarchar(max) = 'RAA000' -----預設倉庫
 set @t_quatno = ltrim(rtrim(@t_quatno))
 if(len(@t_quatno)>0)
 begin
-	----set @t_accy = (select top 1 accy from view_quat where noa=@t_quatno)
+	---set @t_quataccy = (select top 1 accy from view_quat where noa=@t_quatno)
+	set @t_quataccy = @t_accy
 	set @t_tmpNoa = (select top 1 postname from view_quat where noa=@t_quatno)
 	set @t_stype = rtrim(ltrim(isnull((select top 1 stype from view_quat where noa=@t_quatno),'')))
 	if(@t_stype='4')
@@ -22,18 +28,20 @@ begin
 		--------刪除之前quat所產生的出貨單 <<Start>>
 		if(isnull(@t_tmpNoa,'') != '')
 		begin
-			set @cmd = "delete vcc"+@t_accy + " where noa='" + @t_tmpNoa + "'"
+			set @searchNoaAccy = (select top 1 accy from view_vcc where noa=@t_tmpNoa)
+			set @cmd = "delete vcc"+@searchNoaAccy + " where noa='" + @t_tmpNoa + "'"
 			execute(@cmd)
-			set @cmd = "delete vccs"+@t_accy + " where noa='" + @t_tmpNoa + "'"
+			set @cmd = "delete vccs"+@searchNoaAccy + " where noa='" + @t_tmpNoa + "'"
 			execute(@cmd)
 		end
 		--------刪除之前quat所產生的出貨單 <<End>>
 		--------如果之前無產生出貨單則取得最新出貨單編號 <<Start>>
 		if(isnull(@t_tmpNoa,'') = '')
 		begin
-			set @t_datea = (select top 1 odate from view_quat where noa=@t_quatno)
+			--set @t_datea = (select top 1 odate from view_quat where noa=@t_quatno)
+			set @t_datea = @t_today
 			set @t_datea = @t_vcc_deli+replace(@t_datea,'/','')
-			set @t_tmpNoa = (select max(noa) from view_vcc where (accy=@t_accy) and (left(noa,len(@t_datea))=@t_datea))
+			set @t_tmpNoa = (select max(noa) from view_vcc where (accy=@t_insaccy) and (left(noa,len(@t_datea))=@t_datea))
 			if(isnull(@t_tmpNoa,'')='')
 			begin
 				set @t_tmpNoa = @t_datea+'001'
@@ -46,23 +54,23 @@ begin
 		end
 		--------如果之前無產生出貨單則取得最新出貨單編號 <<End>>
 		--------插入BBM <<Start>>
-		set @cmd = "insert into vcc"+@t_accy+"(datea,mon,typea,stype,noa,cno,acomp,coin,floata,custno,comp,nick,
+		set @cmd = "insert into vcc"+@t_insaccy+"(datea,mon,typea,stype,noa,cno,acomp,coin,floata,custno,comp,nick,
 		paytype,trantype,salesno,sales,tel,fax,post,addr,post2,addr2,money,tax,taxtype,total,totalus,worker,worker2,memo)
-			select odate,left(odate,6),'1',stype,N'"+@t_tmpNoa+"',cno,acomp,coin,floata,custno,comp,b.nick,
+			select N'"+@t_today+"',left(N'"+@t_today+"',6),'1',stype,N'"+@t_tmpNoa+"',cno,acomp,coin,floata,custno,comp,b.nick,
 			paytype,trantype,salesno,sales,tel,fax,post,addr,post2,addr2,money,tax,taxtype,total,totalus,worker,worker2,memo
-			from quat"+@t_accy+" a outer apply(select nick from cust where noa=a.custno) b where noa=N'"+@t_quatno+"'"
+			from quat"+@t_quataccy+" a outer apply(select nick from cust where noa=a.custno) b where noa=N'"+@t_quatno+"'"
 		execute(@cmd)
 		--------插入BBM <<End>>
 		--------插入BBS <<Start>>
-		set @cmd = "insert into vccs"+@t_accy+"(noa,noq,productno,product,unit,mount,price,total,memo,ordeno,no2,storeno,store)
+		set @cmd = "insert into vccs"+@t_insaccy+"(noa,noq,productno,product,unit,mount,price,total,memo,ordeno,no2,storeno,store)
 			select N'"+@t_tmpNoa+"',a.no3,a.productno,a.product,a.unit,a.mount,a.price,a.total,a.memo,a.noa,a.no3,b.noa,b.store
-			from quats"+@t_accy+" a left join store b on b.noa=N'"+@t_defaultStroeno+"' where a.noa=N'"+@t_quatno+"'"
+			from quats"+@t_quataccy+" a left join store b on b.noa=N'"+@t_defaultStroeno+"' where a.noa=N'"+@t_quatno+"'"
 		execute(@cmd)
 		--------插入BBS <<End>>
 		--------更新quat的postname為出貨單編號,vcc的zipname為報價單號 <<Start>>
-		set @cmd = "update quat"+@t_accy+" set postname=N'"+@t_tmpNoa+"' where noa=N'"+@t_quatno+"'"
+		set @cmd = "update quat"+@t_quataccy+" set postname=N'"+@t_tmpNoa+"' where noa=N'"+@t_quatno+"'"
 		execute(@cmd)
-		set @cmd = "update vcc"+@t_accy+" set zipname=N'"+@t_quatno+"' where noa=N'"+@t_tmpNoa+"'"
+		set @cmd = "update vcc"+@t_insaccy+" set zipname=N'"+@t_quatno+"' where noa=N'"+@t_tmpNoa+"'"
 		execute(@cmd)
 		--------更新quat的postname為出貨單編號,vcc的ordeno為報價單號 <<End>>
 	end
@@ -71,18 +79,20 @@ begin
 		--------刪除之前quat所產生的訂單 <<Start>>
 		if(isnull(@t_tmpNoa,'') != '')
 		begin
-			set @cmd = "delete orde"+@t_accy + " where noa='" + @t_tmpNoa + "'"
+			set @searchNoaAccy = (select top 1 accy from view_orde where noa=@t_tmpNoa)
+			set @cmd = "delete orde"+@searchNoaAccy + " where noa='" + @t_tmpNoa + "'"
 			execute(@cmd)
-			set @cmd = "delete ordes"+@t_accy + " where noa='" + @t_tmpNoa + "'"
+			set @cmd = "delete ordes"+@searchNoaAccy + " where noa='" + @t_tmpNoa + "'"
 			execute(@cmd)
 		end
 		--------刪除之前quat所產生的訂單 <<End>>
 		--------如果之前無產生訂單則取得最新訂單編號 <<Start>>
 		if(isnull(@t_tmpNoa,'') = '')
 		begin
-			set @t_datea = (select top 1 odate from view_quat where noa=@t_quatno)
+			--set @t_datea = (select top 1 odate from view_quat where noa=@t_quatno)
+			set @t_datea = @t_today
 			set @t_datea = @t_orde_deli+replace(@t_datea,'/','')
-			set @t_tmpNoa = (select max(noa) from view_orde where (accy=@t_accy) and (left(noa,len(@t_datea))=@t_datea))
+			set @t_tmpNoa = (select max(noa) from view_orde where (accy=@t_insaccy) and (left(noa,len(@t_datea))=@t_datea))
 			if(isnull(@t_tmpNoa,'')='')
 			begin
 				set @t_tmpNoa = @t_datea+'001'
@@ -95,27 +105,27 @@ begin
 		end
 		--------如果之前無產生訂單則取得最新訂單編號 <<End>>
 		--------插入BBM <<Start>>
-		set @cmd = "insert into orde"+@t_accy+"(odate,datea,stype,noa,cno,acomp,coin,floata,contract,isproj,custno,comp,nick,
+		set @cmd = "insert into orde"+@t_insaccy+"(odate,datea,stype,noa,cno,acomp,coin,floata,contract,isproj,custno,comp,nick,
 		paytype,trantype,salesno,sales,tel,fax,post,addr,post2,addr2,apv,money,tax,taxtype,total,totalus,worker,worker2,memo)
-			select odate,'',stype,N'"+@t_tmpNoa+"',cno,acomp,coin,floata,contract,isproj,custno,comp,b.nick,
+			select N'"+@t_today+"','',stype,N'"+@t_tmpNoa+"',cno,acomp,coin,floata,contract,isproj,custno,comp,b.nick,
 			paytype,trantype,salesno,sales,tel,fax,post,addr,post2,addr2,apv,money,tax,taxtype,total,totalus,worker,worker2,memo
-			from quat"+@t_accy+" a outer apply(select nick from cust where noa=a.custno) b where noa=N'"+@t_quatno+"'"
+			from quat"+@t_quataccy+" a outer apply(select nick from cust where noa=a.custno) b where noa=N'"+@t_quatno+"'"
 		execute(@cmd)
 		--------插入BBM <<End>>
 		--------插入BBS <<Start>>
-		set @cmd = "insert into ordes"+@t_accy+"(noa,no2,productno,product,unit,mount,price,total,c1,notv,memo,quatno,no3)
+		set @cmd = "insert into ordes"+@t_insaccy+"(noa,no2,productno,product,unit,mount,price,total,c1,notv,memo,quatno,no3)
 			select N'"+@t_tmpNoa+"',no3,productno,product,unit,mount,price,total,0,0,memo,noa,no3
-			from quats"+@t_accy+" where noa=N'"+@t_quatno+"'"
+			from quats"+@t_quataccy+" where noa=N'"+@t_quatno+"'"
 		execute(@cmd)
 		--------插入BBS <<End>>
 		--------更新BBS未交量為mount <<Start>>
-		set @cmd = "update ordes"+@t_accy+" set notv=mount where noa=N'"+@t_tmpNoa+"'"
+		set @cmd = "update ordes"+@t_insaccy+" set notv=mount where noa=N'"+@t_tmpNoa+"'"
 		execute(@cmd)
 		--------更新BBS未交量為mount <<End>>
 		--------更新quat的postname為訂單編號,orde的quatno為報價單號 <<Start>>
-		set @cmd = "update quat"+@t_accy+" set postname=N'"+@t_tmpNoa+"' where noa=N'"+@t_quatno+"'"
+		set @cmd = "update quat"+@t_quataccy+" set postname=N'"+@t_tmpNoa+"' where noa=N'"+@t_quatno+"'"
 		execute(@cmd)
-		set @cmd = "update orde"+@t_accy+" set quatno=N'"+@t_quatno+"' where noa=N'"+@t_tmpNoa+"'"
+		set @cmd = "update orde"+@t_insaccy+" set quatno=N'"+@t_quatno+"' where noa=N'"+@t_tmpNoa+"'"
 		execute(@cmd)
 		--------更新quat的postname為訂單編號,orde的quatno為報價單號 <<End>>
 	end
