@@ -121,14 +121,16 @@ declare @t_bstoreno nvarchar(90)
 declare @t_estoreno nvarchar(90)
 declare @t_brackno nvarchar(90)
 declare @t_erackno nvarchar(90)
-declare @t_enddate nvarchar(10)
+declare @t_bdatea nvarchar(10) 
+declare @t_edatea nvarchar(10) 
 set @t_bproductno = case when '#non' = [2] then '' else [2] end
 set @t_eproductno = case when '#non' = [3] then char(255) else [3] end
 set @t_bstoreno = case when '#non' = [4] then '' else [4] end
 set @t_estoreno = case when '#non' = [5] then char(255) else [5] end
 set @t_brackno = case when '#non' = [6] then '' else [6] end
 set @t_erackno = case when '#non' = [7] then char(255) else [7] end
-set @t_enddate = case when '#non' = [8] then '' else [8] end
+set @t_bdatea = case when '#non' = [8] then '' else [8] end
+set @t_edatea = case when '#non' = [9] then char(255) else [9] end
 ----------------------------------------*
 declare @tmp table(
 	gno nvarchar(10),
@@ -162,7 +164,7 @@ insert into @tmp
 		where (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and
 				 (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno) and
 				 (isnull(b.rackno,'') between @t_brackno and @t_erackno) and
-				 (len(@t_enddate)=0 or a.datea<=@t_enddate)
+				 (a.datea<=@t_edatea)
 		union all
 		select
 			a.datea,a.noa,b.productno,b.product,b.storeno,b.store,b.rackno,b.mount mount,
@@ -174,7 +176,7 @@ insert into @tmp
 		where (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and
 				 (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno) and
 				 (isnull(b.rackno,'') between @t_brackno and @t_erackno) and
-				 (len(@t_enddate)=0 or a.datea<=@t_enddate)
+				 (a.datea<=@t_edatea)
 		union all
 		select
 			a.datea,a.noa,b.productno,b.product,a.storeno,a.store,a.rackno,b.mount,
@@ -184,18 +186,18 @@ insert into @tmp
 		where (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and
 				 (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) and
 				 (isnull(a.rackno,'') between @t_brackno and @t_erackno) and
-				 (len(@t_enddate)=0 or a.datea<=@t_enddate)
+				 (a.datea<=@t_edatea)
 		union all
 		select
 			a.datea,a.noa,b.productno,b.product,a.storeno,a.store,a.rackno,b.mount,
-			'調出',1 stktype,'cng?left(noa,'+cast(len(a.noa) as nvarchar)+')=$noa?'+a.accy qhref
+			'調出',-1 stktype,'cng?left(noa,'+cast(len(a.noa) as nvarchar)+')=$noa?'+a.accy qhref
 		from view_cng a
 		left join view_cngs b on a.noa=b.noa
 		where (isnull(a.storeno,'') != '') and
 				 (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and
 				 (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) and
 				 (isnull(a.rackno,'') between @t_brackno and @t_erackno) and
-				 (len(@t_enddate)=0 or a.datea<=@t_enddate)
+				 (a.datea<=@t_edatea)
 		union all
 		select
 			a.datea,a.noa,b.productno,b.product,a.storeinno,a.storein,a.rackinno,b.mount,
@@ -206,10 +208,18 @@ insert into @tmp
 				 (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and
 				 (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) and
 				 (isnull(a.rackinno,'') between @t_brackno and @t_erackno) and
-				 (len(@t_enddate)=0 or a.datea<=@t_enddate)
+				 (a.datea<=@t_edatea)
 	) a
 	order by a.productno,a.product,a.storeno,a.store,a.rackno,a.datea
-
+if(len(@t_bdatea) > 0)
+begin
+	insert into @tmp(gno,orderby,datea,noa,stktype,productno,products,mount,tablea)
+		select
+			'2' gno,0 orderby,null datea,null  noa,0 stktype,productno,products,sum(mount*stktype),'期初庫存' tablea
+		from @tmp where (gno = '0') and (datea < @t_bdatea)
+		group by productno,products
+	delete @tmp where (gno = '0') and (datea < @t_bdatea) and ( orderby != 0)
+end
 declare @idno int
 declare @productno nvarchar(90)
 declare @products nvarchar(max)
@@ -220,19 +230,26 @@ declare @mount float
 declare @c_stkmount float=0
 declare cursor_table cursor for
 	select a.idno,a.productno,a.products,a.stktype,a.mount from @tmp a
-	where gno='0' order by a.productno,a.products,a.datea,a.storeno,a.stores,a.rackno
+	where gno='0' or a.gno='2' order by a.productno,a.products,a.datea,a.storeno,a.stores,a.rackno
 open cursor_table
 fetch next from cursor_table
 into @idno,@productno,@products,@stktype,@mount
 while(@@FETCH_STATUS <> -1)
 begin
-	if((@productno = @lastproductno) and (@products = @lastproducts))
+	if(@stktype!=0)
 	begin
-		set @c_stkmount = @c_stkmount +(isnull(@mount,0)*isnull(@stktype,1))
+		if((@productno = @lastproductno) and (@products = @lastproducts))
+		begin
+			set @c_stkmount = @c_stkmount +(isnull(@mount,0)*isnull(@stktype,1))
+		end
+		else
+		begin
+			set @c_stkmount = (isnull(@mount,0)*isnull(@stktype,1))
+		end
 	end
 	else
 	begin
-		set @c_stkmount = (isnull(@mount,0)*isnull(@stktype,1))
+		set @c_stkmount = @mount
 	end
 	update @tmp set stkmount=@c_stkmount where idno=@idno
 	set @lastproductno = @productno
@@ -244,8 +261,8 @@ close cursor_table
 deallocate cursor_table
 insert into @tmp(gno,orderby,productno,products,stkmount)
 	select
-		'1',2,a.productno,a.products,sum(isnull(a.mount,0)*isnull(a.stktype,1))
-	from @tmp a where a.gno='0'
+		'1',2,a.productno,a.products,sum(case when gno='2' then isnull(a.mount,0) else isnull(a.mount,0)*isnull(a.stktype,1) end)
+	from @tmp a where a.gno='0' or a.gno='2'
 	group by a.productno,a.products
 select
 	a.gno,a.idno,a.orderby,a.datea,a.noa,a.stktype,a.productno,a.products,
