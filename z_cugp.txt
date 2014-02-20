@@ -37,16 +37,16 @@ declare @tmp table(
 
 --插入已排程的製令且未完工
 insert into @tmp
-select '0',a.noq,a.workno,a.processno,a.process,b.stationno,b.station,a.productno,a.product,a.mount,a.hours,'',a.days,a.cuadate,a.uindate,a.uindate,c.hours,c.gen
-from cugs[1] a left join work[1] b on a.workno=b.noa  left join station c on b.stationno=c.noa
+select '0',a.noq,a.workno,a.processno,a.process,b.stationno,b.station,a.productno,a.product,a.mount,a.hours,'',a.days,a.cuadate,a.uindate,a.uindate,d.hours,c.gen
+from view_cugs a left join view_work b on a.workno=b.noa  left join station c on b.stationno=c.noa left join uca d on b.productno=d.noa
 where b.enda!='1' and (b.stationno between @t_bstation and @t_estation)
 order by a.noa,a.noq
 
 --插入未排程的製令
 insert into @tmp
-select '2','',a.noa,a.processno,a.process,a.stationno,a.station,a.productno,a.product,a.mount,a.hours,'',round(a.mount/(b.hours*b.gen),0),cuadate,uindate,'',b.hours,b.gen
-from view_work[1] a left join station b on a.stationno=b.noa
-where enda!='1' and (a.stationno between @t_bstation and @t_estation) and a.noa not in (select workno from cugs[1])
+select '2','',a.noa,a.processno,a.process,a.stationno,a.station,a.productno,a.product,a.mount,a.hours,'',case when c.hours=0 then 0 else round(a.mount/(b.gen/c.hours),2) end,cuadate,uindate,'',c.hours,b.gen
+from view_work a left join station b on a.stationno=b.noa left join uca c on a.productno=c.noa
+where enda!='1' and (a.stationno between @t_bstation and @t_estation) and a.noa not in (select workno from view_cugs)
 and a.stationno!='' and (a.processno between @t_bprocess and @t_eprocess)
 order by a.stationno,case when a.cuadate='' then '999/99/99' else a.cuadate end,case when a.uindate='' then '999/99/99' else a.uindate end,a.processno,a.noa desc,a.hours--讓要最先做的製程放在最前面
 
@@ -111,13 +111,15 @@ begin
 			or (select  top 1 enddate from @tmp where gno='0' and stationno=@stationno order by sidno desc)<@now_date --今天沒有排程
 		)
 		begin
-			set @bgens=@t_ghours*@t_gens
+			set @bgens=@t_gens --set @bgens=@t_ghours*@t_gens
 			set @t_enddate=@now_date
 		end
 		else
 		begin
-			--總產能-平均產能
-			set @bgens=round((@t_ghours*@t_gens)-(select SUM(mount) from @tmp where gno='0' and stationno=@stationno)/(@t_ghours*@t_gens),0)
+			--總產能-平均產能 剩餘產能=(1天產能-(總產能%1天產能)
+			--set @bgens=round(@t_gens-((select SUM(mount*(gens/ghours)) from @tmp where gno='0' and stationno=@stationno)%(@t_gens)),0)
+			set @bgens=round((@t_gens*Ceiling((select SUM(mount*(gens/ghours)) from @tmp where gno='0' and stationno=@stationno)/@t_gens))
+			- (select SUM(mount*(gens/ghours)) from @tmp where gno='0' and stationno=@stationno),0)
 			set @t_enddate=(select top 1 enddate from @tmp where gno='0' and stationno=@stationno order by sidno desc)
 		end
 	end 
@@ -128,7 +130,8 @@ begin
 		begin
 			set @s_workdate=@workdate
 			set @s_enddate=@workdate
-			set @s_bgens=@t_ghours*@t_gens-@mount
+			--set @s_bgens=@t_ghours*@t_gens-@mount
+			set @s_bgens=@t_gens-(@mount*@t_ghours)
 			
 			while (@s_bgens < 0)
 			begin
@@ -151,7 +154,8 @@ begin
 					set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@s_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@s_enddate,6),2)+right(@s_enddate,2))-1
 				end
 				
-				set @s_bgens=@s_bgens+(@t_ghours*@t_gens)--加一天產能
+				--set @s_bgens=@s_bgens+(@t_ghours*@t_gens)--加一天產能
+				set @s_bgens=@s_bgens+@t_gens--加一天產能
 				
 			end	
 			
@@ -167,7 +171,8 @@ begin
 		begin
 			set @s_workdate=(select top 1 enddate from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)
 			set @s_enddate=(select top 1 enddate from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)
-			set @s_bgens=(select top 1 bgens from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)-@mount
+			--set @s_bgens=(select top 1 bgens from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)-@mount
+			set @s_bgens=(select top 1 bgens from @tmpa where left(@workno,10)=left(workno,10) order by sidno desc)-(@mount*@ghours)
 			
 			--判斷工作日是否大於運算截止日
 			if(@s_workdate>@t_edate)
@@ -200,7 +205,8 @@ begin
 					set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@s_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@s_enddate,6),2)+right(@s_enddate,2))-1
 				end
 				
-				set @s_bgens=@s_bgens+(@t_ghours*@t_gens)--加一天產能
+				--set @s_bgens=@s_bgens+(@t_ghours*@t_gens)--加一天產能
+				set @s_bgens=@s_bgens+@t_gens--加一天產能
 				
 			end	
 			
@@ -214,7 +220,8 @@ begin
 		else
 		begin
 			set @t_workdate=@t_enddate
-			set @bgens=@bgens-@mount
+			--set @bgens=@bgens-@mount
+			set @bgens=@bgens-(@mount*@ghours)
 			
 			--判斷工作日是否大於運算截止日
 			if(@t_workdate>@t_edate)
@@ -247,7 +254,8 @@ begin
 					set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@t_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@t_enddate,6),2)+right(@t_enddate,2))-1
 				end
 				
-				set @bgens=@bgens+(@t_ghours*@t_gens)--加一天產能
+				--set @bgens=@bgens+(@t_ghours*@t_gens)--加一天產能
+				set @s_bgens=@s_bgens+@t_gens--加一天產能
 			end	
 			
 			update @tmp
