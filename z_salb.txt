@@ -428,6 +428,162 @@ select
 from @tmp a
 order by a.sno;
 --****************************************************************************************************************************************
+z_salb7:--z_salb7
+declare @t_xyears nvarchar(10)
+set @t_xyears = case when '#non'='#non' then '103' else '#non' end
+declare @tmp table(
+	gno nvarchar(10),
+	pageno int,
+	orderby int,
+	idno int identity(0,1),
+	sssno nvarchar(50),
+	namea nvarchar(90),
+	healthmoney int,
+	health4money int,
+	datea nvarchar(10),
+	typea nvarchar(50),
+	moneya int,
+	moneyb int,
+	moneyc int,
+	moneyd int,
+	moneye int
+)
+insert into @tmp
+	select
+		'0' gno,0 pageno,0 orderby,d.noa,d.namea,isnull(c.sa_health,0),isnull(c.sa_health,0)*4,
+		a.datea,a.title,b.money,0,0,0,0
+	from salb a
+	left join salbs b on a.noa=b.noa
+	left join labase c on b.sssno=c.noa
+	left join sss d on b.sssno=d.noa
+	where (charindex('薪資',a.title) <= 0) and left(a.datea,3)=@t_xyears
+	order by d.noa,a.datea
+declare @idno int
+declare @sssno nvarchar(50)
+declare @lastsssno nvarchar(50)
+declare @health4money int
+declare @moneya int
+
+declare @now_money int
+declare @lastmoney int
+declare @flag int = 0
+declare cursor_table cursor for
+	select idno,sssno,health4money,moneya from @tmp
+open cursor_table
+fetch next from cursor_table
+into @idno,@sssno,@health4money,@moneya
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@lastsssno=@sssno)
+	begin
+		set @lastmoney = @lastmoney+@moneya
+	end
+	else
+	begin
+		set @flag=0
+		set @lastmoney = @moneya
+	end
+	set @now_money = @health4money-@lastmoney
+	if((@now_money < 0) and (@flag=0))
+	begin
+		update @tmp set moneyd = @now_money*(-1) where idno=@idno
+		set @flag = 1
+	end
+	else if((@now_money < 0) and (@flag=1))
+	begin
+		update @tmp set moneyd = moneya where idno=@idno
+	end
+	update @tmp set moneyb=@lastmoney,
+							moneyc=@health4money-@lastmoney
+	where idno=@idno
+	set @lastsssno=@sssno
+	fetch next from cursor_table
+	into @idno,@sssno,@health4money,@moneya
+end
+close cursor_table
+deallocate cursor_table
+update @tmp set moneye = round(moneyd*0.02,0)
+
+
+--**處理分頁 <<Start>>
+----------------------------------------------------------*
+declare @t_pageline int = 17 -------一頁可放幾行
+----------------------------------------------------------*
+declare @t_Count int = 1
+declare @t_bbsCount int = 0
+declare @t_idno int
+declare @t_nowPage int = 1
+set @lastsssno = null
+select @t_bbsCount = count(*) from @tmp where (gno='0')
+if(@t_bbsCount > 0)
+begin
+	declare cursor_table cursor for
+		select idno,sssno from @tmp where (gno='0') order by gno,sssno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @t_idno,@sssno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((@t_Count>=@t_pageline) or (@lastsssno!=@sssno))
+		begin
+			set @t_nowPage = @t_nowPage+1
+			set @t_Count = 1
+		end
+		update @tmp set pageno=@t_nowPage,orderby=@t_Count where idno=@t_idno
+		set @t_Count =@t_Count+1
+		set @lastsssno=@sssno
+		fetch next from cursor_table
+		into @t_idno,@sssno
+	end
+	close cursor_table
+	deallocate cursor_table
+end
+--**處理分頁 <<End>>
+--**插入空白行 <<Start>>
+declare @namea nvarchar(max)
+declare @pageno int
+declare @recCount int
+declare cursor_table cursor for
+	select pageno,sssno,namea,max(orderby) from @tmp where (gno='0') group by pageno,sssno,namea
+open cursor_table
+fetch next from cursor_table
+into @pageno,@sssno,@namea,@recCount
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@recCount<@t_pageline)
+	begin
+		while(@recCount<@t_pageline)
+		begin
+			set @recCount = @recCount+1
+			insert into @tmp(gno,sssno,namea,pageno,orderby)
+				values('1',@sssno,@namea,@pageno,@recCount)
+		end
+	end
+	fetch next from cursor_table
+	into @pageno,@sssno,@namea,@recCount
+end
+close cursor_table
+deallocate cursor_table
+--**插入空白行 <<End>>
+insert into @tmp(gno,pageno,orderby,sssno)
+	select
+		'2' gno,a.pageno,9999,a.sssno
+	from @tmp a
+	group by a.sssno,a.pageno
+update @tmp set moneyd=null,moneye=null where moneyd=0
+select
+	a.gno,a.pageno,a.orderby,a.idno,a.sssno,a.namea,a.datea,a.typea,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.healthmoney),1)),4,12)) healthmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.health4money),1)),4,12)) health4money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.moneya),1)),4,12)) moneya,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.moneyb),1)),4,12)) moneyb,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.moneyc),1)),4,12)) moneyc,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.moneyd),1)),4,12)) moneyd,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.moneye),1)),4,12)) moneye,
+	@t_xyears t_xyear
+from @tmp a
+order by a.pageno,a.orderby,a.idno;
+--****************************************************************************************************************************************
 z_sali:--z_sali
 declare @t_bsno nvarchar(20)
 declare @t_esno nvarchar(20)
