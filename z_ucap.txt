@@ -9,47 +9,67 @@ set @productno = case when '#non'=[2] then '' else [2] end
 set @parent='root'
 
 declare @tmp table( 
-productno nvarchar(MAX), 
-product nvarchar(MAX), 
-parent nvarchar(MAX),
-mount float
+	productno nvarchar(MAX), 
+	product nvarchar(MAX), 
+	parent nvarchar(MAX), 
+	mount float,
+	price float,
+	costb float,--人工
+	costc float,--製造費用
+	costd float
 ) 
 
+
 insert into @tmp 
-select productno,product,noa,mount from ucas 
+select productno,product,noa,mount,isnull((select price from view_costs where mon=@t_mon and productno=a.productno),0)
+,isnull((select wages*hours from uca where noa= a.productno),0)
+,isnull((select makes*hours from uca where noa= a.productno),0)
+,isnull((select price from uca where noa= a.productno),0)
+from ucas a
 
 if(PATINDEX('%.%',@productno)>0) 
 begin 
-while(PATINDEX('%.%',@productno)>0) 
-begin 
-insert into @tmp 
-select left(@productno,PATINDEX('%.%',@productno)-1),(select product from ucas where productno=@productno),@parent 
-,(select mount from ucas where productno=@productno)
-set @productno=RIGHT(@productno,LEN(@productno)-PATINDEX('%.%',@productno)) 
+	while(PATINDEX('%.%',@productno)>0) 
+	begin 
+		insert into @tmp 
+		select left(@productno,PATINDEX('%.%',@productno)-1)
+		,(select product from uca where noa=left(@productno,PATINDEX('%.%',@productno)-1)),@parent,1
+		,isnull((select price from view_costs where mon=@t_mon and productno=left(@productno,PATINDEX('%.%',@productno)-1)),0)
+		,isnull((select wages*hours from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
+		,isnull((select makes*hours from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
+		,isnull((select price from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
+		
+		set @productno=RIGHT(@productno,LEN(@productno)-PATINDEX('%.%',@productno)) 
+	end 
 end 
-end 
+
 insert into @tmp 
 select @productno,(select product from uca where noa=@productno),@parent,1
-
+,isnull((select price from view_costs where mon=@t_mon and productno=@productno),0)
+,isnull((select wages*hours from uca where noa= @productno),0)
+,isnull((select makes*hours from uca where noa= @productno),0)
+,isnull((select price from uca where noa= @productno),0)
 
 BEGIN TRY 
---遞迴 
-WITH OrdersTable (productno,product,noa,Level,sortCol,mount) as 
-( 
-Select productno,product,parent,0, CONVERT(nvarchar(128),productno) ,mount
-from @tmp 
-where parent=@parent 
-UNION ALL 
-SELECT a.productno,a.product,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128),OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount
-FROM @tmp a, OrdersTable 
-WHERE a.parent=OrdersTable.productno 
-) 
-Select '0' gno,REPLICATE('　　',Level) + productno pno,product, level, sortcol 
-,(select reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,price*mount),1)),0,30))  from view_costs where mon=@t_mon and productno=OrdersTable.productno) ucccost
-From OrdersTable order by sortCol 
+	--遞迴 
+	WITH OrdersTable (productno,product,noa,Level,sortCol,mount,price,costb,costc,costd) as ( 
+		Select productno,product,parent,0, CONVERT(nvarchar(128),productno),mount,price,costb,costc,costd
+		from @tmp 
+		where parent=@parent 
+		UNION ALL 
+		SELECT a.productno,a.product,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128)
+		,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount,a.price,a.costb,a.costc,a.costd
+		FROM @tmp a, OrdersTable 
+		WHERE a.parent=OrdersTable.productno 
+	) 
+	
+	Select '0' gno,REPLICATE('　　',Level) + productno pno,product, level, sortcol 
+	, isnull(price*mount,0) costa,costb,costc,costd,(select SUM(price*mount+costb+costc+costd) from OrdersTable where left(sortcol,len(a.sortcol))=a.sortcol) ucccost
+	From OrdersTable a order by sortCol 
+	
 END TRY 
 BEGIN CATCH 
-select @@ERROR productno 
+	select @@ERROR productno 
 END CATCH 
 ------------------------------------------------------------------------------------------------------------;
 z_ucap2:--z_ucap2
