@@ -106,3 +106,104 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paymoney),1)),4,12)) paymoney,
 	sales,comp,typea
 from @tmp;
+-------------------------------------------------------------------------------------------------*
+z_bankw2:--z_bankw2
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bankmoney float
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bankmoney = cast(replace('0',',','') as float)
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	datea nvarchar(10), ----日期
+	gqb float, ----到期票據
+	umm float, ----應收帳款
+	pay float, ----應付帳款
+	ordc float, ----預估採購
+	oget float, ----預收
+	bankw float, ----借款融資
+	opay float, ----預付
+	total float, ----餘額
+	paymoney float
+)
+insert into @tmp
+	select '1',a.datea,0,0,0,0,0,a.money,0,0,
+	0
+	from bankw a
+	union
+	select '1',a.paydate,0,0,0,0,0,a.money,0,0,
+	(a.money * ( 1+ a.rate /365/100 * (DATEDIFF(day,CONVERT(datetime,cast((cast(left(a.datea,3) as int)+1911) as nvarchar)+right(a.datea,6)),
+					CONVERT(datetime,cast((cast(left(a.paydate,3) as int)+1911) as nvarchar)+right(a.paydate,6)))))) money
+	from bankw a
+	where isnull(a. paydate,'') != ''
+	union
+	select '1',a.datea,0,0,0,0,0,a.money,0,0,a.pay
+	from lcs a
+	where (a.money-a.pay) > 0 or (a.paydate > @t_edate)
+	union
+	select
+		'1',a.datea,0,0,0,0,(a.opay-a.unpay),0,0,0,0
+	from umm a
+	where a.opay >a.unpay
+	union
+	select
+		'1',a.datea,0,0,0,0,0,0,(a.opay-a.unpay),0,0
+	from pay a
+	where a.opay >a.unpay
+	union
+	select
+		'1',a.datea,0,a.sale,0,0,0,0,0,0,0
+	from umm a
+	union
+	select
+		'1',a.datea,0,0,a.sale,0,0,0,0,0,0
+	from pay a
+	union 
+	select
+		'1',a.datea,0,0,0,a.money,0,0,0,0,0
+	from (
+		select a.datea,(a.notv*a.price) money,a.memo from view_ordcs a
+	) a
+	union
+	select '1',a.indate,a.money,0,0,0,0,0,0,0,0
+	from gqb a
+	where isnull(a.enda,'')='' and (a.indate between @t_bdate and @t_edate)
+insert into @tmp(gno,datea,gqb,umm,pay,ordc,oget,bankw,opay,total,paymoney)
+	select
+		'0',datea,sum(gqb),sum(umm),sum(pay),sum(ordc),sum(oget),sum(bankw),sum(opay),sum(total),sum(paymoney)
+	from @tmp
+	where gno ='1'
+	group by datea
+delete @tmp where gno='1'
+update @tmp set total = gqb+umm-pay-ordc+opay-oget+bankw-paymoney
+declare @idno int
+declare @total float
+declare cursor_table cursor for
+	select idno,total from @tmp
+open cursor_table
+fetch next from cursor_table
+into @idno,@total
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_bankmoney = @t_bankmoney+@total
+	update @tmp set total = @t_bankmoney where idno = @idno
+	fetch next from cursor_table
+	into @idno,@total
+end
+close cursor_table
+deallocate cursor_table
+
+select
+	gno,datea,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gqb),1)),4,12)) gqb,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,umm),1)),4,12)) umm,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pay),1)),4,12)) pay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ordc),1)),4,12)) ordc,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,oget),1)),4,12)) oget,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bankw),1)),4,12)) bankw,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,opay),1)),4,12)) opay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paymoney),1)),4,12)) paymoney
+from @tmp;
