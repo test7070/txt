@@ -1,0 +1,68 @@
+z_cuap1:--z_cuap1
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bnoa nvarchar(100)
+declare @t_enoa nvarchar(100)
+declare @t_bpno nvarchar(100)
+declare @t_epno nvarchar(100)
+declare @t_stkdate nvarchar(30)
+
+set @t_accy= REPLACE(@t_accy,"'","")
+set @t_bpno = case when '#non' =  [2] then '' else  [2] end
+set @t_epno = case when '#non' =  [3] then char(255) else  [3] end
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+--*********************************************************************************************
+
+declare @cmd nvarchar(max) 
+declare @tmp table(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	gdemand float,
+	stkmount float,
+	ordcmount float,
+	safemount float,
+	ndemand float
+)
+
+insert into @tmp
+select '0',productno,(select product from ucc where noa=tmp.productno)products 
+,sum(gdemand)gdemand 
+,isnull((select sum(mount) from stkucc(@t_stkdate,'','') where productno=tmp.productno),0)stkmount
+,sum(ordcmount)ordcmount
+,isnull((select safemount from ucc where noa=tmp.productno),0) safemount
+,0 ndemand 
+from ( 
+--毛需求(全部未完工的製令) 
+select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 ordcmount from view_work w left join view_works ws on w.noa=ws.noa 
+where ws.productno in (select noa from ucc where typea='4' or typea='5') and (ws.productno between @t_bpno and @t_epno) and w.enda!='1' 
+group by ws.productno 
+union all 
+--毛需求(訂單內需求的數量) 
+select ob.productno,sum(ob.mount-ob.c1) gdemand,0 ordcmount from view_orde oa left join view_ordes ob on oa.noa=ob.noa 
+where oa.enda!='1' and ob.productno in (select noa from ucc where typea='4' or typea='5')	 and (ob.productno between @t_bpno and @t_epno) 
+group by ob.productno
+union all 
+--採購未入(不含訂單製令內需求的數量,結案表示已入庫) 
+select ocs.productno,0 gdemand,sum(ocs.mount)ordcmount from view_ordcs ocs left join view_ordbs obs on ocs.ordbno=obs.noa and ocs.no3=obs.no3 
+where ocs.enda!='1' and ocs.productno in (select noa from ucc where typea='4' or typea='5') and (ocs.productno between @t_bpno and @t_epno) 
+group by ocs.productno 
+)tmp group by productno
+
+
+
+update @tmp set ndemand = (gdemand-ordcmount-stkmount+safemount) 
+update @tmp set ndemand=0 where ndemand<0
+
+select gno,productno,products,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,safemount),1)),0,30)) safemount,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ndemand),1)),0,30)) ndemand
+from @tmp
+;
+----**************************************************************************************
+
