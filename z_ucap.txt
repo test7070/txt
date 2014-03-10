@@ -7,6 +7,9 @@ set @t_mon = case when '#non' = [5] then '' else [5] end
 set @productno = case when '#non'=[2] then '' else [2] end
 set @t_isprice = case when '#non'=[9] then '' else [9] end
 set @parent='root'
+------------報表設定<<Start>>------------
+declare @pageline int = 23 --每頁幾行
+------------報表設定<<End>>------------
 declare @tmp table( 
 	productno nvarchar(MAX), 
 	product nvarchar(MAX), 
@@ -18,6 +21,22 @@ declare @tmp table(
 	costc float,--製造費用
 	costd float
 ) 
+declare @result table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	pageno int,
+	pno nvarchar(max),
+	product nvarchar(max),
+	level int,
+	sortcol nvarchar(max),
+	mount float,
+	dividea nvarchar(max),
+	costa float,
+	costb float,
+	costc float,
+	costd float,
+	ucccost float
+)
 insert into @tmp 
 	select productno,product,noa,mount,dividea,isnull((select price from view_costs where mon=@t_mon and productno=a.productno),0)
 	,isnull((select wages*hours from uca where noa= a.productno),0)
@@ -61,20 +80,77 @@ BEGIN TRY
 			,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount,a.dividea,a.price,a.costb,a.costc,a.costd
 		FROM @tmp a, OrdersTable 
 		WHERE a.parent=OrdersTable.productno 
-	) 
-	Select
-		'0' gno,REPLICATE('　　',Level) + productno pno,product, level, sortcol,round(mount,4) mount,
-		case when isnull(dividea,0)=0 then null else '/ '+CAST(dividea as nvarchar(10)) end dividea,
-		case when @t_isprice='1' then isnull(price*mount,0) else null end costa,costb,costc,costd,
-		case when @t_isprice='1' then
-			(select SUM(price*mount+costb+costc+costd) from OrdersTable where left(sortcol,len(a.sortcol))=a.sortcol) 
-		else null end ucccost
-	From OrdersTable a order by sortCol 
+	)
+	insert into @result
+		Select
+			case when @t_isprice='1' then '2' else '5' end gno,0 pageno,
+			REPLICATE('　　',Level) + productno pno,product, level, sortcol,round(mount,4) mount,
+			case when isnull(dividea,0)=0 then null else '/ '+CAST(dividea as nvarchar(10)) end dividea,
+			case when @t_isprice='1' then isnull(price*mount,0) else null end costa,costb,costc,costd,
+			case when @t_isprice='1' then
+				(select SUM(price*mount+costb+costc+costd) from OrdersTable where left(sortcol,len(a.sortcol))=a.sortcol) 
+			else null end ucccost
+		From OrdersTable a order by sortCol 
 END TRY 
 BEGIN CATCH 
 	select @@ERROR productno 
-END CATCH 
-------------------------------------------------------------------------------------------------------------;
+	return
+END CATCH
+--------gno-> 1=顯示單價的表頭,2=有顯示單價的表身,3=有顯示單價的表尾,4=沒顯示單價的表頭,5=沒顯示單價的表身,6=沒顯示單價的表尾
+
+------------更新頁數<<Start>>------------
+declare @idno int
+declare @pageno int
+declare @recCount int = 1
+declare @pageno_int int = 0
+declare @lastnoa nvarchar(max) = ''
+declare @nextidno int
+declare @nextnoa nvarchar(max)
+declare @nextnoq nvarchar(10)
+declare @nextproductno nvarchar(max)
+declare cursor_table cursor for
+	select
+		a.idno
+	from @result a order by a.idno
+open cursor_table
+fetch next from cursor_table
+into @idno
+while(@@FETCH_STATUS <> -1)
+begin
+	if((@recCount > @pageline))
+	begin
+		set @recCount = 1
+		set @pageno_int = @pageno_int+1
+	end
+	if(@recCount = @pageline)
+	begin
+		set @nextidno = @idno+1
+	end
+	update @result set pageno=@pageno_int where idno=@idno
+	set @recCount = @recCount+1
+	fetch next from cursor_table
+	into @idno
+end
+close cursor_table
+deallocate cursor_table
+------------更新頁數<<End>>-------------
+------------插入表頭及表尾<<Start>>-------------
+insert into @result(gno,pageno)
+	select
+		case when @t_isprice='1' then '1' else '4' end gno,
+		pageno
+	from @result group by pageno
+insert into @result(gno,pageno)
+	select
+		case when @t_isprice='1' then '3' else '6' end gno,
+		pageno
+	from @result group by pageno
+------------插入表頭及表尾<<End>>-------------
+select
+	*
+from @result a
+order by a.pageno,a.gno,a.idno;
+------------------------------------------------------------------------------------------------------------
 z_ucap2:--z_ucap2
 declare @t_bspno nvarchar(50)
 declare @t_espno nvarchar(50)
