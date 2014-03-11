@@ -6,6 +6,7 @@ declare @t_ordeno nvarchar(30)
 declare @t_no2 nvarchar(10)
 declare @t_bdate nvarchar(20)
 declare @t_edate nvarchar(20)
+declare @t_showstk nvarchar(20)
 set @t_bdate = case when '#non' = [3] then '' else [3] end
 set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
 set @t_ordeno = case when '#non' = [13] then '' else [13] end
@@ -13,7 +14,12 @@ set @t_no2 = case when '#non' = [14] then '' else [14] end
 set @t_noa = case when '#non' = [2] then '' else [2] end
 set @t_btggno = case when '#non' = [5] then '' else [5] end
 set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
-
+set @t_showstk = case when '#non' = [15] then '' else [15] end
+--今天日期
+declare @now_date nvarchar(30)
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+----------gno-> 0=表身資料,1=該製品於各倉庫庫存,2=該製品總庫存
 declare @tmp table(
 	gno nvarchar(1),
 	tggno nvarchar(30),
@@ -29,20 +35,46 @@ declare @tmp table(
 )
 insert into @tmp
 	select
-		'0',b.tggno,b.comp,b.mount,b.productno,b.product,a.productno,a.product,a.mount,isnull(c.mount,0),0
-	from works[1] a
-	left join work[1] b on a.noa = b.noa
-	left join workcs[1] c on (b.noa = c.workno) and (a.productno = c.productno)
+		'0',b.tggno,b.comp,round(b.mount,4),b.productno,b.product,a.productno,a.product,
+		round(a.mount,4),round(isnull(c.mount,0),4),0
+	from view_works a
+	left join view_work b on a.noa = b.noa
+	left join view_workcs c on (b.noa = c.workno) and (a.productno = c.productno)
 	where (b.tggno != '') and (b.tggno between @t_btggno and @t_etggno) and (len(@t_noa)=0 or c.noa = @t_noa)
 	and (len(@t_ordeno)=0 or b.ordeno = @t_ordeno) and (len(@t_no2)=0 or b.no2 = @t_no2)
 	and (isnull(b.kdate,'') between @t_bdate and @t_edate)
 update @tmp set total = workmount-workcmount
 delete @tmp where total <=0
+if(@t_showstk='1')
+begin
+	declare @bproductno nvarchar(max)
+	declare cursor_table cursor for
+		select distinct(bproductno) from @tmp where gno = '0'
+	open cursor_table
+	fetch next from cursor_table
+	into @bproductno
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		insert into @tmp(gno,tggno,comp,bproductno,bproducts,total)
+			select
+				'1',a.storeno,a.store,a.productno,a.product,a.mount
+			from stkucc(@now_date,'',@bproductno) a
+			where (a.mount != 0)
+		insert into @tmp(gno,bproductno,bproducts,total)
+			select
+				'2',a.productno,a.product,sum(a.mount)
+			from stkucc(@now_date,'',@bproductno) a
+			group by a.productno,a.product
+		fetch next from cursor_table
+		into @bproductno
+	end
+	close cursor_table
+	deallocate cursor_table
+end
 select
-	gno,tggno,comp,wbm,bproductno,bproducts,aproductno,
-	aproducts,sum(workmount) workmount,sum(workcmount) workcmount,sum(total) total
-from @tmp
-group by gno,tggno,wbm,comp,bproductno,bproducts,aproductno,aproducts;
+	*
+from @tmp a
+order by a.bproductno,a.bproducts,a.gno,a.tggno,a.comp,a.aproductno,a.aproducts;
 --------------------------------------------------------------------------------------------------------
 z_workc2:--z_workc2
 declare @t_btggno nvarchar(20)
