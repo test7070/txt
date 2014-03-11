@@ -240,5 +240,81 @@ select gno,pno,product,stationno,station,storeno,store
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stktmount),1)),0,30)) stktmount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount
-from @tmp order by gno,pno,stationno
-;
+from @tmp order by gno,pno,stationno;
+--********************************************************************************
+z_workap3:--z_workap3
+declare @t_xbdate nvarchar(10)
+declare @t_xedate nvarchar(10)
+declare @t_bsnno nvarchar(10)
+declare @t_esnno nvarchar(10)
+declare @t_bseno nvarchar(10)
+declare @t_eseno nvarchar(10)
+declare @t_bpno nvarchar(10)
+declare @t_epno nvarchar(10)
+
+set @t_xbdate = case when '#non' = [6] then '' else [6] end
+set @t_xedate = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bsnno = case when '#non' = [8] then '' else [8] end
+set @t_esnno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_bseno = case when '#non' = [10] then '' else [10] end
+set @t_eseno = case when '#non' = [11] then CHAR(255) else [11] end
+set @t_bpno = case when '#non' = [12] then '' else [12] end
+set @t_epno = case when '#non' = [13] then CHAR(255) else [13] end
+
+declare @t_stkdate nvarchar(30) --倉庫運算日期
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+--****************************************************************************
+declare @tmp table(
+	gno nvarchar(2),
+	pno nvarchar(50),
+	product nvarchar(200),
+	stationno nvarchar(50),
+	station nvarchar(100),
+	workno nvarchar(100),
+	gmount float,
+	stktmount float,
+	diffmount float,
+	storeno nvarchar(50),
+	store nvarchar(100),
+	stkmount float
+)
+
+insert @tmp (gno,pno,product,stationno,station,workno,gmount)
+select '0',b.productno,b.product,a.stationno,a.station,a.noa,round(b.mount-gmount,2)mount
+from view_work a left join view_works b on a.noa=b.noa 
+where a.enda!='1' and a.stationno!=''
+and (a.cuadate between @t_xbdate and @t_xedate)
+and (a.stationno between @t_bsnno and @t_esnno)
+and (b.productno between @t_bpno and @t_epno)
+order by b.productno,a.stationno
+
+insert @tmp (gno,pno,product,gmount,stktmount)
+select '1',pno,MAX(product),SUM(gmount)
+,(select SUM(mount) from stkucc(@t_stkdate,'','') where productno=a.pno and storeno between @t_bseno and @t_eseno) 
+from @tmp a group by pno
+
+update @tmp set diffmount=-1*(stktmount-gmount) where gno='1'
+update @tmp set diffmount=0 where diffmount<0 and gno='1'
+
+insert @tmp (gno,pno,product)
+select '2',pno,MAX(product)from @tmp a group by pno
+
+insert @tmp (gno,pno,product,storeno,store,stkmount)
+select '3',a.pno,a.product,b.storeno,b.store,mount from (select * from @tmp where gno='2')a 
+left join (select * from stkucc(@t_stkdate,'','') where mount!=0 and storeno between @t_bseno and @t_eseno) b
+on a.pno=b.productno
+
+insert @tmp (gno,pno,product)
+select '4',pno,MAX(product)from @tmp a group by pno
+
+update @tmp
+set store='(無)'
+where store is null or store='' and gno='3'
+
+select gno,pno,product,stationno,station,storeno,store,workno
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gmount),1)),0,30)) gmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stktmount),1)),0,30)) stktmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount
+from @tmp order by pno,gno,stationno,storeno;
