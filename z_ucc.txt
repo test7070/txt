@@ -298,7 +298,7 @@ if(charindex('永勝',@t_acomp)>0)
 	order by productno, gno, recno;
 	
 --*****************************************************************************************	
-z_ucc1:	--庫存表  --ucc1
+z_ucc1:--z_ucc1
 	declare @t_bproductno nvarchar(50)
 	declare @t_eproductno nvarchar(50)
 	declare @t_typea nvarchar(15)
@@ -340,8 +340,14 @@ z_ucc1:	--庫存表  --ucc1
 	insert @groups
 	select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,LEN(@groupstmp)) 
 
+	------------報表設定<<Start>>------------
+	declare @pageline int = 23 --每頁幾行
+	------------報表設定<<End>>------------
+
 	declare @result table(
 		gno nvarchar(1),
+		idno int identity(0,1),
+		pageno int,
 		xgroupno nvarchar(50),
 		productno nvarchar(30),
 		xproduct nvarchar(40),
@@ -353,14 +359,16 @@ z_ucc1:	--庫存表  --ucc1
 	)
 	
 	insert into @result
-	select '0' gno,b.groupano,a.productno,a.product xproduct,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
+	select '0' gno,0 pageno,b.groupano,a.productno,a.product xproduct,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
 	from (
-		select productno,MAX(product) product,sum(mount) mount 	from stkucc(@t_stkdate,'','') s
+		select productno,MAX(product) product,sum(mount) mount	from stkucc(@t_stkdate,'','') s
 		where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-	) a left join ucc b on a.productno=b.noa  
+	) a
+	left join ucc b on a.productno=b.noa  
 	left join (select * from view_costs where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
 	where a.productno in (select noa from ucc) 
-	and (len(@t_typea)=0 or isnull(b.typea,'null')=@t_typea) and (len(@t_group)=0 or b.groupano=@t_group)
+	and (len(@t_typea)=0 or isnull(b.typea,'null')=@t_typea) 
+	and (len(@t_group)=0 or b.groupano=@t_group)
 	and (a.productno between @t_bproductno and @t_eproductno)
 	and (b.tggno between @t_btggno and @t_etggno)
 	
@@ -369,13 +377,64 @@ z_ucc1:	--庫存表  --ucc1
 		update @result set price=null,total=null
 	end
 
-	select gno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups,productno,xproduct,unit
+	------------更新頁數<<Start>>------------
+	declare @idno int
+	declare @pageno int
+	declare @recCount int = 1
+	declare @pageno_int int = 0
+	declare @lastnoa nvarchar(max) = ''
+	declare @nextidno int
+	declare cursor_table cursor for
+		select
+			a.idno
+		from @result a order by a.idno
+	open cursor_table
+	fetch next from cursor_table
+	into @idno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((@recCount > @pageline))
+		begin
+			set @recCount = 1
+			set @pageno_int = @pageno_int+1
+		end
+		if(@recCount = @pageline)
+		begin
+			set @nextidno = @idno+1
+		end
+		update @result set pageno=@pageno_int where idno=@idno
+		set @recCount = @recCount+1
+		fetch next from cursor_table
+		into @idno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------更新頁數<<End>>-------------
+	------------插入表頭及表尾<<Start>>-------------
+		----------gno->1=有群組表頭,2=有群組表身,3=有群組跳頁,4=無群組表頭,5=無群組表身,6=無群組跳頁
+	if(len(@t_group) > 0)
+	begin
+		insert into @result(gno,pageno)
+			select '1',pageno from @result where gno='0' group by pageno
+		insert into @result(gno,pageno)
+			select '3',pageno from @result where gno='0' group by pageno
+		update @result set gno='2' where gno='0'
+	end
+	else
+	begin
+		insert into @result(gno,pageno)
+			select '4',pageno from @result where gno='0' group by pageno
+		insert into @result(gno,pageno)
+			select '6',pageno from @result where gno='0' group by pageno
+		update @result set gno='5' where gno='0'		
+	end
+	------------插入表頭及表尾<<End>>-------------
+	select gno,pageno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups,productno,xproduct,unit
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(safemount,0)),1)),4,30)) safemount
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(price,2)),1)),0,30)) price
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(total,0)),1)),4,30)) total
-	from @result a order by xgroupno,productno
-;
+	from @result a order by pageno,gno,xgroupno,productno;
 --*****************************************************************************************
 z_stk1:	
 	return
