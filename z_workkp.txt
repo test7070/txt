@@ -1,0 +1,97 @@
+z_workkp1:--z_workkp1
+
+declare @t_noa nvarchar(50)
+set @t_noa = case when '#non' = [2] then '' else [2] end
+--*********************************************************************
+declare @tmp table(
+	gno nvarchar(1),
+	a_typea nvarchar(30),
+	a_noa nvarchar(30),
+	a_datea nvarchar(10),
+	a_stationno nvarchar(50),
+	a_station nvarchar(100),
+	a_storeno nvarchar(50),
+	a_store nvarchar(100),
+	a_srinno nvarchar(50),
+	a_srin nvarchar(100),
+	a_memo nvarchar(MAX),
+	b_noq nvarchar(50),
+	b_pno nvarchar(50),
+	b_product nvarchar(100),
+	b_unit nvarchar(20),
+	b_mount float,
+	b_memo nvarchar(MAX),
+	b_workno nvarchar(30)
+)
+
+insert @tmp 
+select '0',a.typea,a.noa,a.datea,a.stationno,a.station,a.storeno,a.store,a.storeinno,a.storein,a.memo
+,b.noq,b.productno,b.product,b.unit,b.mount,b.memo,b.workno 
+from view_workk a left join view_workks b on a.noa=b.noa
+where (len(@t_noa)=0 or a.noa=@t_noa)
+
+insert @tmp (gno,a_typea,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo)
+select '1',a_typea,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo
+from @tmp group by a_typea,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo
+
+select gno,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo
+,(case when a_typea='1' then '調撥' else '抵扣料' end) typea
+,b_noq,b_pno,b_product,b_unit,b_memo,b_workno
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,b_mount),1)),0,30)) b_mount
+from @tmp order by a_noa,gno,b_noq
+;
+-------------------------------------------------------------------------------------------------------------------------------------------
+z_workkp2:--z_workkp2
+
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(50)
+declare @t_estationno nvarchar(50)
+declare @t_bpno nvarchar(50)
+declare @t_epno nvarchar(50)
+
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstationno = case when '#non' = [5] then '' else [5] end
+set @t_estationno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bpno = case when '#non' = [7] then '' else [7] end
+set @t_epno = case when '#non' = [8] then CHAR(255) else [8] end
+
+declare @t_stkdate nvarchar(30) --倉庫運算日期
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+
+
+--*********************************************************************
+declare @tmp table(
+	gno nvarchar(1),
+	stationno nvarchar(50),
+	station nvarchar(100),
+	pno nvarchar(50),
+	product nvarchar(100),
+	gmount float,
+	smount float,
+	diffmount float
+)
+
+insert @tmp 
+select '0',a.stationno,MAX(a.station),b.productno,MAX(b.product)
+,round(SUM(b.mount-gmount),2)mount
+,(select SUM(mount) mount from stkucc(@t_stkdate,'','') where productno=b.productno and storeno=c.storeno ),0
+from view_work a left join view_works b on a.noa=b.noa
+left join station c on a.stationno=c.noa 
+where a.enda!='1' and a.stationno!=''
+and (a.cuadate between @t_bdate and @t_edate)
+and (a.stationno between @t_bstationno and @t_estationno)
+and (b.productno between @t_bpno and @t_epno)
+group by b.productno,a.stationno,c.storeno
+
+update @tmp set diffmount=-1*(smount-gmount)
+update @tmp set diffmount=0 where diffmount<0
+
+select gno,stationno,station,pno,product
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gmount),1)),0,30)) gmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),0,30)) smount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
+from @tmp order by gno,stationno,pno
+;
