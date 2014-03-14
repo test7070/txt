@@ -1,0 +1,95 @@
+workqsave:--workqsave
+declare @t_year nvarchar(10)
+declare @t_noa nvarchar(50) = [1]
+declare @t_name nvarchar(max) = [2]
+declare @t_workdno nvarchar(50)
+declare @t_workdYear nvarchar(10)
+declare @t_workd_deli nvarchar(max) = 'WD'
+declare @cmd nvarchar(max)
+-------取得workq的年度跟workdno <<Start>>
+select @t_year = accy from view_workq where noa=@t_noa
+select @t_workdno = workdno from view_workq where noa=@t_noa
+-------取得workq的年度跟workdno <<End>>
+-------取得最新workdno (若為空白或單據已刪除則取最新) <<Start>>
+set @t_workdno = ltrim(rtrim(isnull(@t_workdno,'')))
+select @t_workdYear = accy from view_workd where noa=@t_workdno
+if((len(@t_workdno) = 0) or (@t_workdYear is null))
+begin
+	set @t_workdYear = @t_year
+	declare @workdnoq int = 1
+	set @t_workdno = @t_workd_deli + cast((CONVERT (VARCHAR(7), GETDATE(),12 )+0890000) as nvarchar)
+	while(1=1)
+	begin
+		declare @newWorkdnoa nvarchar(max) = @t_workdno+RIGHT(REPLICATE('0', 3) + CAST(@workdnoq as NVARCHAR), 3)
+		if((select count(*) from view_workd where noa=@newWorkdnoa) = 0)
+		begin
+			set @t_workdno = @newWorkdnoa
+			break
+		end
+		else
+		begin
+			if(@workdnoq >= 999)
+				return
+			set @workdnoq = @workdnoq+1
+		end
+	end
+end
+else
+begin
+	set @cmd = 'delete workd' + @t_workdYear + ' where noa=N''' +@t_workdno+ ''''
+	execute sp_executesql @cmd
+	set @cmd = 'delete workds' + @t_workdYear + ' where noa=N''' +@t_workdno+ ''''
+	execute sp_executesql @cmd
+end
+-------取得最新workdno (若為空白或單據已刪除則取最新) <<End>>
+-------插入workd,workds資料 <<Start>>
+set @cmd = 'insert into workd' + @t_workdYear +
+				 '(datea,noa,tggno,tgg,storeno,store,bdate,edate,workno,invono,mon,taxtype,tax,money,accno,total,worker,memo)' + 
+				 'select datea,N'''+@t_workdno+''',tggno,tgg,storeno,store,bdate,edate,workno,invono,mon,taxtype,tax,money,accno,total,N''' + @t_name +''',memo' + 
+				 ' from workq' + @t_year + ' where noa=N''' + @t_noa + ''''
+execute sp_executesql @cmd
+set @cmd = 'insert into workds' + @t_workdYear +
+				 '(noa,noq,productno,product,unit,born,mount,storeno,store,wmount,price,total,inmount,outmount,errmount,errmemo,memo,ordeno,no2,workno)' + 
+				 'select N''' + @t_workdno +''',noq,productno,product,unit,born,mount,storeno,store,wmount,price,total,inmount,outmount,errmount,errmemo,memo,ordeno,no2,workno' + 
+				 ' from workqs' + @t_year + ' where noa=N''' + @t_noa + ''''
+execute sp_executesql @cmd
+-------插入workd,workds資料 <<End>>
+-------寫入workq的workdno <<Start>>
+set @cmd = 'update workq' + @t_year + ' set workdno=N''' + @t_workdno +''''
+execute sp_executesql @cmd
+-------寫入workq的workdno <<End>>
+-------寫入workf驗收人員跟驗收時間 <<Start>>
+declare @tmp table(
+	noa nvarchar(50),
+	noq nvarchar(10),
+	workfno nvarchar(50),
+	workfnoq nvarchar(10),
+	workfYear nvarchar(10)
+)
+set @cmd = 'select noa,noq,workfno,workfnoq from view_workqs' + @t_year + '  where noa=N''' + @t_noa + ''''
+insert into @tmp(noa,noq,workfno,workfnoq)
+	execute sp_executesql @cmd
+update a
+	set workfYear = b.accy
+from @tmp a
+outer apply(select accy from view_workfs where (a.workfno=noa) and (a.workfnoq=noq)) b
+declare @workfno nvarchar(35)
+declare @workfnoq nvarchar(10)
+declare @workfYear nvarchar(10)
+declare cursor_table cursor for
+	select workfno,workfnoq,workfYear from @tmp
+open cursor_table
+fetch next from cursor_table
+into @workfno,@workfnoq,@workfYear
+while(@@FETCH_STATUS <> -1)
+begin
+	declare @nowTimea nvarchar(10) = left(cast(CONVERT(VARCHAR(12) , GETDATE(), 114) as nvarchar),5)
+	set @cmd = 'update workfs' + @workfYear + ' set qcworker=N''' + @t_name + ''' ,qctime=N''' + @nowTimea + ''' where noa=N''' + @workfno + ''' and noq=N''' + @workfnoq + ''''
+	execute sp_executesql @cmd
+	fetch next from cursor_table
+	into @workfno,@workfnoq,@workfYear
+end
+close cursor_table
+deallocate cursor_table
+-------寫入workf驗收人員跟驗收時間 <<End>>
+;
