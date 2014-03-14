@@ -1,7 +1,7 @@
-declare @tableName nvarchar(max) = '' -----tableªº¦WºÙ ·s¼W§¹«áviewªº¦WºÙ¬° view_¸ê®Æªí¦WºÙ¥[¤W¦~«×
-declare @bYear int = 101 ----°_©l¦~«×
-declare @eYear int = 105 ----²×¤î¦~«×
-declare @DeleteAndCreate int = 0 ----­Y¤w¦s¦b¬O§_¥ı§R°£ 0=§_ 1=¬O
+declare @tableName nvarchar(max) = '' -----tableçš„åç¨± æ–°å¢å®Œå¾Œviewçš„åç¨±ç‚º view_è³‡æ–™è¡¨åç¨±åŠ ä¸Šå¹´åº¦
+declare @bYear int = 101 ----èµ·å§‹å¹´åº¦
+declare @eYear int = 105 ----çµ‚æ­¢å¹´åº¦
+declare @DeleteAndCreate int = 0 ----è‹¥å·²å­˜åœ¨æ˜¯å¦å…ˆåˆªé™¤ 0=å¦ 1=æ˜¯
 declare @eject nvarchar(max) = CHAR(13)+CHAR(10)
 declare @cmd nvarchar(max)
 ------------------------------------------------------
@@ -19,26 +19,26 @@ begin
 	declare @thisTableName nvarchar(max) = @tableName+cast(@addYear as nvarchar)
 	declare @beforeViewName nvarchar(max) = @tableName+cast(@addYear-1 as nvarchar)
 
-	-------¥[¤J«e¤@¦~«× <<Start>>
+	-------åŠ å…¥å‰ä¸€å¹´åº¦ <<Start>>
 	if((select count(*) from INFORMATION_SCHEMA.tables where (TABLE_TYPE!='VIEW') and (TABLE_NAME=@beforeViewName)) >0)
 	begin
 		set @newViewCmd = @newViewCmd+'select ''' + cast((@addYear-1) as nvarchar) + ''' accy,* from ['+@beforeViewName+']' + @eject
-		-------¼W¥[Union All <<Start>>
+		-------å¢åŠ Union All <<Start>>
 		if((@addYear != @bYear))
 		begin
 			set @mainCmd = @mainCmd + 'union all' + @eject
 			set @newViewCmd = @newViewCmd + 'union all' + @eject
 		end
-		-------¼W¥[Union All <<End>>
+		-------å¢åŠ Union All <<End>>
 		end
-	-------¥[¤J«e¤@¦~«× <<End>>
-	-------¥[¤J·í¦~«× <<Start>>
+	-------åŠ å…¥å‰ä¸€å¹´åº¦ <<End>>
+	-------åŠ å…¥ç•¶å¹´åº¦ <<Start>>
 	if((select count(*) from INFORMATION_SCHEMA.tables where (TABLE_TYPE!='VIEW') and (TABLE_NAME=@thisTableName)) >0)
 	begin
 		set @newViewCmd = @newViewCmd+'select ''' + cast((@addYear) as nvarchar) + ''' accy,* from ['+@thisTableName+']' + @eject
 		set @mainCmd = @mainCmd + 'select ''' + cast(@addYear as nvarchar) + ''' accy,* from ['+@thisTableName+']' + @eject
 	end
-	-------¥[¤J·í¦~«× <<End>>
+	-------åŠ å…¥ç•¶å¹´åº¦ <<End>>
 	if(@newViewCmd != @mainStr)
 	begin
 		set @newViewCmd = REPLACE(@newViewCmd,'$$viewYear',cast((@addYear) as nvarchar))
@@ -48,11 +48,11 @@ begin
 	set @newViewCmd = @mainStr
 	set @addYear = @addYear+1
 end
--------¥[¤J¥D­nªºview <<Start>>
+-------åŠ å…¥ä¸»è¦çš„view <<Start>>
 insert into @tmp(viewname,data)
 	values('view_'+@tableName,@mainCmd)
--------¥[¤J¥D­nªºview <<End>>
--------¶}©l·s¼Wview <<Start>>
+-------åŠ å…¥ä¸»è¦çš„view <<End>>
+-------é–‹å§‹æ–°å¢view <<Start>>
 declare @viewname nvarchar(max)
 declare @data nvarchar(max)
 declare cursor_table cursor for
@@ -74,7 +74,7 @@ begin
 		end
 		else
 		begin
-			print @viewname + ' -> ³o­Óview¤w¦s¦b!!'
+			print @viewname + ' -> é€™å€‹viewå·²å­˜åœ¨!!'
 		end
 	end
 	else
@@ -87,4 +87,4 @@ begin
 end
 close cursor_table
 deallocate cursor_table
--------¶}©l·s¼Wview <<End>>
+-------é–‹å§‹æ–°å¢view <<End>>

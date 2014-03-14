@@ -1,22 +1,22 @@
-declare @newTablename nvarchar(max)= 'workhs' --·s¸ê®Æªí¦WºÙ
-declare @newTableCoulmns nvarchar(max) = '' --·s¸ê®ÆªíÄæ¦ì EX: 	noa nvarchar(35),datea nvarchar(10),worker2 nvarchar(50)
-declare @newTableKey nvarchar(max) = 'noa,noq' --·s¸ê®ÆªíKEY EX: noa
-declare @isMultipleYears int = 1 --¬O§_¦h¦~«× 0=§_ 1=¬O
-declare @bYears int =101 --¶}©l¦~«×
-declare @eYears int =105 --¤¤¤î¦~«×
+declare @newTablename nvarchar(max)= 'workhs' --æ–°è³‡æ–™è¡¨åç¨±
+declare @newTableCoulmns nvarchar(max) = '' --æ–°è³‡æ–™è¡¨æ¬„ä½ EX: 	noa nvarchar(35),datea nvarchar(10),worker2 nvarchar(50)
+declare @newTableKey nvarchar(max) = 'noa,noq' --æ–°è³‡æ–™è¡¨KEY EX: noa
+declare @isMultipleYears int = 1 --æ˜¯å¦å¤šå¹´åº¦ 0=å¦ 1=æ˜¯
+declare @bYears int =101 --é–‹å§‹å¹´åº¦
+declare @eYears int =105 --ä¸­æ­¢å¹´åº¦
 declare @cmd nvarchar(max)
-declare @tmp table( ---±N²£¥Íªº¸ê®Æªí
+declare @tmp table( ---å°‡ç”¢ç”Ÿçš„è³‡æ–™è¡¨
 	tablename nvarchar(max),
 	isexist int
 )
 if(ltrim(rtrim(@newTablename)) = '')
 begin
-	print '½Ð¿é¤J¸ê®Æªí¦WºÙ!!'
+	print 'è«‹è¼¸å…¥è³‡æ–™è¡¨åç¨±!!'
 	return
 end
 if(ltrim(rtrim(@newTableCoulmns)) = '')
 begin
-	print '½Ð¿é¤J¸ê®ÆªíÄæ¦ì!!'
+	print 'è«‹è¼¸å…¥è³‡æ–™è¡¨æ¬„ä½!!'
 	return
 end
 else
@@ -34,7 +34,7 @@ begin
 	begin
 		if((cast(@bYears as int) =0) or (cast(@eYears as int) =0))
 		begin
-			print '½Ð¿é¤J¸ê®Æªí¦~«×°Ï¶¡!!'
+			print 'è«‹è¼¸å…¥è³‡æ–™è¡¨å¹´åº¦å€é–“!!'
 			return
 		end
 		else
@@ -81,7 +81,7 @@ begin
 		end
 		else
 		begin
-			print @tablename + ' -> ¸Ó¸ê®Æªí¤w¦s¦b!!'
+			print @tablename + ' -> è©²è³‡æ–™è¡¨å·²å­˜åœ¨!!'
 		end
 		fetch next from cursor_table
 		into @tablename,@isexist
