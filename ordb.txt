@@ -1,0 +1,186 @@
+ordc:--ordb_ordc
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @workerno nvarchar(20) = [1]
+	declare @worker nvarchar(20) = [2]
+	declare @key nvarchar(20) = [3]
+	declare @t_datea nvarchar(10) = [4]
+	declare @t_bedate nvarchar(10) = [5]
+	declare @t_eedate nvarchar(10) = case when len([6])=0 then char(255) else [6] end
+	declare @t_bfdate nvarchar(10) = [7]
+	declare @t_efdate nvarchar(10) = case when len([8])=0 then char(255) else [8] end
+	
+	declare @tmp table(
+		isout int,
+		accy nvarchar(10),
+		noa nvarchar(20),
+		no3 nvarchar(10),
+		no4 nvarchar(10),
+		kind nvarchar(20),
+		
+		tggno nvarchar(20),
+		tgg nvarchar(50),
+		productno nvarchar(20),
+		product nvarchar(50),
+		unit nvarchar(20),
+		mount float,
+		price float,
+		total float
+	)	
+	-- ordb 有廠商
+	insert into @tmp(accy,noa,no3,kind,tggno,tgg,productno,product,unit,mount,price,total)
+	select a.accy,a.noa,a.no3,b.kind,b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,a.price,a.total
+	from view_ordbs a
+	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
+	where len(b.tggno)>0 and len(a.productno)>0 and a.mount!=0 and a.price!=0
+	and @t_bedate='' and @t_eedate=char(255) 
+	and @t_bfdate='' and @t_efdate=char(255) 
+	-- ordb 無廠商 就找詢價議價找
+	insert into @tmp(accy,noa,no3,no4,kind,tggno,tgg,productno,product,unit,mount,price,total)
+	select a.accy,a.noa,a.no3,c.no4,b.kind,c.tggno,c.tgg,a.productno,a.product,a.unit,a.mount,c.fprice,ROUND(a.mount*c.fprice,0)
+	from view_ordbs a
+	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
+	outer apply (select top 1 * from view_ordbt 
+		where accy=a.accy and noa=a.noa and no3=a.no3 
+		and len(ISNULL(fdate,''))>0 
+		and isnull(fprice,0)!=0 
+		and len(ISNULL(tggno,''))>0 
+		order by fdate desc) c
+	where len(b.tggno)=0  and c.fdate is not null
+	and c.edate between @t_bedate and @t_eedate
+	and c.fdate between @t_bfdate and @t_efdate
+	------------------------------------------------------------------------
+	--剔除已採購
+	delete @tmp
+	from @tmp a
+	left join view_ordcs b on a.accy=b.tableaccy and a.noa=b.ordbno and a.no3=b.no3
+	where b.noa is not null
+	------------------------------------------------------------------------
+	--ordb 若有沒單價的  則該筆ORDB就都不匯
+	update @tmp set isout = case when b.n=c.n then 1 else 0 end
+	from @tmp a
+	outer apply (select COUNT(1) n from @tmp where accy=a.accy and noa=a.noa) b
+	outer apply (select COUNT(1) n from view_ordbs where accy=a.accy and noa=a.noa) c 
+	------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#ordb_tmpa')is not null
+	BEGIN
+		drop table #ordb_tmpa
+	END
+	IF OBJECT_ID('tempdb..#ordb_tmpb')is not null
+	BEGIN
+		drop table #ordb_tmpb
+	END
+	
+	create table #ordb_tmpa(
+		noa nvarchar(20),
+		kind nvarchar(20),
+		datea nvarchar(10),
+		odate nvarchar(10),
+		tggno nvarchar(20),
+		tgg nvarchar(50),
+		nick nvarchar(20),
+		[money] float,
+		tax float,
+		total float,
+		memo nvarchar(max)
+	)
+	create table #ordb_tmpb(
+		tggno nvarchar(20),
+		kind nvarchar(20),
+		noa nvarchar(20),
+		no2 nvarchar(10),
+		tableaccy nvarchar(10),
+		ordbno nvarchar(20),
+		no3 nvarchar(10),
+		productno nvarchar(20),
+		product nvarchar(50),
+		unit nvarchar(20),
+		mount float,
+		price float,
+		total float
+	)
+	insert into #ordb_tmpa(kind,tggno,tgg,nick)
+	select a.kind,a.tggno,b.comp,b.nick
+	from (select tggno,kind from @tmp where isout=1 group by tggno,kind) a
+	left join tgg b on a.tggno=b.noa
+	
+	insert into #ordb_tmpb(tggno,kind,tableaccy,ordbno,no3,productno,product,unit,mount,price,total)
+	select tggno,kind,accy,noa,no3,productno,product,unit,mount,price,total
+	from @tmp 
+	where isout=1
+	
+	update #ordb_tmpb set no2=RIGHT('000'+CAST(b.n as nvarchar),3)
+	from #ordb_tmpb a
+	left join (select tggno,kind,tableaccy,ordbno,no3
+		,ROW_NUMBER()over(partition by tggno,kind order by tableaccy,ordbno,no3) n from #ordb_tmpb) b 
+	on a.tableaccy=b.tableaccy and a.ordbno=b.ordbno and a.no3=b.no3
+	
+	update #ordb_tmpa set datea=@t_datea,odate=@t_datea,[money]=b.total,tax=0,total=b.total,memo='整批匯入'
+	from #ordb_tmpa a
+	left join (select tggno,kind,SUM(total) total from #ordb_tmpb group by tggno,kind) b on a.tggno=b.tggno and a.kind=b.kind
+	------------------------------------------------------------------------------------
+	declare @tmpc table(
+		memo nvarchar(max)
+	)
+	begin try
+		declare @kind nvarchar(20)
+		declare @tggno nvarchar(20)
+		declare @noa nvarchar(20)
+		declare @no2 nvarchar(10)
+		
+		declare @maxnoa nvarchar(20)
+		
+		declare cursor_table cursor for
+		select kind,tggno from @tmp group by kind,tggno
+		open cursor_table
+		fetch next from cursor_table
+		into @kind,@tggno
+		while(@@FETCH_STATUS <> -1)
+		begin		
+			set @noa = @key+replace(@t_datea,'/','')
+			set @maxnoa = ''
+			select top 1 @maxnoa=noa from view_ordc where noa like @noa+'[0-9][0-9][0-9]' order by noa desc
+			if LEN(isnull(@maxnoa,''))=0
+				set @noa = @noa + '001'
+			else
+			begin
+				set @noa = CAST(RIGHT(@maxnoa,3) as int)+1
+				if(@noa > 999)
+				begin			
+					insert into @tmpc(memo)values('流水號編碼不足')
+					select * from @tmpc
+					return
+				end
+				set @noa = @key+replace(@t_datea,'/','') + RIGHT('000'+CAST(@noa as nvarchar),3)
+			end
+			update #ordb_tmpa set noa=@noa where tggno=@tggno and kind=@kind
+			update #ordb_tmpb set noa=@noa where tggno=@tggno and kind=@kind
+			
+			fetch next from cursor_table
+			into @kind,@tggno
+		end
+		close cursor_table
+		deallocate cursor_table
+		
+		set @cmd ="insert into ordc"+LEFT(@t_datea,3)+"(noa,kind,datea,odate,tggno,tgg,nick,money,tax,total,memo)"
+			+" select noa,kind,datea,odate,tggno,tgg,nick,money,tax,total,memo from #ordb_tmpa"
+		execute sp_executesql @cmd
+		set @cmd ="insert into ordcs"+LEFT(@t_datea,3)+"(tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total)"
+			+" select tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total from #ordb_tmpb"
+		execute sp_executesql @cmd
+		
+		insert into drun(datea,timea,usera,action,noa,tablea,title)
+		select convert(nvarchar,getdate(),111),left(convert(nvarchar,getdate(),108),5)
+			,@workerno,'Insert',noa,'ordc','整批匯入'
+		from #ordb_tmpa
+		
+		insert into @tmpc(memo)
+		select '匯出 '+CAST(COUNT(1) as nvarchar)+'筆資料' from #ordb_tmpa
+		select * from @tmpc
+	end try
+	begin catch
+		insert into @tmpc(memo)values('例外錯誤：'+ERROR_MESSAGE())
+		select * from @tmpc
+	end catch
+	drop table #ordb_tmpa
+	drop table #ordb_tmpb;
