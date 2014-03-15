@@ -1,6 +1,7 @@
-declare @newTablename nvarchar(max)= 'workhs' --新資料表名稱
+declare @newTablename nvarchar(max)= '' --新資料表名稱
 declare @newTableCoulmns nvarchar(max) = '' --新資料表欄位 EX: 	noa nvarchar(35),datea nvarchar(10),worker2 nvarchar(50)
-declare @newTableKey nvarchar(max) = 'noa,noq' --新資料表KEY EX: noa
+declare @newTableKey nvarchar(max) = 'noa' --新資料表KEY EX: noa
+declare @DeleteAndCreate int = 0 ----若已存在是否先刪除 0=否 1=是
 declare @isMultipleYears int = 1 --是否多年度 0=否 1=是
 declare @bYears int =101 --開始年度
 declare @eYears int =105 --中止年度
@@ -48,14 +49,14 @@ begin
 			declare @addYear int = @bYears
 			while(@addYear <= @eYears)
 			begin
-			declare @t_name nvarchar(max) = @newTablename + RIGHT(REPLICATE('0', 3) + CAST(@addYear as NVARCHAR), 3)
-			insert into @tmp(tablename,isexist)
-				select
-					@t_name,
-					case when 
-						(select count(*) from INFORMATION_SCHEMA.tables where (TABLE_TYPE != 'VIEW') and (TABLE_NAME=@t_name)) > 0
-					then 1 else 0 end
-			set @addYear = @addYear+1
+				declare @t_name nvarchar(max) = @newTablename + RIGHT(REPLICATE('0', 3) + CAST(@addYear as NVARCHAR), 3)
+				insert into @tmp(tablename,isexist)
+					select
+						@t_name,
+						case when 
+							(select count(*) from INFORMATION_SCHEMA.tables where (TABLE_TYPE != 'VIEW') and (TABLE_NAME=@t_name)) > 0
+						then 1 else 0 end
+				set @addYear = @addYear+1
 			end
 		end
 	end
@@ -68,8 +69,14 @@ begin
 	into @tablename,@isexist
 	while(@@FETCH_STATUS <> -1)
 	begin
-		if(@isexist=0)
+		if(@isexist=0 or (@isexist=1 and @DeleteAndCreate=1))
 		begin
+			if(@isexist=1)
+			begin
+				set @cmd = 'drop table [' + @tablename + ']'
+				execute sp_executesql @cmd
+				print @tablename + ' -> ' + @cmd
+			end
 			set @cmd = 'create table [' + @tablename + '] ( ' + @newTableCoulmns
 			if(ltrim(rtrim(@newTableKey)) != '')
 			begin
