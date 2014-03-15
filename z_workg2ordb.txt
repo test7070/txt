@@ -22,6 +22,7 @@ declare @tmp table(
 	productno nvarchar(30),
 	products nvarchar(90),
 	gdemand float,
+	hneed float,
 	stkmount float,
 	ordcmount float,
 	safemount float,
@@ -32,20 +33,27 @@ if(@t_workgall='1')
 begin
 	insert into @tmp
 	select '0',productno,(select product from ucc where noa=tmp.productno)products 
-	,sum(gdemand)gdemand 
+	,sum(gdemand)gdemand ,sum(hneed) hneed
 	,isnull((select sum(mount) from stkucc(@t_stkdate,'','') where productno=tmp.productno),0)stkmount
 	,sum(ordcmount)ordcmount
 	,isnull((select safemount from ucc where noa=tmp.productno),0) safemount
 	,0 ndemand 
 	from ( 
 		--生產計劃毛需求
-		select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 ordcmount from view_work w left join view_works ws on w.noa=ws.noa 
+		select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 hneed,0 ordcmount from view_work w left join view_works ws on w.noa=ws.noa 
+		left join view_workg g on w.cuano=g.noa
+		where ws.productno in (select noa from ucc where typea='4' or typea='5')  and w.enda!='1' and isnull(g.ordbno,'')=''
+		group by ws.productno 
+		union all 
+		--虛擬計劃毛需求
+		select ws.productno,0 gdemand,sum(ws.mount-ws.gmount) hneed,0 ordcmount 
+		from view_workh w left join view_workhs ws on w.noa=ws.noa 
 		left join view_workg g on w.cuano=g.noa
 		where ws.productno in (select noa from ucc where typea='4' or typea='5')  and w.enda!='1' and isnull(g.ordbno,'')=''
 		group by ws.productno 
 		union all 
 		--採購未入
-		select ocs.productno,0 gdemand,sum(ocs.mount)ordcmount from view_ordcs ocs 
+		select ocs.productno,0 gdemand,0 hneed,sum(ocs.mount)ordcmount from view_ordcs ocs 
 		where ocs.enda!='1' and ocs.productno in (select noa from ucc where typea='4' or typea='5')  
 		and charindex(ocs.ordbno,(select ','+ordbno from view_workg where isnull(ordbno,'')='' FOR XML PATH('')))>0
 		group by ocs.productno 
@@ -55,32 +63,40 @@ else
 begin
 	insert into @tmp
 	select '0',productno,(select product from ucc where noa=tmp.productno)products 
-	,sum(gdemand)gdemand 
+	,sum(gdemand)gdemand ,sum(hneed)hneed 
 	,isnull((select sum(mount) from stkucc(@t_stkdate,'','') where productno=tmp.productno),0)stkmount
 	,sum(ordcmount)ordcmount
 	,isnull((select safemount from ucc where noa=tmp.productno),0) safemount
 	,0 ndemand 
 	from ( 
 		--生產計劃毛需求
-		select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 ordcmount from view_work w left join view_works ws on w.noa=ws.noa 
+		select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 hneed,0 ordcmount from view_work w left join view_works ws on w.noa=ws.noa 
 		left join view_workg g on w.cuano=g.noa
 		where ws.productno in (select noa from ucc where typea='4' or typea='5') and w.enda!='1' 
 		and g.noa between @t_bnoa and @t_enoa and isnull(g.ordbno,'')=''
-		group by ws.productno 
+		group by ws.productno
+		union all 
+		--虛擬計劃毛需求
+		select ws.productno,0 gdemand,sum(ws.mount-ws.gmount) hneed,0 ordcmount 
+		from view_workh w left join view_workhs ws on w.noa=ws.noa 
+		left join view_workg g on w.cuano=g.noa
+		where ws.productno in (select noa from ucc where typea='4' or typea='5')  and w.enda!='1' and isnull(g.ordbno,'')=''
+		group by ws.productno  
 		union all 
 		--採購未入
-		select ocs.productno,0 gdemand,sum(ocs.mount)ordcmount from view_ordcs ocs 
+		select ocs.productno,0 gdemand,0 hneed,sum(ocs.mount)ordcmount from view_ordcs ocs 
 		where ocs.enda!='1' and ocs.productno in (select noa from ucc where typea='4' or typea='5')  
 		and charindex(ocs.ordbno,(select ','+ordbno from view_workg where noa between @t_bnoa and @t_enoa and isnull(ordbno,'')='' FOR XML PATH('')))>0
 		group by ocs.productno 
 	)tmp group by productno
 end
 
-update @tmp set ndemand = (gdemand-ordcmount-stkmount+safemount) 
+update @tmp set ndemand = (gdemand+hneed-ordcmount-stkmount+safemount) 
 update @tmp set ndemand=0 where ndemand<0
 
 select gno,productno,products,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hneed),1)),0,30)) hneed,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,safemount),1)),0,30)) safemount,
@@ -226,7 +242,7 @@ begin
 
 	EXEC("insert into ordb"+[1]+" (datea,odate,noa,kind,tggno,tgg,nick,paytype,trantype,tel,fax,cno,acomp,salesno,sales,worker,money,taxtype,total,memo,enda,isproj)
 	select '"+@ordbdate+"','"+@t_stkdate+"','"+@ordbno+"'+ REPLACE('"+@t_stkdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
-	,case when '"+@typea+"'='4' then '1' else '2' end kind,'"+@tggno+"' tggno,(select comp from tgg where noa='"+@tggno+"') tgg,(select nick from tgg where noa='"+@tggno+"') nick
+	,'2' kind,'"+@tggno+"' tggno,(select comp from tgg where noa='"+@tggno+"') tgg,(select nick from tgg where noa='"+@tggno+"') nick
 	,(select paytype from tgg where noa='"+@tggno+"') paytype,(select trantype from tgg where noa='"+@tggno+"') trantype
 	,(select tel from tgg where noa='"+@tggno+"') tel,(select fax from tgg where noa='"+@tggno+"') fax
 	,(select cno from sss where noa='"+@sssno+"') cno,(select comp from sss where noa='"+@sssno+"') acomp
