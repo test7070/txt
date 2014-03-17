@@ -9,8 +9,13 @@ set @t_btggno = case when '#non' = [5] then '' else [5] end
 set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
 set @t_merger = case when '#non' = [7] then '' else [7] end
 
-declare @tmp table( 
-	gno nvarchar(1), 
+------------報表設定<<Start>>------------
+declare @pageline int = case when len(@t_merger)>0 then 35 else 19 end--每頁幾行
+------------報表設定<<End>>------------
+declare @tmp table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	pageno int,
 	noa nvarchar(30),
 	workno nvarchar(30),
 	tggno nvarchar(30), 
@@ -23,47 +28,97 @@ declare @tmp table(
 	unit nvarchar(12),
 	memo nvarchar(max) ,
 	workmount float
-) 
-
-if(len(@t_merger)=0) 
-begin 
-	insert into @tmp 
-	select'2',a.noa,a.workno,b.tggno,b.tgg,b.storeno,b.store,a.productno,a.product,a.mount,a.unit,a.memo,c.mount 
-	from view_workcs a left join view_workc b on a.noa = b.noa
+)
+insert into @tmp
+	select
+		'0',0 pageno,a.noa,a.workno,b.tggno,b.tgg,b.storeno,b.store,a.productno,a.product,a.mount,a.unit,a.memo,c.mount 
+	from view_workcs a
+	left join view_workc b on a.noa = b.noa
 	left join view_work c on a.workno = c.noa 
-	where (len(@t_noa)=0 or a.noa=@t_noa) and 
-	b.tggno between @t_btggno and @t_etggno 
+	where (len(@t_noa)=0 or a.noa=@t_noa) and (b.tggno between @t_btggno and @t_etggno)
 	order by a.noa,a.productno 
-	
-	insert into @tmp(gno,tggno,storeno) 
-	select '1',tggno,storeno
-	from @tmp a group by tggno,storeno 
-end 
-else
-begin 
-	insert into @tmp (gno,tggno,storeno,productno,products,mount,unit,workmount) 
-	select '4',b.tggno,b.storeno,a.productno,a.product,sum(a.mount),a.unit,sum(c.mount)
-	from view_workcs a left join view_workc b on a.noa = b.noa 
-	left join view_work c on a.workno = c.noa 
-	where (len(@t_noa)=0 or a.noa=@t_noa) and 
-	b.tggno between @t_btggno and @t_etggno 
-	group by b.tggno,b.storeno,a.productno,a.product,a.unit
-	
-	insert into @tmp(gno,tggno,storeno)
-	select '3',tggno,storeno
-	from @tmp a group by tggno,storeno 
-end 
+------------更新頁數<<Start>>------------
+declare @idno int
+declare @pageno int
+declare @recCount int = 1
+declare @pageno_int int = 0
+declare @tggno nvarchar(max)
+declare @lasttggno nvarchar(max) = ''
+declare @storeno nvarchar(max)
+declare @laststoreno nvarchar(max) = ''
+declare @nextidno int
 
-insert into @tmp(gno,tggno,tggs,storeno,stores) 
-	select '0',tggno,(select nick from tgg where noa=a.tggno)
-	,storeno ,(select top 1 store from store where noa=a.storeno)
-	from @tmp a group by tggno,storeno 
-	
-insert into @tmp(gno,tggno,storeno) 
-	select '5',tggno,storeno
-	from @tmp a group by tggno,storeno 
-
-select * from @tmp order by tggno,storeno,gno;
+declare cursor_table cursor for
+	select
+		a.idno,a.tggno,a.storeno
+	from @tmp a order by a.tggno,a.storeno
+open cursor_table
+fetch next from cursor_table
+into @idno,@tggno,@storeno
+while(@@FETCH_STATUS <> -1)
+begin
+	if((@recCount > @pageline) or (@tggno != @lasttggno) or (@storeno != @laststoreno))
+	begin
+		set @recCount = 1
+		set @pageno_int = @pageno_int+1
+	end
+	if(@recCount = @pageline)
+	begin
+		set @nextidno = @idno+1
+	end
+	update @tmp set pageno=@pageno_int where idno=@idno
+	set @lasttggno = @tggno
+	set @laststoreno = @storeno
+	set @recCount = @recCount+1
+	fetch next from cursor_table
+	into @idno,@tggno,@storeno
+end
+close cursor_table
+deallocate cursor_table
+------------更新頁數<<End>>-------------
+------------插入表頭及表尾<<Start>>-------------
+if(len(@t_merger)=0) -----1,2,5
+begin
+	insert into @tmp(gno,pageno,tggno,tggs,storeno,stores)
+		select
+			'1',pageno,tggno,tggs,storeno,stores
+		from @tmp a
+		where (gno='0')
+		group by pageno,tggno,tggs,storeno,stores
+	insert into @tmp(gno,pageno,tggno,tggs,storeno,stores)
+		select
+			'5',pageno,tggno,tggs,storeno,stores
+		from @tmp a
+		where (gno='0')
+		group by pageno,tggno,tggs,storeno,stores
+	update @tmp set gno='2' where gno='0'
+end
+else -----3,4,6
+begin
+	insert into @tmp(gno,pageno,tggno,tggs,storeno,stores)
+		select
+			'3',pageno,tggno,tggs,storeno,stores
+		from @tmp a
+		where (gno='0')
+		group by pageno,tggno,tggs,storeno,stores
+	insert into @tmp(gno,pageno,tggno,tggs,storeno,stores)
+		select
+			'6',pageno,tggno,tggs,storeno,stores
+		from @tmp a
+		where (gno='0')
+		group by pageno,tggno,tggs,storeno,stores
+	insert into @tmp(gno,pageno,tggno,storeno,productno,products,mount,unit,workmount)
+		select
+			'4',pageno,tggno,storeno,productno,products,sum(mount),unit,sum(mount)
+		from @tmp where gno='0'
+		group by pageno,tggno,storeno,productno,products,unit
+	delete @tmp where gno='0'
+end
+------------插入表頭及表尾<<End>>-------------
+select 
+	*,Convert(varchar(10),getdate(),111) wtoday
+from @tmp a
+order by a.pageno,tggno,storeno,gno;
 
 --******************************************************************************************************
 z_workcp2:--z_workcp2
