@@ -35,12 +35,7 @@ ordc:--ordb_ordc
 		total float,
 		memo nvarchar(max)
 	)	
-	-- ordb 有廠商
-	insert into @tmpz(gno,accy,noa,no3,cno,kind,odate,tggno,tgg,productno,product,unit,mount,price,total)
-	select '1',a.accy,a.noa,a.no3,b.cno,b.kind,b.odate,b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,a.price,a.total
-	from view_ordbs a
-	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
-	where len(b.tggno)>0
+	-- ordb 有廠商 單價為0也無所謂
 	-- ordb 無廠商 就找詢價議價找
 	insert into @tmpz(gno,accy,noa,no3,no4,cno,kind,odate,tggno,tgg,productno,product,unit,mount,price,total)
 	select '2',a.accy,a.noa,a.no3,c.no4,b.cno,b.kind,b.odate,c.tggno,c.tgg,a.productno,a.product,a.unit,a.mount,c.fprice,ROUND(a.mount*c.fprice,0)
@@ -66,12 +61,13 @@ ordc:--ordb_ordc
 	outer apply (select COUNT(1) n from @tmpz where accy=a.accy and noa=a.noa and ISNULL(price,0)>0) b
 	outer apply (select COUNT(1) n from view_ordbs where accy=a.accy and noa=a.noa) c 
 	
-	if exists(select * from @tmpz where isout=0)
+	if exists(select * from @tmpz where isout=0 and ISNULL(price,0)=0)
 		insert into @tmpc(memo)
 		select '請購單資料異常'
 	--=================================================================================
 	-----------------------------------------------------------------------------------------
 	declare @tmp table(
+		pno nvarchar(10),
 		isout int,
 		accy nvarchar(10),
 		noa nvarchar(20),
@@ -89,17 +85,17 @@ ordc:--ordb_ordc
 		price float,
 		total float
 	)	
-	-- ordb 有廠商
-	insert into @tmp(accy,noa,no3,cno,kind,tggno,tgg,productno,product,unit,mount,price,total)
-	select a.accy,a.noa,a.no3,b.cno,b.kind,b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,a.price,a.total
+	-- ordb 有廠商 單價為0也無所謂
+	insert into @tmp(pno,accy,noa,no3,cno,kind,tggno,tgg,productno,product,unit,mount,price,total)
+	select '1',a.accy,a.noa,a.no3,b.cno,b.kind,b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,a.price,a.total
 	from view_ordbs a
 	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
-	where len(b.tggno)>0 and len(a.productno)>0 and a.mount!=0 and a.price!=0
+	where len(b.tggno)>0 and len(a.productno)>0 and a.mount!=0
 	and @t_bedate='' and @t_eedate=char(255) 
 	and @t_bfdate='' and @t_efdate=char(255) 
 	-- ordb 無廠商 就找詢價議價找
-	insert into @tmp(accy,noa,no3,no4,cno,kind,tggno,tgg,productno,product,unit,mount,price,total)
-	select a.accy,a.noa,a.no3,c.no4,b.cno,b.kind,c.tggno,c.tgg,a.productno,a.product,a.unit,a.mount,c.fprice,ROUND(a.mount*c.fprice,0)
+	insert into @tmp(pno,accy,noa,no3,no4,cno,kind,tggno,tgg,productno,product,unit,mount,price,total)
+	select '2',a.accy,a.noa,a.no3,c.no4,b.cno,b.kind,c.tggno,c.tgg,a.productno,a.product,a.unit,a.mount,c.fprice,ROUND(a.mount*c.fprice,0)
 	from view_ordbs a
 	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
 	outer apply (select top 1 * from view_ordbt 
@@ -119,7 +115,7 @@ ordc:--ordb_ordc
 	where b.noa is not null
 	------------------------------------------------------------------------
 	--ordb 若有沒單價的  則該筆ORDB就都不匯
-	update @tmp set isout = case when b.n=c.n then 1 else 0 end
+	update @tmp set isout = case when b.n=c.n or a.pno='1' then 1 else 0 end
 	from @tmp a
 	outer apply (select COUNT(1) n from @tmp where accy=a.accy and noa=a.noa and ISNULL(price,0)>0) b
 	outer apply (select COUNT(1) n from view_ordbs where accy=a.accy and noa=a.noa) c 
@@ -235,14 +231,15 @@ ordc:--ordb_ordc
 			+" select tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total from #ordb_tmpb"
 		execute sp_executesql @cmd
 		
+
 		declare cursor_table cursor for
-		select accy,noa from @tmp
+		select accy,noa from @tmp group by accy,noa
 		open cursor_table
 		fetch next from cursor_table
 		into @accy,@noa
 		while(@@FETCH_STATUS <> -1)
-		begin		
-			set @cmd = "update ordb"+@accy+" set end=1 where noa=@noa"
+		begin				
+			set @cmd = "update ordb"+@accy+" set enda=1 where noa=@noa"
 			execute sp_executesql @cmd,N'@noa nvarchar(20)',@noa=@noa
 			fetch next from cursor_table
 			into @accy,@noa
