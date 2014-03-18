@@ -593,10 +593,10 @@ begin
 	,case when isnull(b.stdmount,0)>0 then ceiling(isnull(a.smount,0)/isnull(b.stdmount,0))*isnull(b.stdmount,0) else isnull(a.smount,0) end smount
 	,case when isnull(b.stdmount,0)>0 then ceiling(isnull(a.smount,0)/isnull(b.stdmount,0))*isnull(b.stdmount,0) else isnull(a.smount,0) end smount
 	,isnull((select top 1 ub.price from ucctgg ua left join ucctggs ub on ua.noa=ub.noa  where ua.tggno='"+@tggno+"' and ua.productno=a.productno and isnull(a.smount,0) >= ub.mount order by ub.mount desc),0) inprice
-	,isnull(a.smount,0)*isnull((select top 1 ub.price from ucctgg ua left join ucctggs ub on ua.noa=ub.noa  where ua.tggno='"+@tggno+"' and ua.productno=a.productno and isnull(a.smount) >= ub.mount order by ub.mount desc),0) total
+	,isnull(a.smount,0)*isnull((select top 1 ub.price from ucctgg ua left join ucctggs ub on ua.noa=ub.noa  where ua.tggno='"+@tggno+"' and ua.productno=a.productno and isnull(a.smount,0) >= ub.mount order by ub.mount desc),0) total
 	,'"+@tggno+"',0, '2' kind
 	,isnull((select ordcmemo+' ' from ucctgg where productno=a.productno and tggno='"+@tggno+"'),'')+isnull((select '廠商料號:'+productno2 from ucctgg where productno=a.productno and tggno='"+@tggno+"'),'')
-	,cast(a.gdemand as nvarchar(30))+','+cast(a.stkmount as nvarchar(30))+','+cast(a.ordcmount as nvarchar(30))+','+cast(a.safemount as nvarchar(30))+','+cast(a.ndemand as nvarchar(30)) 
+	,cast(isnull(a.gdemand,0) as nvarchar(30))+','+cast(isnull(a.stkmount,0) as nvarchar(30))+','+cast(isnull(a.ordcmount,0) as nvarchar(30))+','+cast(isnull(a.safemount,0) as nvarchar(30))+','+cast(isnull(a.ndemand,0) as nvarchar(30)) 
 	+','+cast(isnull(a.smount,0) as nvarchar(30))+','+cast(isnull(a.sordb,0) as nvarchar(30))+','+cast(isnull(a.sordc,0) as nvarchar(30))+','+cast(isnull(a.src2,0) as nvarchar(30))+','+cast(isnull(a.sunrc2,0) as nvarchar(30))
 	from #tmp a left join ucc b on a.productno=b.noa where isnull(a.smount,0)>0 and b.typea='"+@typea+"' and (case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')='' then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end)='"+@tggno+"'")
 
@@ -648,9 +648,14 @@ set @t_enoa = case when '#non' =  [5] then char(255) else  [5] end
 --*********************************************************************************************
 declare @workgno nvarchar(100)
 
+--今天日期
+declare @t_date nvarchar(100)
+set @t_date=CONVERT (VARCHAR(7), GETDATE()+3,12 )+0890000
+set @t_date=left(@t_date,3)+'/'+substring(@t_date,4,2)+'/'+right(@t_date,2)
+
 declare @tmp table(
 	gno nvarchar(1),
-	ordbno nvarchar(30),
+	ordbno nvarchar(MAX),
 	noq nvarchar(30),
 	workgno nvarchar(MAX),
 	productno nvarchar(30),
@@ -664,6 +669,7 @@ declare @tmp table(
 	xsmount float,
 	sordb float,
 	sordc float,
+	ordcnos nvarchar(MAX),
 	src2 float,
 	sunrc2 float
 )
@@ -687,22 +693,56 @@ while(@@FETCH_STATUS <> -1)
 close cursor_table 
 deallocate cursor_table 
 
-update @tmp
-set gdemand=dbo.split(smount,',',0)
-,ordcmount=dbo.split(smount,',',1)
-,stkmount=dbo.split(smount,',',2)
-,safemount=dbo.split(smount,',',3)
-,ndemand=dbo.split(smount,',',4)
-,xsmount=dbo.split(smount,',',5)
-,sordb=dbo.split(smount,',',6)
-,sordc=dbo.split(smount,',',7)
-,src2=dbo.split(smount,',',8)
-,sunrc2=dbo.split(smount,',',9)
+update a 
+set gdemand=dbo.split(smount,',',0) 
+,ordcmount=dbo.split(smount,',',1) 
+,stkmount=dbo.split(smount,',',2) 
+,safemount=dbo.split(smount,',',3) 
+,ndemand=dbo.split(smount,',',4) 
+,xsmount=dbo.split(smount,',',5) 
+
+,sordb=isnull((select SUM(ob.mount) from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa where CHARINDEX(oa.workgno,a.workgno)>0 and ob.productno=a.productno),0)
+,sordc=isnull((select SUM(ob.mount) from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),0)
+,ordcnos=isnull((select oa.noa from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),'')
+from @tmp a
+
+---------------------------------------當非預測時，加入今天之後 預測的資料(根據workh的應開工日)
+--update a 
+--set xsmount=(select sum(hb.mount-hb.gmount) from view_workh ha left join view_workhs hb on ha.noa=hb.noa where ha.cuadate>=@t_date and a.productno=hb.productno) 
+--,workgno=workgno+(select ','+ha.cuano from view_workh ha left join view_workhs hb on ha.noa=hb.noa where ha.cuadate>=@t_date and a.productno=hb.productno group by ha.cuano FOR XML PATH(''))
+--from @tmp a
+--where gdemand>0
+
+--update a 
+--set ordbno=isnull(STUFF((select ','+oa.noa from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa 
+--where charindex(oa.workgno,a.workgno)>0 and ob.productno=a.productno group by oa.noa FOR XML PATH('')),1,1,''),'')
+--from @tmp a
+--where gdemand>0
+
+--update a 
+--set sordb=isnull((select SUM(ob.mount) from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa where CHARINDEX(oa.noa,a.ordbno)>0 and ob.productno=a.productno),0)
+--,sordc=isnull((select SUM(ob.mount) from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),0)
+--,ordcnos=isnull((select oa.noa from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),'')
+--from @tmp a
+--where gdemand>0
+-----------------------------------------------
+
+update a 
+set src2=isnull((select SUM(ra.mount) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where rb.ordeno=a.ordbno and rb.productno=a.productno),0)
+from @tmp a
+
+update a 
+set sunrc2=(ndemand+xsmount)-src2
+from @tmp a
+
+update a 
+set xsmount=null
+from @tmp a where gdemand>0
 
 insert into @tmp (gno,workgno)
 select '1'gno,workgno from @tmp group by workgno
 
-select gno,productno,products,workgno,smount,ordbno,
+select gno,productno,products,workgno,smount,ordbno,case when gdemand>0 then '' else '預測需求' end sfname,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount,
 reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount,
