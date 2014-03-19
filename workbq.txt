@@ -1,0 +1,108 @@
+workbqsave:--workbqsave
+declare @t_year nvarchar(10)
+declare @t_noa nvarchar(50) = [1]
+declare @t_name nvarchar(max) = [2]
+declare @t_workbno nvarchar(50)
+declare @t_workbYear nvarchar(10)
+declare @t_workb_deli nvarchar(max) = 'WB'
+declare @cmd nvarchar(max)
+-------取得workbq的年度跟workbno <<Start>>
+select @t_year = accy from view_workbq where noa=@t_noa
+select @t_workbno = workbno from view_workbq where noa=@t_noa
+-------取得workbq的年度跟workbno <<End>>
+-------取得最新workbno (若為空白或單據已刪除則取最新) <<Start>>
+set @t_workbno = ltrim(rtrim(isnull(@t_workbno,'')))
+select @t_workbYear = accy from view_workb where noa=@t_workbno
+if((len(@t_workbno) = 0) or (@t_workbYear is null))
+begin
+	set @t_workbYear = @t_year
+	declare @workbnoq int = 1
+	set @t_workbno = @t_workb_deli + cast((CONVERT (VARCHAR(7), GETDATE(),12 )+0890000) as nvarchar)
+	while(1=1)
+	begin
+		declare @newworkbnoa nvarchar(max) = @t_workbno+RIGHT(REPLICATE('0', 3) + CAST(@workbnoq as NVARCHAR), 3)
+		if((select count(*) from view_workb where noa=@newworkbnoa) = 0)
+		begin
+			set @t_workbno = @newworkbnoa
+			break
+		end
+		else
+		begin
+			if(@workbnoq >= 999)
+				return
+			set @workbnoq = @workbnoq+1
+		end
+	end
+end
+else
+begin
+	set @cmd = 'delete workb' + @t_workbYear + ' where noa=N''' +@t_workbno+ ''''
+	execute sp_executesql @cmd
+	set @cmd = 'delete workbs' + @t_workbYear + ' where noa=N''' +@t_workbno+ ''''
+	execute sp_executesql @cmd
+end
+-------取得最新workbno (若為空白或單據已刪除則取最新) <<End>>
+-------插入workb,workbs資料 <<Start>>
+set @cmd = 'insert into workb' + @t_workbYear +
+				 '(datea,noa,stationno,station,bdate,edate,workno,storeno,store,worker,memo)' + 
+				 'select a.datea,N'''+@t_workbno+''',a.stationno,a.station,a.bdate,a.edate,a.workno,a.storeno,a.store,N''' + @t_name +''',a.memo' + 
+				 ' from workbq' + @t_year + ' a '+
+				 ' where a.noa=N''' + @t_noa + ''''
+execute sp_executesql @cmd
+set @cmd = 'insert into workbs' + @t_workbYear +
+				 '(noa,noq,productno,product,unit,mount,storeno,store,wmount,memo,ordeno,no2,workno)' + 
+				 'select N''' + @t_workbno +''',a.noq,a.productno,a.product,a.unit,a.mount,a.storeno,a.store,a.wmount,a.memo,a.ordeno,a.no2,a.workno' + 
+				 ' from workbqs' + @t_year + ' a ' + 
+				 ' left join view_workfs b on (a.workfno=b.noa) and (a.workfnoq=b.noq) ' +
+				 ' where a.noa=N''' + @t_noa + ''''
+execute sp_executesql @cmd
+-------插入workb,workbs資料 <<End>>
+-------寫入workbq的workbno <<Start>>
+set @cmd = 'update workbq' + @t_year + ' set workbno=N''' + @t_workbno +''''
+execute sp_executesql @cmd
+-------寫入workbq的workbno <<End>>
+-------寫入workf驗收人員跟驗收時間 <<Start>>
+declare @tmp table(
+	noa nvarchar(50),
+	noq nvarchar(10),
+	workfno nvarchar(50),
+	workfnoq nvarchar(10),
+	workfYear nvarchar(10),
+	mount float,
+	bkmount float,
+	wmount float
+)
+set @cmd = 'select noa,noq,workfno,workfnoq,mount,bkmount,wmount from view_workbqs' + @t_year + '  where noa=N''' + @t_noa + ''''
+insert into @tmp(noa,noq,workfno,workfnoq,mount,bkmount,wmount)
+	execute sp_executesql @cmd
+update a
+	set workfYear = b.accy
+from @tmp a
+outer apply(select accy from view_workfs where (a.workfno=noa) and (a.workfnoq=noq)) b
+declare @workfno nvarchar(35)
+declare @workfnoq nvarchar(10)
+declare @workfYear nvarchar(10)
+declare @mount float
+declare @bkmount float
+declare @wmount float
+declare cursor_table cursor for
+	select workfno,workfnoq,workfYear,mount,bkmount,wmount from @tmp
+open cursor_table
+fetch next from cursor_table
+into @workfno,@workfnoq,@workfYear,@mount,@bkmount,@wmount
+while(@@FETCH_STATUS <> -1)
+begin
+	declare @nowTimea nvarchar(10) = left(cast(CONVERT(VARCHAR(12) , GETDATE(), 114) as nvarchar),5)
+	set @cmd = 'update workfs' + @workfYear + ' set qcworker=N''' + @t_name + ''' ,qctime=N''' + @nowTimea + ''',mount=@mount,bkmount=@bkmount,wmount=@wmount where noa=N''' + @workfno + ''' and noq=N''' + @workfnoq + ''''
+	execute sp_executesql @cmd,N'@mount float,@bkmount float,@wmount float'
+			,@mount=@mount,@bkmount=@bkmount,@wmount=@wmount
+	fetch next from cursor_table
+	into @workfno,@workfnoq,@workfYear,@mount,@bkmount,@wmount
+end
+close cursor_table
+deallocate cursor_table
+-------寫入workf驗收人員跟驗收時間 <<End>>
+-------傳回workb的單號 <<Start>>
+select @t_workbno workbno
+-------傳回workb的單號 <<End>>
+;
