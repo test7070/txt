@@ -494,6 +494,7 @@ declare @ordbdate nvarchar(10)
 declare @ordbnos nvarchar(MAX) --全部請購單編號
 --要寫入的workg單號
 declare @workgnos nvarchar(MAX)
+declare @deleteordbno nvarchar(max)
 
 if(@t_workgall='1') 
 set @workgnos=(SELECT STUFF((select ','+noa from view_workg where isnull(ordbno,'')='' and stype!='3' FOR XML PATH('')),1,1,'')) 
@@ -511,17 +512,18 @@ set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate
 
 --產生請購單 --0319直接抓原料的廠商
 declare cursor_table cursor for 
-select typea,tggno from( 
+select tggno from( 
 --select b.typea
 --,case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')=''
 --then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end tggno
-select b.typea,b.tggno 
+select b.tggno 
 from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0
-) tmp group by typea,tggno
+union select ''
+) tmp group by tggno
 
 open cursor_table 
 fetch next from cursor_table 
-into @typea,@tggno
+into @tggno
 while(@@FETCH_STATUS <> -1) 
 begin
 
@@ -532,8 +534,8 @@ begin
 	,(select tel from tgg where noa='"+@tggno+"') tel,(select fax from tgg where noa='"+@tggno+"') fax
 	,(select cno from sss where noa='"+@sssno+"') cno,(select comp from sss where noa='"+@sssno+"') acomp
 	,'"+@sssno+"' salesno,(select namea from sss where noa='"+@sssno+"') sales,(select namea from nhpe where noa='"+@sssno+"') worker
-	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea='"+@typea+"' and b.tggno=tggno)money,'5' taxtype
-	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea='"+@typea+"' and b.tggno=tggno)total
+	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.tggno=tggno and (len(isnull(b.cdate,''))=0 or '"+@t_stkdate+"'<=b.cdate))money,'5' taxtype
+	,(select sum(isnull(a.ndemand,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.tggno=tggno and (len(isnull(b.cdate,''))=0 or '"+@t_stkdate+"'<=b.cdate))total
 	,'"+@t_stkdate+"'+' 物料需求表("+@workgnos+") 轉來 'memo,0,1,'"+@workgnos+"'")
 	
 	--0315要在寫入原始請購量 ordbs.omount ，不給修改
@@ -549,15 +551,23 @@ begin
 	,isnull((select ordcmemo+' ' from ucctgg where productno=a.productno and tggno='"+@tggno+"'),'')+isnull((select '廠商料號:'+productno2 from ucctgg where productno=a.productno and tggno='"+@tggno+"'),'')
 	,cast(a.gdemand as nvarchar(30))+','+cast(a.stkmount as nvarchar(30))+','+cast(a.ordcmount as nvarchar(30))+','+cast(a.safemount as nvarchar(30))+','+cast(a.ndemand as nvarchar(30))
 	+','+cast(isnull(a.smount,0) as nvarchar(30))+','+cast(isnull(a.sordb,0) as nvarchar(30))+','+cast(isnull(a.sordc,0) as nvarchar(30))+','+cast(isnull(a.src2,0) as nvarchar(30))+','+cast(isnull(a.sunrc2,0) as nvarchar(30)) 
-	from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and b.typea='"+@typea+"' 
+	from #tmp a left join ucc b on a.productno=b.noa where a.ndemand>0 and (len(isnull(b.cdate,''))=0 or '"+@t_stkdate+"'<=b.cdate)
 	and b.tggno='"+@tggno+"'")
 	--and (case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')='' then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end)='"+@tggno+"'")
-
-	set @ordbnos=@ordbnos+@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
 	
-	set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	if((select COUNT(*) from view_ordbs where noa=(@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)))=0)
+	begin
+		set @deleteordbno=@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+		EXEC("delete ordb"+[1]+" where noa='"+@deleteordbno+"'")
+	end
+	else
+	begin
+		set @ordbnos=@ordbnos+@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
+		set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	end
+	
 	fetch next from cursor_table 
-	into @typea,@tggno
+	into @tggno
 	
 end 
 close cursor_table 
@@ -603,16 +613,18 @@ set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate
 
 --產生請購單
 declare cursor_table cursor for 
-select typea,tggno from( 
-select b.typea
-,case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')=''
-then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end tggno 
+select tggno from( 
+--select b.typea
+--,case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')=''
+--then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end tggno
+select b.tggno  
 from #tmp a left join ucc b on a.productno=b.noa where isnull(a.smount,0)>0
-) tmp group by typea,tggno
+union select ''
+) tmp group by tggno
 
 open cursor_table 
 fetch next from cursor_table 
-into @typea,@tggno
+into @tggno
 while(@@FETCH_STATUS <> -1) 
 begin
 
@@ -623,8 +635,8 @@ begin
 	,(select tel from tgg where noa='"+@tggno+"') tel,(select fax from tgg where noa='"+@tggno+"') fax
 	,(select cno from sss where noa='"+@sssno+"') cno,(select comp from sss where noa='"+@sssno+"') acomp
 	,'"+@sssno+"' salesno,(select namea from sss where noa='"+@sssno+"') sales,(select namea from nhpe where noa='"+@sssno+"') worker
-	,(select sum(isnull(a.smount,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.smount>0 and b.typea='"+@typea+"' and b.tggno=tggno)money,'5' taxtype
-	,(select sum(isnull(a.smount,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.smount>0 and b.typea='"+@typea+"' and b.tggno=tggno)total
+	,(select sum(isnull(a.smount,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.smount>0 and b.tggno=tggno and (len(isnull(b.cdate,''))=0 or '"+@t_stkdate+"'<=b.cdate))money,'5' taxtype
+	,(select sum(isnull(a.smount,0)*isnull(b.inprice,0)) total from #tmp a left join ucc b on a.productno=b.noa where a.smount>0 and b.tggno=tggno and (len(isnull(b.cdate,''))=0 or '"+@t_stkdate+"'<=b.cdate))total
 	,'"+@t_stkdate+"'+' 物料需求表("+@workgnos+") 轉來 'memo,0,1,'"+@workgnos+"'")
 	
 	--0315要在寫入原始請購量 ordbs.omount ，不給修改
@@ -641,13 +653,25 @@ begin
 	,cast(isnull(a.gdemand,0) as nvarchar(30))+','+cast(isnull(a.stkmount,0) as nvarchar(30))+','+cast(isnull(a.ordcmount,0) as nvarchar(30))+','+cast(isnull(a.safemount,0) as nvarchar(30))+','+cast(isnull(a.ndemand,0) as nvarchar(30)) 
 	+','+cast(isnull(a.smount,0) as nvarchar(30))+','+cast(isnull(a.sordb,0) as nvarchar(30))+','+cast(isnull(a.sordc,0) as nvarchar(30))+','+cast(isnull(a.src2,0) as nvarchar(30))+','+cast(isnull(a.sunrc2,0) as nvarchar(30))
 	,a.ldate
-	from #tmp a left join ucc b on a.productno=b.noa where isnull(a.smount,0)>0 and b.typea='"+@typea+"' and (case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')='' then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end)='"+@tggno+"'")
-
-	set @ordbnos=@ordbnos+@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
+	from #tmp a left join ucc b on a.productno=b.noa 
+	where isnull(a.smount,0)>0 and (len(isnull(b.cdate,''))=0 or '"+@t_stkdate+"'<=b.cdate)
+	and b.tggno ='"+@tggno+"'")
+	--and (case when isnull((select top 1 tggno from view_rc2s where productno=a.productno order by datea desc),'')='' then b.tggno else (select top 1 tggno from view_rc2s where productno=a.productno order by datea desc) end)
 	
-	set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	
+	if((select COUNT(*) from view_ordbs where noa=(@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)))=0)
+	begin
+		set @deleteordbno=@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+		EXEC("delete ordb"+[1]+" where noa='"+@deleteordbno+"'")
+	end
+	else
+	begin
+		set @ordbnos=@ordbnos+@ordbno+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
+		set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	end
+	
 	fetch next from cursor_table 
-	into @typea,@tggno
+	into @tggno
 	
 end 
 close cursor_table 
