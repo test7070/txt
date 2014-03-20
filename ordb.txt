@@ -10,7 +10,8 @@ ordc:--ordb_ordc
 	declare @t_bfdate nvarchar(10) = [7]
 	declare @t_efdate nvarchar(10) = case when len([8])=0 then char(255) else [8] end
 	declare @t_workgno nvarchar(max) = [9]
-	-----------------------------------------------------------------------------------------
+	declare @t_bno nvarchar(20) = [10]
+	declare @t_eno nvarchar(20) = case when len([11])=0 then char(255) else [11] end
 	-----------------------------------------------------------------------------------------
 	declare @tmpc table(
 		memo nvarchar(max)
@@ -51,6 +52,7 @@ ordc:--ordb_ordc
 		order by fdate desc) c
 	where len(b.tggno)=0
 	and (len(@t_workgno)=0 or CHARINDEX(b.workgno,','+@t_workgno+',')>0)
+	and a.noa between @t_bno and @t_eno
 	------------------------------------------------------------------------
 	--剔除已採購
 	delete @tmpz
@@ -78,6 +80,7 @@ ordc:--ordb_ordc
 		no4 nvarchar(10),
 		cno nvarchar(20),
 		kind nvarchar(20),
+		datea nvarchar(10),
 		
 		tggno nvarchar(20),
 		tgg nvarchar(50),
@@ -86,21 +89,22 @@ ordc:--ordb_ordc
 		unit nvarchar(20),
 		mount float,
 		price float,
-		total float
+		total float,
+		ldate nvarchar(10),
+		tmpdate date
 	)	
 	-- ordb 有廠商 單價為0也無所謂
-	insert into @tmp(pno,accy,noa,no3,cno,kind,tggno,tgg,productno,product,unit,mount,price,total)
-	select '1',a.accy,a.noa,a.no3,isnull(b.cno,''),b.kind,b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,a.price,a.total
+	insert into @tmp(pno,accy,noa,no3,cno,kind,datea,tggno,tgg,productno,product,unit,mount,price,total,ldate)
+	select '1',a.accy,a.noa,a.no3,isnull(b.cno,''),b.kind,isnull(b.datea,''),b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,a.price,a.total,isnull(a.ldate,'')
 	from view_ordbs a
 	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
 	where len(b.tggno)>0 and len(a.productno)>0 and a.mount!=0
 	and (len(@t_workgno)=0 or CHARINDEX(b.workgno,','+@t_workgno+',')>0)
-	--and @t_bedate='' and @t_eedate=char(255) 
-	--and @t_bfdate='' and @t_efdate=char(255) 
+	and a.noa between @t_bno and @t_eno
 
 	-- ordb 無廠商 就找詢價議價找
-	insert into @tmp(pno,accy,noa,no3,no4,cno,kind,tggno,tgg,productno,product,unit,mount,price,total)
-	select '2',a.accy,a.noa,a.no3,c.no4,isnull(b.cno,''),b.kind,c.tggno,c.tgg,a.productno,a.product,a.unit,a.mount,c.fprice,ROUND(a.mount*c.fprice,0)
+	insert into @tmp(pno,accy,noa,no3,no4,cno,kind,datea,tggno,tgg,productno,product,unit,mount,price,total,ldate)
+	select '2',a.accy,a.noa,a.no3,c.no4,isnull(b.cno,''),b.kind,isnull(b.datea,''),c.tggno,c.tgg,a.productno,a.product,a.unit,a.mount,c.fprice,ROUND(a.mount*c.fprice,0),isnull(a.ldate,'')
 	from view_ordbs a
 	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
 	outer apply (select top 1 * from view_ordbt 
@@ -113,6 +117,7 @@ ordc:--ordb_ordc
 	and c.edate between @t_bedate and @t_eedate
 	and c.fdate between @t_bfdate and @t_efdate
 	and (len(@t_workgno)=0 or CHARINDEX(b.workgno,','+@t_workgno+',')>0)
+	and a.noa between @t_bno and @t_eno
 	------------------------------------------------------------------------
 	--剔除已採購
 	delete @tmp
@@ -164,16 +169,17 @@ ordc:--ordb_ordc
 		unit nvarchar(20),
 		mount float,
 		price float,
-		total float
+		total float,
+		ldate nvarchar(10)
 	)
-	insert into #ordb_tmpa(cno,acomp,kind,tggno,tgg,nick)
-	select a.cno,c.acomp,a.kind,a.tggno,b.comp,b.nick
-	from (select cno,tggno,kind from @tmp where isout=1 group by cno,tggno,kind) a
+	insert into #ordb_tmpa(cno,acomp,kind,tggno,tgg,nick,datea)
+	select a.cno,c.acomp,a.kind,a.tggno,b.comp,b.nick,a.datea
+	from (select cno,tggno,kind,MAX(datea) datea from @tmp where isout=1 group by cno,tggno,kind) a
 	left join tgg b on a.tggno=b.noa
 	left join acomp c on a.cno=c.noa
 	
-	insert into #ordb_tmpb(cno,tggno,kind,tableaccy,ordbno,no3,productno,product,unit,mount,price,total)
-	select cno,tggno,kind,accy,noa,no3,productno,product,unit,mount,price,total
+	insert into #ordb_tmpb(cno,tggno,kind,tableaccy,ordbno,no3,productno,product,unit,mount,price,total,ldate)
+	select cno,tggno,kind,accy,noa,no3,productno,product,unit,mount,price,total,ldate
 	from @tmp 
 	where isout=1
 	
@@ -183,7 +189,7 @@ ordc:--ordb_ordc
 		,ROW_NUMBER()over(partition by tggno,kind order by tableaccy,ordbno,no3) n from #ordb_tmpb) b 
 	on a.tableaccy=b.tableaccy and a.ordbno=b.ordbno and a.no3=b.no3
 	
-	update #ordb_tmpa set datea=@t_datea,odate=@t_datea,[money]=b.total,tax=0,total=b.total,memo='整批匯入'
+	update #ordb_tmpa set odate=@t_datea,[money]=b.total,tax=0,total=b.total,memo='整批匯入'
 	from #ordb_tmpa a
 	left join (select tggno,kind,SUM(total) total from #ordb_tmpb group by tggno,kind) b on a.tggno=b.tggno and a.kind=b.kind
 	------------------------------------------------------------------------------------
@@ -230,14 +236,18 @@ ordc:--ordb_ordc
 		end
 		close cursor_table
 		deallocate cursor_table
-	
+		
+		--最慢需求日(Ldate)減一天 才是預定交貨日(Trandate)
+		update @tmp set tmpdate = dateadd(dd,-1,cast(cast(cast(left(ldate,3) as int)+1911 as nvarchar)+RIGHT(ldate,6) as DATE))
+		where len(ldate)>0
+		update @tmp set ldate = right('000'+cast(YEAR(tmpdate)-1911 as nvarchar),3)+'/'+RIGHT('00'+CAST(month(tmpdate) as nvarchar),2)+'/'+RIGHT('00'+CAST(day(tmpdate) as nvarchar),2)
+		
 		set @cmd ="insert into ordc"+LEFT(@t_datea,3)+"(noa,cno,acomp,kind,datea,odate,tggno,tgg,nick,money,tax,total,memo)"
 			+" select noa,cno,acomp,kind,datea,odate,tggno,tgg,nick,money,tax,total,memo from #ordb_tmpa"
 		execute sp_executesql @cmd
-		set @cmd ="insert into ordcs"+LEFT(@t_datea,3)+"(tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total)"
-			+" select tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total from #ordb_tmpb"
+		set @cmd ="insert into ordcs"+LEFT(@t_datea,3)+"(tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total,trandate)"
+			+" select tggno,kind,noa,no2,tableaccy,ordbno,no3,productno,product,unit,mount,price,total,ldate from #ordb_tmpb"
 		execute sp_executesql @cmd
-		
 
 		declare cursor_table cursor for
 		select accy,noa from @tmp group by accy,noa
