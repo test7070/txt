@@ -608,7 +608,7 @@ set @cmd="select @ordbum= isnull(right((select top 1 noa from view_ordb where CH
 EXEC SP_EXECUTESQL @cmd, N'@ordbum nvarchar(max) OUTPUT', @ordbum OUTPUT
 
 --採購有效日
-set @ordbdate=CONVERT (VARCHAR(7), GETDATE()+3,12 )+0890000
+set @ordbdate=CONVERT (VARCHAR(7), GETDATE()+10,12 )+0890000
 set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate,2)
 
 --產生請購單
@@ -815,8 +815,115 @@ update a
 set xsmount=null
 from @tmp a where gdemand>0
 
-insert into @tmp (gno,workgno)
-select '1'gno,workgno from @tmp group by workgno
+----3/20顯示全部預測明細--------------------------------------------
+declare @tmpa table( 
+	gno nvarchar(1), 
+	ordbno nvarchar(MAX), 
+	noq nvarchar(30), 
+	workgno nvarchar(MAX), 
+	productno nvarchar(30), 
+	products nvarchar(90), 
+	smount nvarchar(MAX), 
+	gdemand float, 
+	stkmount float, 
+	ordcmount float, 
+	safemount float, 
+	ndemand float, 
+	xsmount float, 
+	sordb float, 
+	sordc float, 
+	ordcnos nvarchar(MAX), 
+	src2 float, 
+	sunrc2 float, 
+	sfdate nvarchar(10), 
+	ordcdate nvarchar(10) 
+) 
+
+
+declare cursor_table cursor for 
+select noa from view_workg 
+open cursor_table 
+fetch next from cursor_table 
+into @workgno 
+while(@@FETCH_STATUS <> -1) 
+begin 
+if ((select count(*) from @tmpa where charindex(@workgno,workgno)>0)=0) 
+begin 
+insert into @tmpa (gno,ordbno,noq,workgno,productno,products,smount) 
+select '0',b.noa,b.no3,a.workgno,b.productno,b.product,b.smount 
+from view_ordb a left join view_ordbs b on a.noa=b.noa where charindex(@workgno,a.workgno)>0 
+end 
+fetch next from cursor_table 
+into @workgno 
+end 
+close cursor_table 
+deallocate cursor_table 
+
+update a 
+set gdemand=dbo.split(smount,',',0) 
+,ordcmount=dbo.split(smount,',',1) 
+,stkmount=dbo.split(smount,',',2) 
+,safemount=dbo.split(smount,',',3) 
+,ndemand=dbo.split(smount,',',4) 
+,xsmount=dbo.split(smount,',',5) 
+
+,sordb=isnull((select SUM(ob.mount) from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa where CHARINDEX(oa.workgno,a.workgno)>0 and ob.productno=a.productno),0) 
+,sordc=isnull((select SUM(ob.mount) from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),0) 
+,ordcnos=isnull((select oa.noa from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),'') 
+
+,sfdate=(select MAX(datea) from saleforecasts where 
+datea between (select MIN(wa.sfbdate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 ) 
+and (select MAX(wa.sfedate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 ) 
+and productno in(select productno from view_workgs where charindex(noa,a.workgno)>0)) 
+,ordcdate=isnull((select ob.trandate from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),'') 
+
+from @tmpa a 
+
+update a 
+set src2=isnull((select SUM(ra.mount) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where rb.ordeno=a.ordbno and rb.productno=a.productno),0) 
+from @tmpa a 
+
+update a 
+set sunrc2=(ndemand+xsmount)-src2 
+from @tmpa a 
+
+update a 
+set xsmount=null 
+from @tmpa a where gdemand>0 
+
+declare @tmpb table( 
+	gno nvarchar(1), 
+	ordbno nvarchar(MAX), 
+	noq nvarchar(30), 
+	workgno nvarchar(MAX), 
+	productno nvarchar(30), 
+	products nvarchar(90), 
+	smount nvarchar(MAX), 
+	gdemand float, 
+	stkmount float, 
+	ordcmount float, 
+	safemount float, 
+	ndemand float, 
+	xsmount float, 
+	sordb float, 
+	sordc float, 
+	ordcnos nvarchar(MAX), 
+	src2 float, 
+	sunrc2 float, 
+	sfdate nvarchar(10), 
+	ordcdate nvarchar(10) 
+) 
+
+insert into @tmpb
+select '0',b.ordbno,a.noq,a.workgno,a.productno,a.products,a.smount,a.gdemand,a.stkmount 
+,a.ordcmount,a.safemount,a.ndemand,b.xsmount,b.sordb,b.sordc,b.ordcnos,b.src2,b.sunrc2,b.sfdate,b.ordcdate
+from @tmp a,@tmpa b
+where a.productno=b.productno
+
+---------------------------------------------------------------
+
+insert into @tmpb (gno,workgno)
+select '1'gno,workgno from @tmpb group by workgno
 
 select gno,productno,products,workgno,smount,ordbno,sfdate,ordcdate
 ,case when gdemand>0 then '' else '預測日期' end sftdate
@@ -832,5 +939,5 @@ select gno,productno,products,workgno,smount,ordbno,sfdate,ordcdate
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,sordc),1)),0,30)) sordc
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,src2),1)),0,30)) src2
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,sunrc2),1)),0,30)) sunrc2
-from @tmp order by workgno,gno,ordbno,noq
+from @tmpb order by workgno,gno,productno,ordbno,noq
 ;
