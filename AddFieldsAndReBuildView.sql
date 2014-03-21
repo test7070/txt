@@ -1,4 +1,4 @@
-declare @alterTable nvarchar(max) = '' ----è³‡æ–™è¡¨åç¨±
+declare @alterTable nvarchar(max) = '' ----¸ê®Æªí¦WºÙ
 declare @addCoulmns nvarchar(max) = '' ----EX: 'post nvarchar(50),transtyle nvarchar(15)'
 declare @cmd nvarchar(max)
 declare @table_name nvarchar(max)
@@ -13,7 +13,7 @@ insert into @tmp
 	where (patindex(@alterTable+'[0-9][0-9][ 0-9]',a.TABLE_NAME) > 0)
 			 or (patindex(@alterTable+'[0-9][0-9][ 0-9]_[0-9]',a.TABLE_NAME) > 0)
 			 or (a.TABLE_NAME=@alterTable)
-------------------ä¿®æ”¹è³‡æ–™è¡¨<<Start>>--------------------------
+------------------­×§ï¸ê®Æªí<<Start>>--------------------------
 declare cursor_table cursor for
 	select tablea from @tmp order by tablea
 open cursor_table
@@ -29,8 +29,8 @@ begin
 end
 close cursor_table
 deallocate cursor_table
-------------------ä¿®æ”¹è³‡æ–™è¡¨<<End>>--------------------------
-------------------é‡å»ºã€ç›¸é—œã€è³‡æ–™è¡¨<<Start>>-------------------------
+------------------­×§ï¸ê®Æªí<<End>>--------------------------
+------------------­««Ø¡y¬ÛÃö¡z¸ê®Æªí<<Start>>-------------------------
 declare @n int
 declare @name nvarchar(max)
 declare @definition nvarchar(max)
@@ -73,4 +73,4 @@ begin
 end
 close cursor_table
 deallocate cursor_table
-------------------é‡å»ºã€ç›¸é—œã€è³‡æ–™è¡¨<<End>>-------------------------
+------------------­««Ø¡y¬ÛÃö¡z¸ê®Æªí<<End>>-------------------------
