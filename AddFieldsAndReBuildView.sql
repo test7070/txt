@@ -1,5 +1,6 @@
 declare @alterTable nvarchar(max) = '' ----資料表名稱
-declare @addCoulmns nvarchar(max) = '' ----EX: 'post nvarchar(50),transtyle nvarchar(15)'
+declare @addCoulmns nvarchar(max) = '' --修改一次只能一個--EX: 'post nvarchar(50),transtyle nvarchar(15)'
+declare @isAlter int = 0 ------0=新增 1=修改
 declare @cmd nvarchar(max)
 declare @table_name nvarchar(max)
 declare @tmp table(
@@ -15,13 +16,23 @@ insert into @tmp
 			 or (a.TABLE_NAME=@alterTable)
 ------------------修改資料表<<Start>>--------------------------
 declare cursor_table cursor for
-	select tablea from @tmp order by tablea
+	select
+		a.tablea
+	from @tmp a
+	order by tablea
 open cursor_table
 fetch next from cursor_table
 into @table_name
 while(@@FETCH_STATUS <> -1)
 begin
-	set @cmd = 'alter table ['+@table_name+'] add ' + @addCoulmns
+	if(@isAlter=0)
+	begin
+		set @cmd = 'alter table ['+@table_name+'] add ' + @addCoulmns
+	end
+	else if(@isAlter=1)
+	begin
+		set @cmd = 'alter table ['+@table_name+'] alter column ' + @addCoulmns
+	end
 	execute sp_executesql @cmd
 	print '[' + @table_name + '] -> ' + @cmd
 	fetch next from cursor_table
