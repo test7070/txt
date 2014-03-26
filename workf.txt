@@ -1,0 +1,106 @@
+﻿post:--workf
+--轉出領料單
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(50)=[2]--單據編號[2]
+declare @year nvarchar(20)=[1]--年度[1]
+declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增[3]
+-----------------------------------------------------------------------
+declare @cmd nvarchar(max)
+declare @accy nvarchar(20) --非workf的單號年度
+--領料單號
+declare @workcno nvarchar(50) = isnull((select workcno from view_workf where noa=@noa),'')
+--領料日期
+declare @datea nvarchar(20)
+
+if(@condition='0')
+begin
+	if(len(@workcno)>0)
+	begin
+		set @accy=(select accy from view_workc where noa=@workcno)
+		--刪除產生的workc
+		set @cmd="delete workc"+@accy+" where noa='"+@workcno+"'"
+		EXECUTE sp_executesql @cmd
+		set @cmd="delete workcs"+@accy+" where noa='"+@workcno+"'"
+		EXECUTE sp_executesql @cmd
+	end
+	else
+	begin
+		declare cursor_table cursor for
+		select accy,noa from view_workc where workfno=@noa
+		open cursor_table
+		fetch next from cursor_table
+		into @accy,@workcno
+		while(@@FETCH_STATUS <> -1)
+		begin
+			--刪除產生的workc
+			set @cmd="delete workc"+@accy+" where noa='"+@workcno+"'"
+			EXECUTE sp_executesql @cmd
+			set @cmd="delete workcs"+@accy+" where noa='"+@workcno+"'"
+			EXECUTE sp_executesql @cmd
+			
+			fetch next from cursor_table
+			into @accy,@workcno
+		end
+		close cursor_table
+		deallocate cursor_table
+	end
+end
+
+if(@condition='1')
+begin
+	--取得領料日期
+	set @datea=(select datea from view_workf where noa=@noa)
+	
+	--判斷是否已有領料單號
+	if(len(@workcno)=0)
+	begin
+		--產生領料單號
+		--取得當天最後一個領料單號
+		select @workcno=MAX(noa) from view_workc where noa like 'WC'+REPLACE(@datea,'/','')+'%'
+		--新的領料單號(後面號碼+1)
+		set @workcno='WC'+REPLACE(@datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@workcno,'000'),3) as int)+1 as nvarchar(10)),3)
+	end
+
+	--產生領料單
+	set @cmd="insert workc"+@year+" (noa,datea,typea,storeno,store,tggno,tgg,memo,worker,workfno)
+	select '"+@workcno+"' noa,'"+@datea+"' datea,'1' typea,a.storeoutno,a.storeout,c.tggno,c.comp
+	,'由製品入庫作業("+@noa+")轉來 '+a.memo,a.worker,'"+@noa+"'
+	from view_workf a left join view_workfs b on a.noa=b.noa 
+	left join view_work c on b.workno=c.noa
+	where a.noa='"+@noa+"' group by a.storeoutno,a.storeout,c.tggno,c.comp,a.memo,a.worker"
+	EXECUTE sp_executesql @cmd
+	
+	exec("insert workcs"+@year+" (noa,noq,productno,product,unit,mount,storeno,store,processno,process,memo,workno)
+	select '"+@workcno+"' noa,ROW_NUMBER() OVER(ORDER BY a.noa)
+	,b.productno,b.product,b.unit,round((b.mount)*(a.born/c.mount),2),d.storeoutno,d.storeout,b.processno,b.process,b.memo,b.noa
+	from view_workfs a left join view_works b on a.workno=b.noa left join view_work c on b.noa=c.noa
+	left join view_workf d on a.noa=d.noa
+	where a.noa='"+@noa+"' and b.mount-b.gmount>0")
+	
+	if(select COUNT(*) from view_workcs where noa=@workcno)=0
+	begin
+		set @cmd="delete workc"+@year+" where noa='"+@workcno+"'"
+		EXECUTE sp_executesql @cmd
+		set @workcno=''
+	end
+	else
+	begin
+		set @cmd="update workcs"+@year+" set noq=right('000'+noq,3) where noa='"+@workcno+"'"
+		EXECUTE sp_executesql @cmd
+	end
+	
+	--更新workf的workcno
+	set @accy=(select accy from view_workf where noa=@noa)
+	set @cmd="update workf"+@accy+" set workcno='"+@workcno+"' where noa='"+@noa+"'"
+	EXECUTE sp_executesql @cmd
+
+	if(LEN(@workcno)!=0)
+	begin
+		--資料寫入dno 避免下次自動產生出現問題
+		insert dno(tablea,noa,usera)
+		select 'workc',@workcno,'z001'
+	end
+	
+	select @workcno workcno
+	
+end;
