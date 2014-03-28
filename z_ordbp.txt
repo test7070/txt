@@ -1,4 +1,270 @@
-﻿z_ordbp06:--z_ordbp06
+﻿z_ordbp08:--z_ordbp08
+	declare @t_xkind nvarchar(max) = case when '#non' = '[20]' then '' else '[20]' end
+	declare @t_noa nvarchar(50) = case when '#non' = [17] then '' else [17] end
+	declare @t_kind nvarchar(30) = case when '#non' = [4] then '' else [4] end
+	declare @t_bdate nvarchar(10) = case when '#non' = [13] then '' else [13] end
+	declare @t_edate nvarchar(10) = case when '#non' = [14] then char(255) else [14] end
+	declare @t_bldate nvarchar(10) = case when '#non' = [23] then '' else [23] end
+	declare @t_eldate nvarchar(10) = case when '#non' = [24] then char(255) else [24] end
+	declare @t_btggno nvarchar(90) = case when '#non' = [9] then '' else [9] end
+	declare @t_etggno nvarchar(90) = case when '#non' = [10] then char(255) else [10] end
+	declare @t_bproductno nvarchar(90) = case when '#non' = [11] then '' else [11] end
+	declare @t_eproductno nvarchar(90) = case when '#non' = [12] then char(255) else [12] end
+	declare @t_sort nvarchar(max) = [32]
+	declare @t_ttype nvarchar(max) =[33]
+	---------------------------------------------------------------------------------------------
+	declare @tmpa table(
+		accy nvarchar(10),
+		noa nvarchar(20),
+		no3 nvarchar(10),
+		kind nvarchar(10),
+		tggno nvarchar(20),
+		productno nvarchar(20),
+		mon nvarchar(10),
+		dd nvarchar(10),
+		mount float,
+		ordcmount float
+	)
+	insert into @tmpa(accy,noa,no3,kind,tggno,productno,mon,dd,mount)
+	select a.accy,a.noa,a.no3,b.kind,b.tggno,a.productno,LEFT(a.ldate,6)
+		,case when RIGHT(a.ldate,2)<='10' then '上' when RIGHT(a.ldate,2)<='20' then '中' else '下'end
+		,a.mount
+	from view_ordbs a
+	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
+	where len(isnull(b.tggno,''))>0
+	and b.noa is not null
+	and (len(@t_kind)=0 or @t_kind=a.kind)
+	and (len(@t_noa)=0 or @t_noa=a.noa)
+	and b.odate between @t_bdate and @t_edate
+	and b.tggno between @t_btggno and @t_etggno
+	and a.productno between @t_bproductno and @t_eproductno 
+	and a.ldate between @t_bldate and @t_eldate
+	-------------------------------------------------------------------------
+	insert into @tmpa(accy,noa,no3,kind,tggno,productno,mon,dd,mount)
+	select a.accy,a.noa,a.no3,b.kind,c.tggno,a.productno,LEFT(a.ldate,6)
+		,case when RIGHT(a.ldate,2)<='10' then '上' when RIGHT(a.ldate,2)<='20' then '中' else '下'end
+		,a.mount
+	from view_ordbs a
+	left join view_ordb b on a.accy=b.accy and a.noa=b.noa
+	outer apply (select top 1 * from view_ordbt 
+		where accy=a.accy and noa=a.noa and no3=a.no3 
+		and len(ISNULL(fdate,''))>0 
+		and isnull(fprice,0)!=0 
+		and len(ISNULL(tggno,''))>0 
+		order by fdate desc) c
+	where len(isnull(b.tggno,''))=0
+	and b.noa is not null
+	and (len(@t_noa)=0 or @t_noa=a.noa)
+	and b.odate between @t_bdate and @t_edate
+	and c.tggno between @t_btggno and @t_etggno
+	and a.productno between @t_bproductno and @t_eproductno 
+	and a.ldate between @t_bldate and @t_eldate
+	---------------------------------------------------------------------------
+	if @t_ttype='ordb'
+	begin
+		--排除已採購
+		delete @tmpa
+		from @tmpa a
+		left join view_ordcs b on a.noa=b.ordbno and a.no3=b.no3
+		where b.noa is not null
+	end
+	else
+	begin
+		update @tmpa set ordcmount=b.mount
+		from @tmpa a
+		left join view_ordcs b on a.noa=b.ordbno and a.no3=b.no3
+		where b.noa is not null
+	end
+	----------------------------------------------------------------------------
+	declare @t_pageline int = 10
+	declare @n int = 0
+	declare @tmp table(
+		recno int,
+		gno nvarchar(10),
+		pno nvarchar(10),
+		pp1 nvarchar(20),
+		pp2 nvarchar(50),
+		tt1 nvarchar(20),
+		tt2 nvarchar(50),
+		mon nvarchar(10),
+		dd nvarchar(10),
+		mount float,
+		ordcmount float
+	)
+	if @t_sort='p'
+	begin
+		insert into @tmp(recno,gno,pno,pp1,pp2,mount,ordcmount)
+		select ROW_NUMBER()over(order by a.productno),'2','1',a.productno,a.product,a.mount,a.ordcmount
+		from(
+			select a.productno
+			,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end product
+			,SUM(isnull(a.mount,0)) mount,SUM(isnull(a.ordcmount,0)) ordcmount
+			from @tmpa a
+			left join bcc b on a.kind='1' and a.productno=b.noa
+			left join view_ucaucc c on a.kind='2' and a.productno=c.noa
+			left join fixucc d on a.kind='3' and a.productno=d.noa
+			left join tgg e on a.tggno=e.noa
+			group by a.productno,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end) a
+		order by a.productno
+		
+		select @n = COUNT(1) from @tmp
+		set @n = ceiling(cast(@n as float)/cast(@t_pageline-1 as float))
+		
+		while(@n>0)
+		begin
+			insert into @tmp(recno,gno,pno)
+			select (@t_pageline-1)*(@n-1)+1,'1','0'
+			set @n = @n - 1
+		end
+	end
+	if @t_sort='pm'
+	begin
+		insert into @tmp(recno,gno,pno,pp1,pp2,mon,mount,ordcmount)
+		select ROW_NUMBER()over(order by a.productno,a.mon),'4','1',a.productno,a.product,a.mon,a.mount,a.ordcmount
+		from(
+			select a.productno
+			,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end product
+			,a.mon
+			,SUM(isnull(a.mount,0)) mount,SUM(isnull(a.ordcmount,0)) ordcmount
+			from @tmpa a
+			left join bcc b on a.kind='1' and a.productno=b.noa
+			left join view_ucaucc c on a.kind='2' and a.productno=c.noa
+			left join fixucc d on a.kind='3' and a.productno=d.noa
+			left join tgg e on a.tggno=e.noa
+			group by a.productno,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end,a.mon) a
+		order by a.productno,a.mon
+		
+		select @n = COUNT(1) from @tmp
+		set @n = ceiling(cast(@n as float)/cast(@t_pageline-1 as float))
+		
+		while(@n>0)
+		begin
+			insert into @tmp(recno,gno,pno)
+			select (@t_pageline-1)*(@n-1)+1,'3','0'
+			set @n = @n - 1
+		end
+	end
+	if @t_sort='pd'
+	begin
+		insert into @tmp(recno,gno,pno,pp1,pp2,mon,dd,mount,ordcmount)
+		select ROW_NUMBER()over(order by a.productno,a.mon,a.dd),'6','1',a.productno,a.product,a.mon,a.dd,a.mount,a.ordcmount
+		from(
+			select a.productno
+			,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end product
+			,a.mon
+			,a.dd
+			,SUM(isnull(a.mount,0)) mount,SUM(isnull(a.ordcmount,0)) ordcmount
+			from @tmpa a
+			left join bcc b on a.kind='1' and a.productno=b.noa
+			left join view_ucaucc c on a.kind='2' and a.productno=c.noa
+			left join fixucc d on a.kind='3' and a.productno=d.noa
+			left join tgg e on a.tggno=e.noa
+			group by a.productno,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end,a.mon,a.dd) a
+		order by a.productno,a.mon,a.dd
+		
+		select @n = COUNT(1) from @tmp
+		set @n = ceiling(cast(@n as float)/cast(@t_pageline-1 as float))
+		
+		while(@n>0)
+		begin
+			insert into @tmp(recno,gno,pno)
+			select (@t_pageline-1)*(@n-1)+1,'5','0'
+			set @n = @n - 1
+		end
+	end
+	if @t_sort='tp'
+	begin
+		insert into @tmp(recno,gno,pno,tt1,tt2,pp1,pp2,mount,ordcmount)
+		select ROW_NUMBER()over(order by a.tggno,a.productno),'8','1',a.tggno,a.nick,a.productno,a.product,a.mount,a.ordcmount
+		from(
+			select a.tggno 
+			,e.nick
+			,a.productno
+			,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end product
+			,SUM(isnull(a.mount,0)) mount,SUM(isnull(a.ordcmount,0)) ordcmount
+			from @tmpa a
+			left join bcc b on a.kind='1' and a.productno=b.noa
+			left join view_ucaucc c on a.kind='2' and a.productno=c.noa
+			left join fixucc d on a.kind='3' and a.productno=d.noa
+			left join tgg e on a.tggno=e.noa
+			group by a.tggno,e.nick,a.productno,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end) a
+		order by a.tggno,a.productno
+		
+		select @n = COUNT(1) from @tmp
+		set @n = ceiling(cast(@n as float)/cast(@t_pageline-1 as float))
+		
+		while(@n>0)
+		begin
+			insert into @tmp(recno,gno,pno)
+			select (@t_pageline-1)*(@n-1)+1,'7','0'
+			set @n = @n - 1
+		end
+	end
+	if @t_sort='tpm'
+	begin
+		insert into @tmp(recno,gno,pno,tt1,tt2,pp1,pp2,mon,mount,ordcmount)
+		select ROW_NUMBER()over(order by a.tggno,a.productno,a.mon),'10','1',a.tggno,a.nick,a.productno,a.product,a.mon,a.mount,a.ordcmount
+		from(
+			select a.tggno 
+			,e.nick
+			,a.productno
+			,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end product
+			,a.mon
+			,SUM(isnull(a.mount,0)) mount,SUM(isnull(a.ordcmount,0)) ordcmount
+			from @tmpa a
+			left join bcc b on a.kind='1' and a.productno=b.noa
+			left join view_ucaucc c on a.kind='2' and a.productno=c.noa
+			left join fixucc d on a.kind='3' and a.productno=d.noa
+			left join tgg e on a.tggno=e.noa
+			group by a.tggno,e.nick,a.productno,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end,a.mon) a
+		order by a.tggno,a.productno,a.mon
+		
+		select @n = COUNT(1) from @tmp
+		set @n = ceiling(cast(@n as float)/cast(@t_pageline-1 as float))
+		
+		while(@n>0)
+		begin
+			insert into @tmp(recno,gno,pno)
+			select (@t_pageline-1)*(@n-1)+1,'9','0'
+			set @n = @n - 1
+		end
+	end
+	if @t_sort='tpd'
+	begin
+		insert into @tmp(recno,gno,pno,tt1,tt2,pp1,pp2,mon,dd,mount,ordcmount)
+		select ROW_NUMBER()over(order by a.tggno,a.productno,a.mon,a.dd),'12','1',a.tggno,a.nick,a.productno,a.product,a.mon,a.dd,a.mount,a.ordcmount
+		from(
+			select a.tggno 
+			,e.nick
+			,a.productno
+			,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end product
+			,a.mon
+			,a.dd
+			,SUM(isnull(a.mount,0)) mount,SUM(isnull(a.ordcmount,0)) ordcmount
+			from @tmpa a
+			left join bcc b on a.kind='1' and a.productno=b.noa
+			left join view_ucaucc c on a.kind='2' and a.productno=c.noa
+			left join fixucc d on a.kind='3' and a.productno=d.noa
+			left join tgg e on a.tggno=e.noa
+			group by a.tggno,e.nick,a.productno,case a.kind when '1' then b.product when '2' then c.product when '3' then d.namea end,a.mon,a.dd) a
+		order by a.tggno,a.productno,a.mon,a.dd
+		
+		select @n = COUNT(1) from @tmp
+		set @n = ceiling(cast(@n as float)/cast(@t_pageline-1 as float))
+		
+		while(@n>0)
+		begin
+			insert into @tmp(recno,gno,pno)
+			select (@t_pageline-1)*(@n-1)+1,'11','0'
+			set @n = @n - 1
+		end
+	end
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,case when @t_ttype='ordb' then mount else ordcmount end),1)),4,12))mm1
+	,case when @t_ttype='ordb' then '請購量' else '已採購量' end ff
+	from @tmp order by recno,pno;
+
+z_ordbp06:--z_ordbp06
 	declare @tmp table(
 		gno nvarchar(20),
 		isout int,
