@@ -289,12 +289,13 @@ z_stk:	--庫存表  --z_stk
 	declare @t_typea nvarchar(15)
 	declare @t_bstoreno nvarchar(50) 
 	declare @t_estoreno nvarchar(50)
-	
+	declare @t_groupano nvarchar(max)
 	set @t_bproductno = case when '#non'=[4] then '' else [4] end
 	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
 	set @t_typea = case when '#non'=[11] then '' else [11] end
 	set @t_bstoreno = case when '#non' = [6] then '' else [6] end
 	set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
+	set @t_groupano = case when '#non'=[13] then '' else [13] end
 
 	declare @t_stkdate nvarchar(30)
 	set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
@@ -320,8 +321,12 @@ z_stk:	--庫存表  --z_stk
 		from (
 			select s.productno,MAX(s.product) product,sum(s.mount) mount,(select top 1 unit from view_ucaucc where noa=s.productno) unit 
 			from stkucc(@t_stkdate,'','') s where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-		) a left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) b on a.productno=b.productno where a.productno!=''
+		) a
+		left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) b on a.productno=b.productno
+		outer apply(select top 1 groupano from view_ucaucc where a.productno=noa) c
+		where (a.productno!='') and (len(@t_groupano)=0 or @t_groupano=c.groupano)
 		and a.productno between @t_bproductno and @t_eproductno
+		
 	end 
 	else
 	begin
@@ -332,9 +337,11 @@ z_stk:	--庫存表  --z_stk
 			from (
 				select productno,MAX(product) product,sum(mount) mount 	from stkucc(@t_stkdate,'','') s
 				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-			) a left join ucc b on a.productno=b.noa  
+			) a
+			left join ucc b on a.productno=b.noa  
 			left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
-			where a.productno in (select noa from ucc) and b.typea=@t_typea
+			outer apply(select top 1 groupano from view_ucaucc where a.productno=noa) d
+			where (a.productno in (select noa from ucc)) and (b.typea=@t_typea) and (len(@t_groupano)=0 or @t_groupano=d.groupano)
 			and a.productno between @t_bproductno and @t_eproductno
 		end
 		else
@@ -344,11 +351,16 @@ z_stk:	--庫存表  --z_stk
 			from (
 				select productno,MAX(product) product,sum(mount) mount from stkucc(@t_stkdate,'','') s
 				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
-			) a left join (
-			select noa,product,unit,typea from uca union all select productno,productno+' 半成品',''unit,'2' typea from ucat where productno not in (select noa from uca) and productno!=''
-			) b on a.productno=b.noa left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
-			where a.productno in (select noa from uca union select productno from ucat) and b.typea=@t_typea
-			and a.productno between @t_bproductno and @t_eproductno
+			) a
+			left join (
+				select noa,product,unit,typea from uca union all select productno,productno+' 半成品',''unit,'2' typea from ucat where productno not in (select noa from uca) and productno!=''
+			) b on a.productno=b.noa 
+			left join (select * from costs[1] where mon=LEFT(@t_stkdate,6)) c on a.productno=c.productno
+			outer apply(select top 1 groupano from view_ucaucc where a.productno=noa) d
+			where (a.productno in (select noa from uca union select productno from ucat))
+				  and (b.typea=@t_typea)
+				  and (len(@t_groupano)=0 or @t_groupano=d.groupano)
+				  and (a.productno between @t_bproductno and @t_eproductno)
 		end
 	end
 
@@ -388,7 +400,7 @@ declare @enddate nvarchar(30)
 declare @bordeno nvarchar(30)
 declare @eordeno nvarchar(30)
 declare @outtype nvarchar(30)
-
+declare @t_groupano nvarchar(max)
 set @bpno = case when '#non'=[4] then '' else [4] end
 set @epno = case when '#non'=[5] then char(255) else [5] end
 
@@ -398,6 +410,7 @@ set @bordeno = case when '#non'=[9] then '' else [9] end
 set @eordeno = case when '#non'=[10] then char(255) else [10] end
 
 set @outtype=case when '#non'=[12] then '' else [12] end
+set @t_groupano = case when '#non'=[13] then '' else [13] end
 
 --儲存在製品的製令單//避免一個製令被領料或入庫兩次以上
 declare @work table(
@@ -433,23 +446,35 @@ declare @end table(
 --插入在截止日之前有領料的製令單
 if(@outtype='all')
 	insert into @work
-	select DISTINCT a.noa from view_work a left join view_workas b on a.noa=b.workno left join view_workcs c on a.noa=c.workno
-	where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
-	and (b.mount>0 or c.mount>0)
+		select
+			DISTINCT a.noa
+		from view_work a
+		left join view_workas b on a.noa=b.workno
+		left join view_workcs c on a.noa=c.workno
+		where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
+		and (b.mount>0 or c.mount>0)
 
 if(@outtype='out')
 	insert into @work
-	select DISTINCT a.noa from view_work a left join view_workas b on a.noa=b.workno left join view_workcs c on a.noa=c.workno
-	where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
-	and (b.mount>0 or c.mount>0)
-	and a.tggno!=''
+		select
+			DISTINCT a.noa
+		from view_work a
+		left join view_workas b on a.noa=b.workno
+		left join view_workcs c on a.noa=c.workno
+		where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
+		and (b.mount>0 or c.mount>0)
+		and a.tggno!=''
 
 if(@outtype='notout')
 	insert into @work
-	select DISTINCT a.noa from view_work a left join view_workas b on a.noa=b.workno left join view_workcs c on a.noa=c.workno
-	where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
-	and (b.mount>0 or c.mount>0)
-	and (a.tggno='' or a.tggno is null)
+		select
+			DISTINCT a.noa
+		from view_work a 
+		left join view_workas b on a.noa=b.workno 
+		left join view_workcs c on a.noa=c.workno
+		where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
+		and (b.mount>0 or c.mount>0)
+		and (a.tggno='' or a.tggno is null)
 
 --刪除在截止日之前已"全部"入庫的製令單
 delete @work
@@ -472,60 +497,65 @@ where b.mount=c.mount)
 
 
 insert into @end
-select '0'gno,oe.custno,ct.nick,wb.ordeno,wb.no2,wa.workno,wa.workno,ca.noa,wb.productno,wb.product product,wb.mount mount,
-(case when len(wb.tggno)=0  then 
-isnull((select SUM(b.mount) mount 
-from view_workb a left join view_workbs b on a.noa=b.noa 
-where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
-group by b.workno,b.productno),0)
-else
-isnull((select SUM(b.mount+b.inmount-b.outmount) mount 
-from view_workd a left join view_workds b on a.noa=b.noa 
-where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
-group by b.workno,b.productno),0)
-end) inmount,
-wc.productno productno2,wc.product product2,wc.mount mount2,
-(case when len(wb.tggno)=0  then 
-isnull((select SUM(b.mount) mount 
-from view_worka a left join view_workas b on a.noa=b.noa 
-where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
-group by b.workno,b.productno),0)
-else
-isnull((select SUM(b.mount) mount 
-from view_workc a left join view_workcs b on a.noa=b.noa 
-where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
-group by b.workno,b.productno),0)
-end) outmount,
-
-(case when len(wb.tggno)=0  then 
-isnull((select SUM(b.costa) mount 
-from view_workas a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
-where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
-group by a.workno,a.productno),0)
-else
-isnull((select SUM(b.costa) mount 
-from view_workcs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
-where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
-group by a.workno,a.productno),0)
-end) acost,
-isnull((select SUM(b.costb) mount 
-from view_workbs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
-where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
-group by a.workno,a.productno),0) bcost,
-isnull((select SUM(b.costc) mount 
-from view_workbs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
-where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
-group by a.workno,a.productno),0) ccost,
-isnull((select SUM(b.costd) mount 
-from view_workds a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
-where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
-group by a.workno,a.productno),0) dcost,
-0 cost
-from @work wa left join view_work wb on wa.workno=wb.noa left join view_works wc on wb.noa=wc.noa
-left join view_orde oe on wb.ordeno=oe.noa left join cust ct on oe.custno=ct.noa
-left join view_workg ca on ca.noa=wb.cuano 
-where wb.productno between @bpno and @epno and ca.noa!=''
-order by wa.workno,wb.productno,wc.productno
+	select
+		'0'gno,oe.custno,ct.nick,wb.ordeno,wb.no2,wa.workno,wa.workno,ca.noa,wb.productno,wb.product product,wb.mount mount,
+		(case when len(wb.tggno)=0  then 
+			isnull((select SUM(b.mount) mount 
+			from view_workb a
+			left join view_workbs b on a.noa=b.noa 
+			where (b.datea <=@enddate) and (b.workno=wa.workno) and (b.productno=wb.productno)
+			group by b.workno,b.productno),0)
+		else
+			isnull((select SUM(b.mount+b.inmount-b.outmount) mount 
+			from view_workd a left join view_workds b on a.noa=b.noa 
+			where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
+			group by b.workno,b.productno),0)
+		end) inmount,
+		wc.productno productno2,wc.product product2,wc.mount mount2,
+		(case when len(wb.tggno)=0  then 
+			isnull((select SUM(b.mount) mount 
+			from view_worka a left join view_workas b on a.noa=b.noa 
+			where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+			group by b.workno,b.productno),0)
+		else
+			isnull((select SUM(b.mount) mount 
+			from view_workc a left join view_workcs b on a.noa=b.noa 
+			where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+			group by b.workno,b.productno),0)
+		end) outmount,
+		(case when len(wb.tggno)=0  then 
+			isnull((select SUM(b.costa) mount 
+			from view_workas a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+			where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+			group by a.workno,a.productno),0)
+		else
+			isnull((select SUM(b.costa) mount 
+			from view_workcs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+			where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+			group by a.workno,a.productno),0)
+		end) acost,
+		isnull((select SUM(b.costb) mount 
+			from view_workbs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+			where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+			group by a.workno,a.productno),0) bcost,
+		isnull((select SUM(b.costc) mount 
+			from view_workbs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+			where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+			group by a.workno,a.productno),0) ccost,
+		isnull((select SUM(b.costd) mount 
+			from view_workds a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+			where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+			group by a.workno,a.productno),0) dcost,
+		0 cost
+	from @work wa
+	left join view_work wb on wa.workno=wb.noa
+	left join view_works wc on wb.noa=wc.noa
+	left join view_orde oe on wb.ordeno=oe.noa
+	left join cust ct on oe.custno=ct.noa
+	left join view_workg ca on ca.noa=wb.cuano 
+	outer apply(select top 1 groupano from view_ucaucc where wb.productno=noa) c
+	where (wb.productno between @bpno and @epno) and (ca.noa!='') and (len(@t_groupano)=0 or isnull(c.groupano,'')=@t_groupano)
+	order by wa.workno,wb.productno,wc.productno
 
 --from @work wa left join view_work wb on wa.workno=wb.noa left join view_works wc on wb.noa=wc.noa
 --left join view_orde oe on wb.ordeno=oe.noa left join cust ct on oe.custno=ct.noa
@@ -571,11 +601,12 @@ declare @t_bstoreno nvarchar(50)
 declare @t_estoreno nvarchar(50)
 declare @t_bpno nvarchar(50) 
 declare @t_epno nvarchar(50)  
-
+declare @t_groupano nvarchar(max)
 set @t_bstoreno = case when '#non' = [6] then '' else [6] end
 set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
 set @t_bpno = case when '#non' = [4] then '' else [4] end
 set @t_epno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_groupano = case when '#non'=[13] then '' else [13] end
 
 declare @t_stkdate nvarchar(30) --今天日期
 set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
@@ -592,16 +623,22 @@ declare @tmp table(
 ) 
 
 insert into @tmp
-select '0',a.storeno,a.store,a.productno,a.product,(select top 1 unit from view_ucaucc where noa=a.productno)
-,a.mount from stkucc(@t_stkdate,'','') a
-where ( a.storeno between @t_bstoreno and @t_estoreno) and ( a.productno between @t_bpno and @t_epno)
-and a.productno !='' and a.mount !=0
+	select
+		'0',a.storeno,a.store,a.productno,a.product,(select top 1 unit from view_ucaucc where noa=a.productno)
+		,a.mount
+	from stkucc(@t_stkdate,'','') a
+	outer apply(select top 1 groupano from view_ucaucc where noa=a.productno) b
+	where (a.storeno between @t_bstoreno and @t_estoreno)
+	and (a.productno between @t_bpno and @t_epno)
+	and (a.productno !='' and a.mount !=0)
+	and (len(@t_groupano)=0 or b.groupano=@t_groupano)
 
 insert into @tmp(storeno,gno)
-select storeno,'1' from @tmp group by storeno
+	select storeno,'1' from @tmp group by storeno
 
-select gno,storeno,stores,pno,product,unit
-,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
+select
+	gno,storeno,stores,pno,product,unit
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
 from @tmp
 order by storeno,gno,pno
 ;
