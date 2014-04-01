@@ -1,5 +1,5 @@
 declare @alterTable nvarchar(max) = '' ----資料表名稱
-declare @addCoulmns nvarchar(max) = '' --修改一次只能一個--EX: 'post nvarchar(50),transtyle nvarchar(15)'
+declare @addCoulmns nvarchar(max) = '' --修改一次只能一個(欄位名稱與資料型態以1個空白分隔)--EX: 'post nvarchar(50),transtyle nvarchar(15)'
 declare @isAlter int = 0 ------0=新增 1=修改
 declare @cmd nvarchar(max)
 declare @table_name nvarchar(max)
@@ -31,6 +31,19 @@ begin
 	end
 	else if(@isAlter=1)
 	begin
+		declare @ext nvarchar(max) = rtrim(ltrim(substring(@addCoulmns,charindex(' ',@addCoulmns)+1,len(@addCoulmns))))
+		declare @field_name nvarchar(max) =  rtrim(ltrim(substring(@addCoulmns,0,charindex(' ',@addCoulmns))))
+		if(len(@ext)=0 or len(@field_name)=0)
+		begin
+			print '修改欄位填寫有誤!!'
+			return
+		end
+		if(lower(@ext)='bit')
+		begin
+			set @cmd = 'update ['+@table_name+'] set ['+@field_name+']=0'
+			print '[' + @table_name + '] -> ' + @cmd
+			execute sp_executesql @cmd
+		end
 		set @cmd = 'alter table ['+@table_name+'] alter column ' + @addCoulmns
 	end
 	execute sp_executesql @cmd
