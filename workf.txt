@@ -104,3 +104,106 @@ begin
 	select @workcno workcno
 	
 end;
+--*******************************************************************************************************
+ins:--workf_ins
+declare @year nvarchar(20)=[1]--年度[1]
+declare @worker nvarchar(20)=[2]--操作者[2]
+declare @workno nvarchar(MAX)=[3]--製令[3]
+declare @born nvarchar(MAX)=[4]--本次送驗量[4]
+declare @storeno nvarchar(MAX)=[5]--倉庫[5]
+
+SET QUOTED_IDENTIFIER OFF
+
+declare @cmd nvarchar(max) 
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+declare @now_date nvarchar(10)--現在日期
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+
+declare @now_time nvarchar(10)--現在時間
+set @now_time=CONVERT (VARCHAR(5), GETDATE(),114 )
+
+declare @t_workno nvarchar(MAX)=@workno
+declare @t_born nvarchar(MAX)=@born
+declare @t_storeno nvarchar(MAX)=@storeno
+
+create table #tmp(
+	workno nvarchar(100),
+	born nvarchar(100),
+	storeno nvarchar(100)
+)
+
+while(CHARINDEX('&&',@t_workno)>0)
+begin
+	insert #tmp
+	select SUBSTRING(@t_workno,0,CHARINDEX('&&',@t_workno))
+	,SUBSTRING(@t_born,0,CHARINDEX('&&',@t_born))
+	,SUBSTRING(@t_storeno,0,CHARINDEX('&&',@t_storeno))
+	
+	set @t_workno=SUBSTRING(@t_workno,CHARINDEX('&&',@t_workno)+2,LEN(@t_workno))
+	set @t_born=SUBSTRING(@t_born,CHARINDEX('&&',@t_born)+2,LEN(@t_born))
+	set @t_storeno=SUBSTRING(@t_storeno,CHARINDEX('&&',@t_storeno)+2,LEN(@t_storeno))
+end
+insert #tmp
+select @t_workno,@t_born,@t_storeno
+
+declare @workfno nvarchar(50)
+
+declare cursor_table cursor for
+select storeno from #tmp group by storeno
+open cursor_table
+fetch next from cursor_table
+into @t_storeno
+while(@@FETCH_STATUS <> -1)
+begin
+	
+	--取得當天最後一個領料單號
+	select @workfno=MAX(noa) from view_workf where noa like 'WF'+REPLACE(@now_date,'/','')+'%'
+	--新的領料單號(後面號碼+1)
+	set @workfno='WF'+REPLACE(@now_date,'/','')+right('000'+cast(cast(RIGHT(isnull(@workfno,'000'),3) as int)+1 as nvarchar(10)),3)
+	
+	exec("
+	insert workf"+@year+" (noa,datea,timea,tggno,tgg,storeno,store,mon,taxtype,tax,money,total,worker)
+	select '"+@workfno+"' noa,'"+@now_date+"' datea,'"+@now_time+"' timea
+	,(select top 1 b.tggno from #tmp a left join view_work b on a.workno=b.noa order by a.workno)tggno
+	,(select top 1 b.comp from #tmp a left join view_work b on a.workno=b.noa order by a.workno)tgg
+	,'"+@t_storeno+"' storeno,(select store from store where noa='"+@t_storeno+"')store
+	,left('"+@now_date+"',6) mon,'' taxtype,0 tax,0 money,0 total,'"+@worker+"' worker
+	")
+	
+	exec("
+	insert workfs"+@year+" (noa,noq,datea,tggno,productno,product,unit,born,storeno,store
+	,bwmount,price,total,inmount,outmount,tmount,mount,bkmount,wmount,workno)
+	select '"+@workfno+"' noa,Rank() OVER (ORDER BY workno) noq,'"+@now_date+"' datea,b.tggno
+	,b.productno,b.product,b.unit,cast(a.born as float)born,a.storeno,c.store
+	,0 bwmount,b.price,cast(a.born as float)*b.price total,0 inmount,0 outmount,0 tmount,0 mount
+	,0 bkmount,0 wmount,a.workno
+	from #tmp a left join view_work b on a.workno=b.noa left join store c on a.storeno=c.noa
+	where a.storeno='"+@t_storeno+"' order by workno
+	")
+	
+	exec("update workf"+@year+"
+	set money=(select sum(total) from workfs"+@year+" where noa='"+@workfno+"')
+	,total=(select sum(total) from workfs"+@year+" where noa='"+@workfno+"')
+	where noa='"+@workfno+"'")
+	
+	exec("update workfs"+@year+" set noq=RIGHT('000'+noq,3)where noa='"+@workfno+"'")
+
+	fetch next from cursor_table
+	into @t_storeno
+end
+close cursor_table
+deallocate cursor_table
+
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
