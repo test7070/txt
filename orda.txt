@@ -1,0 +1,339 @@
+sign:--ref. z_workg2ordb4
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bnoa nvarchar(100)
+declare @t_enoa nvarchar(100)
+declare @t_workgall nvarchar(100)
+declare @t_stkdate nvarchar(30)
+declare @t_enddate nvarchar(100)
+
+set @t_bdate = case when '#non' =  [2] then '' else  [2] end
+set @t_edate = case when '#non' =  [3] then char(255) else  [3] end
+set @t_bnoa = case when '#non' =  [4] then '' else  [4] end
+set @t_enoa = case when '#non' =  [5] then char(255) else  [5] end
+set @t_workgall = case when '#non' =  [8] then '0' else  [8] end
+set @t_enddate = case when '#non' =  [9] then '' else  [9] end
+
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+--*********************************************************************************************
+declare @cmd nvarchar(max) 
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	spec nvarchar(MAX),
+	gdemand float,
+	workmount float,
+	stkmount float,
+	ordcmount float,
+	safemount float,
+	ndemand float,
+	smount float,
+	sordb float,
+	sordc float,
+	src2 float,
+	sunrc2 float,
+	sfdate nvarchar(10),
+	ldate nvarchar(10),
+)
+
+if(@t_workgall='1')
+begin
+	insert into #tmp (gno,productno,products,spec,gdemand,workmount,stkmount,ordcmount,safemount,ndemand,ldate)
+	select '0',productno,(select top 1 product from view_ucaucc where noa=tmp.productno)products
+	,(select top 1 spec from view_ucaucc where noa=tmp.productno) spec
+	,sum(gdemand)gdemand 
+	,sum(workmount)workmount 
+	,isnull((select sum(mount) from stkucc(@t_stkdate,'','') where productno=tmp.productno),0)stkmount
+	,sum(ordcmount)ordcmount
+	,isnull((select safemount from ucc where noa=tmp.productno),0) safemount
+	,0 ndemand ,MAX(ldate)
+	from ( 
+		--生產計劃毛需求
+		select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 workmount,0 ordcmount ,MAX(w.cuadate) ldate
+		from view_work w left join view_works ws on w.noa=ws.noa 
+		left join view_workg g on w.cuano=g.noa
+		where ws.productno in (select noa from ucc where typea='4' or typea='5')  and w.enda!='1' 
+		and isnull(g.ordbno,'')='' and isnull(g.ordano,'')=''
+		group by ws.productno 
+		union all 
+		--採購未入
+		select ocs.productno,0 gdemand,0 workmount,sum(ocs.mount)ordcmount,'' ldate from view_ordcs ocs 
+		where ocs.enda!='1' and ocs.productno in (select noa from ucc where typea='4' or typea='5')  
+		and charindex(ocs.ordbno,(select ','+ordbno from view_workg where isnull(ordbno,'')!='' FOR XML PATH('')))>0
+		group by ocs.productno 
+		union all
+		--其他毛需求(排除這次排產製令與結案的需求)
+		select ws.productno,0 gdemand,sum(ws.mount-ws.gmount) workmount,0 ordcmount ,MAX(w.cuadate) ldate 
+		from view_work w left join view_works ws on w.noa=ws.noa
+		where ws.productno in (select noa from ucc where typea='4' or typea='5')  
+		and w.enda!='1' 
+		and w.uindate<=@t_enddate 
+		and w.cuano not in (select noa from view_workg where isnull(ordbno,'')='' and isnull(ordano,'')='')
+		group by ws.productno 
+	)tmp group by productno
+end
+else
+begin
+	insert into #tmp(gno,productno,products,spec,gdemand,workmount,stkmount,ordcmount,safemount,ndemand,ldate)
+	select '0',productno,(select top 1 product from view_ucaucc where noa=tmp.productno)products 
+	,(select top 1 spec from view_ucaucc where noa=tmp.productno) spec
+	,sum(gdemand)gdemand
+	,sum(workmount)workmount
+	,isnull((select sum(mount) from stkucc(@t_stkdate,'','') where productno=tmp.productno),0)stkmount
+	,sum(ordcmount)ordcmount
+	,isnull((select safemount from ucc where noa=tmp.productno),0) safemount
+	,0 ndemand ,MAX(ldate)
+	from ( 
+		--生產計劃毛需求
+		select ws.productno,sum(ws.mount-ws.gmount) gdemand,0 workmount,0 ordcmount,MAX(w.cuadate) ldate 
+		from view_work w left join view_works ws on w.noa=ws.noa 
+		left join view_workg g on w.cuano=g.noa
+		where ws.productno in (select noa from ucc where typea='4' or typea='5') and w.enda!='1' 
+		and g.noa between @t_bnoa and @t_enoa and isnull(g.ordbno,'')='' and isnull(g.ordano,'')=''
+		group by ws.productno 
+		union all 
+		--採購未入
+		select ocs.productno,0 gdemand,0 workmount,sum(ocs.mount)ordcmount,'' ldate from view_ordcs ocs 
+		where ocs.enda!='1' and ocs.productno in (select noa from ucc where typea='4' or typea='5')
+		and charindex(ocs.ordbno,(select ','+ordbno from view_workg where noa between @t_bnoa and @t_enoa and isnull(ordbno,'')!='' FOR XML PATH('')))>0
+		group by ocs.productno 
+		union all
+		--其他毛需求(排除這次排產製令與結案的需求)
+		select ws.productno,0 gdemand,sum(ws.mount-ws.gmount) workmount,0 ordcmount ,MAX(w.cuadate) ldate 
+		from view_work w left join view_works ws on w.noa=ws.noa
+		where ws.productno in (select noa from ucc where typea='4' or typea='5')  
+		and w.enda!='1' 
+		and w.uindate<=@t_enddate 
+		and w.cuano not in (select noa from view_workg where noa between @t_bnoa and @t_enoa and isnull(ordbno,'')='' and isnull(ordano,'')='')
+		group by ws.productno
+	)tmp group by productno
+end
+
+delete #tmp where isnull(gdemand,0)+isnull(smount,0)=0 
+update #tmp set ndemand = (gdemand+workmount-ordcmount-stkmount+safemount) 
+update #tmp set ndemand=0 where ndemand<0
+
+declare @tmpa table(
+	workgno nvarchar(90),
+	productno nvarchar(30),
+	smount float,
+	sfdate nvarchar(10),
+	ordbno nvarchar(90),
+	sordb float,
+	ordcno nvarchar(90),
+	sordc float,
+	src2 float,
+	sunrc2 float,
+	ldate nvarchar(10)
+)
+
+if(@t_workgall='1')
+begin
+	insert into @tmpa(workgno,productno,smount,sfdate,ldate)
+	select g.noa,ws.productno,ws.mount-ws.gmount smount
+	,(select MAX(datea) from saleforecasts 
+	where productno=(select productno from view_workgs where noa=w.cuano and noq=w.cuanoq)
+	and datea between g.sfbdate and g.sfedate)
+	,w.cuadate
+	from view_workh w left join view_workhs ws on w.noa=ws.noa 
+	left join view_workg g on w.cuano=g.noa
+	where g.stype='3' and 
+	ws.productno in (select noa from ucc where typea='4' or typea='5') 
+	and w.enda!='1' and isnull(g.ordbno,'')='' and isnull(g.ordano,'')=''
+end
+else
+begin
+	insert into @tmpa(workgno,productno,smount,sfdate,ldate)
+	select g.noa,ws.productno,ws.mount-ws.gmount smount
+	,(select MAX(datea) from saleforecasts 
+	where productno=(select productno from view_workgs where noa=w.cuano and noq=w.cuanoq)
+	and datea between g.sfbdate and g.sfedate)
+	,w.cuadate
+	from view_workh w left join view_workhs ws on w.noa=ws.noa 
+	left join view_workg g on w.cuano=g.noa
+	where g.stype='3' and g.noa between @t_bnoa and @t_enoa and
+	ws.productno in (select noa from ucc where typea='4' or typea='5') 
+	and w.enda!='1' and isnull(g.ordbno,'')='' and isnull(g.ordano,'')=''
+end
+
+declare @xworkgno nvarchar(max) 
+
+declare cursor_table cursor for 
+select workgno from @tmpa group by workgno
+open cursor_table 
+fetch next from cursor_table 
+into @xworkgno
+while(@@FETCH_STATUS <> -1) 
+begin
+
+	insert into @tmpa(ordbno,productno,sordb)
+	select a.noa,b.productno,b.mount
+	from view_ordb a left join view_ordbs b on a.noa=b.noa
+	where charindex(@xworkgno,a.workgno)>0 
+	and a.workgno!=''
+
+	fetch next from cursor_table 
+	into @xworkgno
+	
+end 
+close cursor_table 
+deallocate cursor_table 
+
+
+declare @xordbno nvarchar(max) 
+
+declare cursor_table cursor for 
+select ordbno from @tmpa group by ordbno
+open cursor_table 
+fetch next from cursor_table 
+into @xordbno
+while(@@FETCH_STATUS <> -1) 
+begin
+
+	insert into @tmpa(ordcno,productno,sordc)
+	select a.noa,b.productno,b.mount
+	from view_ordc a left join view_ordcs b on a.noa=b.noa
+	where charindex(@xordbno,b.ordbno)>0
+	and b.ordbno!=''
+
+	fetch next from cursor_table 
+	into @xordbno
+	
+end 
+close cursor_table 
+deallocate cursor_table 
+
+declare @ordcno nvarchar(max) 
+
+declare cursor_table cursor for 
+select ordcno from @tmpa group by ordcno
+open cursor_table 
+fetch next from cursor_table 
+into @ordcno
+while(@@FETCH_STATUS <> -1) 
+begin
+
+	insert into @tmpa(productno,src2)
+	select b.productno,b.mount
+	from view_rc2 a left join view_rc2s b on a.noa=b.noa
+	where charindex(@ordcno,b.ordeno)>0
+	and b.ordeno!=''
+
+	fetch next from cursor_table 
+	into @ordcno
+	
+end 
+close cursor_table 
+deallocate cursor_table 
+
+update a
+set smount=(select SUM(smount) from @tmpa where productno=a.productno)
+,sordb=(select SUM(sordb) from @tmpa where productno=a.productno)
+,sordc=(select SUM(sordc) from @tmpa where productno=a.productno)
+,src2=(select SUM(src2) from @tmpa where productno=a.productno)
+,sfdate=(select MAX(sfdate) from @tmpa where productno=a.productno)
+,ldate=case when ldate>isnull((select MAX(ldate) from @tmpa where productno=a.productno),'000/00/00')
+then ldate else (select MAX(ldate) from @tmpa where productno=a.productno) end
+from #tmp a
+
+insert #tmp (gno,productno,products,spec,smount,sordb,sordc,src2,sfdate,ldate)
+select '0',productno,(select top 1 product from view_ucaucc where noa=a.productno)products 
+,(select top 1 spec from view_ucaucc where noa=a.productno)spec
+,SUM(smount),SUM(sordb),SUM(sordc),SUM(src2),MAX(sfdate),MAX(ldate) from @tmpa a 
+where productno not in (select productno from #tmp) group by productno
+
+update #tmp
+set sunrc2=smount-src2
+
+--update a 
+--set smount=null
+--from #tmp a where gdemand>0
+
+--select gno,productno,products,sfdate,spec
+--,case when isnull((select sum(smount) from #tmp),0)=0 then '' else '預測日期' end sftdate 
+--,case when isnull((select sum(smount) from #tmp),0)=0 then '' else '預測需求' end sfname 
+
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gdemand),1)),0,30)) gdemand
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,workmount),1)),0,30)) workmount
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordcmount),1)),0,30)) ordcmount
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,safemount),1)),0,30)) safemount
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ndemand),1)),0,30)) ndemand
+
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),0,30)) smount
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,isnull(sordb,0)),1)),0,30)) sordb
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,isnull(sordc,0)),1)),0,30)) sordc
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,isnull(src2,0)),1)),0,30)) src2
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,isnull(sunrc2,0)),1)),0,30)) sunrc2
+--from #tmp a where isnull(ndemand,0)+isnull(smount,0)>0
+
+
+--*************************************************************************************
+--寫入orda 簽核用
+declare @sssno nvarchar(max)=[10] --送簽核人員編號
+declare @ordano nvarchar(max)=[11] --目前orda代號
+declare @ordaum nvarchar(max) --目前orda序號
+declare @ordanos nvarchar(MAX) --全部orda單編號
+--要寫入的workg單號
+declare @workgnos nvarchar(MAX)
+
+if(@t_workgall='1') 
+set @workgnos=(SELECT STUFF((select ','+noa from view_workg where isnull(ordbno,'')='' and isnull(ordano,'')='' FOR XML PATH('')),1,1,'')) 
+else
+set @workgnos=(SELECT STUFF((select ','+noa from view_workg where noa between @t_bnoa and @t_enoa and isnull(ordbno,'')='' and isnull(ordano,'')='' FOR XML PATH('')),1,1,'')) 
+
+set @cmd="select @ordaum= isnull(right((select top 1 noa from orda where CHARINDEX('"+@ordano+"'+ REPLACE('"+@t_stkdate+"','/',''),noa)>0 order by noa desc),3),'0')"
+EXEC SP_EXECUTESQL @cmd, N'@ordaum nvarchar(max) OUTPUT', @ordaum OUTPUT
+
+set @ordanos=@ordano+ REPLACE(@t_stkdate,'/','')+right(('000'+cast(cast(@ordaum as int)+1 as nvarchar(10))),3)
+
+insert orda (noa,datea,workgno,apv,worker,memo)
+select @ordanos,@t_stkdate,@workgnos,'N',(select namea from nhpe where noa=@sssno),''
+
+insert ordas (noa,noq,datea,productno,product,unit,spec,gmount,wmount,stkmount,schmount,safemount,netmount,fdate,fmount,mount,memo,ldate)
+select @ordanos,right('000'+cast(ROW_NUMBER() OVER (ORDER BY a.productno DESC) as nvarchar(10)),3)
+,@t_stkdate,productno,products,(select top 1 unit from view_ucaucc where noa=a.productno) unit
+,spec,gdemand,workmount,stkmount,ordcmount,safemount,ndemand,sfdate,isnull(smount,0),isnull(ndemand,0)+isnull(smount,0),'',ldate
+from #tmp a where isnull(ndemand,0)+isnull(smount,0)>0
+
+declare @accy nvarchar(MAX)
+declare @workgno nvarchar(MAX)
+
+if(len(@ordanos)>0)
+begin
+	declare cursor_table cursor for 
+	select accy,noa from view_workg where charindex(noa,@workgnos)>0 
+	open cursor_table 
+	fetch next from cursor_table 
+	into @accy,@workgno
+	while(@@FETCH_STATUS <> -1) 
+	begin
+		
+		EXEC("update workg"+@accy+"
+		set ordano='"+@ordanos+"'
+		where noa='"+@workgno+"'")
+			
+		fetch next from cursor_table 
+		into @accy,@workgno
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+end
+
+select @ordanos ordano
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
