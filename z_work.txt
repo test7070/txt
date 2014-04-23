@@ -1660,8 +1660,17 @@ begin
 end;
 ----------------------------------------------------------------------------------------------------------------*
 z_work18:--z_work18
-declare @t_bdate nvarchar(10) = '103/04/01'
-declare @t_edate nvarchar(10) = '103/12/31'
+declare @now_date nvarchar(15)
+set @now_date=CONVERT (nvarchar(15), cast(getdate() as datetime),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(90)
+declare @t_estationno nvarchar(90)
+set @t_bdate = case when '#non' = [22] then @now_date else [22] end
+set @t_edate = case when '#non' = [23] then @t_bdate else [23] end
+set @t_bstationno = case when '#non' = [24] then '' else [24] end
+set @t_estationno = case when '#non' = [25] then char(255) else [25] end
 declare @t_issaturday int = 1
 declare @dateList table(
 	idno int identity(1,1),
@@ -1695,7 +1704,8 @@ insert into @tmp
 		'0' gno,a.stationno,b.station,isnull(b.gen,0),a.cuadate,a.uindate,a.noa,a.mount
 	from view_work a
 	left join station b on (a.stationno=b.noa)
-	where (isnull(a.cuadate,'')!='' and isnull(a.uindate,'')!='' ) and (isnull(b.noa,'') != '')
+	where (isnull(a.cuadate,'')!='' and isnull(a.uindate,'')!='' ) and (isnull(b.noa,'') != '') and
+		  (a.stationno between @t_bstationno and @t_estationno)
 	order by a.stationno,a.cuadate,a.uindate
 declare @t_adbdate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_bdate,3))+1911)+'/'+SUBSTRING(@t_bdate,5,2)+'/'+RIGHT(@t_bdate,2)
 declare @t_adedate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_edate,3))+1911)+'/'+SUBSTRING(@t_edate,5,2)+'/'+RIGHT(@t_edate,2)
@@ -1707,7 +1717,6 @@ begin
 		if(@t_issaturday='1' or (@t_issaturday!='1' and ((datepart (DW,@CountAdDate)) !=7)))
 		begin
 			-------將日期轉為民國年
-			declare @now_date nvarchar(15)
 			set @now_date=CONVERT (nvarchar(15), cast(@CountAdDate as datetime),12 )+0890000
 			set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
 			insert into @dateList(datea) values(@now_date)
@@ -1722,7 +1731,9 @@ end
 insert into @result(gno,stationno,station,gen,usegen,datea)
 	select
 		'0' gno,a.noa,a.station,a.gen,a.gen,b.datea
-	from station a,@dateList b order by a.noa,b.datea
+	from station a,@dateList b
+	where (a.noa between @t_bstationno and @t_estationno)
+	order by a.noa,b.datea
 declare @datea nvarchar(10)
 declare @datea2 nvarchar(10)
 declare @stationno nvarchar(max)
@@ -1751,7 +1762,7 @@ begin
 		select
 			a.idno,a.stationno,a.station,a.datea,a.usegen,isnull(a.workno,'')
 		from @result a
-		where  /*(a.datea between @cuadate and @uindate)*/(a.datea >= @cuadate) and (@stationno=a.stationno) and (a.usegen>0)
+		where  (a.datea between @cuadate and @uindate)/*(a.datea >= @cuadate)*/ and (@stationno=a.stationno) and (a.usegen>0)
 		order by a.datea,a.workno
 	open cursor_table2
 	fetch next from cursor_table2
@@ -1786,6 +1797,7 @@ begin
 			begin
 				insert into @result
 					select '0' gno,@stationno2,@station2,@gen,(@gen2-@mount),@datea2,@cuadate,@uindate,@workno,@mount
+				set @mount = 0
 				break
 			end
 			else if(@gen2 > @mount and @gen2>0)
@@ -1820,6 +1832,11 @@ insert into @result(gno,stationno,station,gen,datea)
 	from @result
 	group by stationno,station,gen
 select
-	a.gno,a.idno recno,a.stationno,a.station stations,a.gen gena,round(a.usegen,4) usegen,a.datea,a.cuadate,a.uindate,a.workno,round(a.mount,4) mount
+	a.gno,a.idno,a.stationno,a.station stations,
+	a.gen gena,round(a.usegen,4) usegen,a.datea,a.cuadate,
+	a.uindate,a.workno,round(a.mount,4) mount,
+	ROW_NUMBER()over(partition by a.stationno order by a.stationno,a.gno,a.datea,a.workno) recno,
+	'work?left(noa,'+cast(len(b.noa) as nvarchar)+')=$workno?'+b.accy qhref
 from @result a
+outer apply(select top 1 accy,noa from view_work where noa=a.workno) b
 order by a.stationno,a.gno,a.datea,a.workno;
