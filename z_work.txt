@@ -1658,3 +1658,168 @@ else
 begin
 	select * from @tmp
 end;
+----------------------------------------------------------------------------------------------------------------*
+z_work18:--z_work18
+declare @t_bdate nvarchar(10) = '103/04/01'
+declare @t_edate nvarchar(10) = '103/12/31'
+declare @t_issaturday int = 1
+declare @dateList table(
+	idno int identity(1,1),
+	datea nvarchar(10)
+)
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	gen float,
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	mount float
+)
+declare @result table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	gen float,
+	usegen float,
+	datea nvarchar(10),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	mount float
+)
+insert into @tmp
+	select
+		'0' gno,a.stationno,b.station,isnull(b.gen,0),a.cuadate,a.uindate,a.noa,a.mount
+	from view_work a
+	left join station b on (a.stationno=b.noa)
+	where (isnull(a.cuadate,'')!='' and isnull(a.uindate,'')!='' ) and (isnull(b.noa,'') != '')
+	order by a.stationno,a.cuadate,a.uindate
+declare @t_adbdate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_bdate,3))+1911)+'/'+SUBSTRING(@t_bdate,5,2)+'/'+RIGHT(@t_bdate,2)
+declare @t_adedate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_edate,3))+1911)+'/'+SUBSTRING(@t_edate,5,2)+'/'+RIGHT(@t_edate,2)
+declare @CountAdDate nvarchar(15) = @t_adbdate
+while(1=1)
+begin
+	if((isdate(@CountAdDate)=1) and (datepart(weekday,@CountAdDate) != 1))
+	begin
+		if(@t_issaturday='1' or (@t_issaturday!='1' and ((datepart (DW,@CountAdDate)) !=7)))
+		begin
+			-------將日期轉為民國年
+			declare @now_date nvarchar(15)
+			set @now_date=CONVERT (nvarchar(15), cast(@CountAdDate as datetime),12 )+0890000
+			set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+			insert into @dateList(datea) values(@now_date)
+		end
+	end
+	set @CountAdDate = convert(nvarchar,dateadd(day,1,@CountAdDate),111)
+	if(@CountAdDate > @t_adedate)
+	begin
+		break
+	end
+end
+insert into @result(gno,stationno,station,gen,usegen,datea)
+	select
+		'0' gno,a.noa,a.station,a.gen,a.gen,b.datea
+	from station a,@dateList b order by a.noa,b.datea
+declare @datea nvarchar(10)
+declare @datea2 nvarchar(10)
+declare @stationno nvarchar(max)
+declare @station nvarchar(max)
+declare @stationno2 nvarchar(max)
+declare @station2 nvarchar(max)
+declare @gen float
+declare @gen2 float
+declare @cuadate nvarchar(10)
+declare @uindate nvarchar(10)
+declare @workno nvarchar(max)
+declare @workno2 nvarchar(max)
+declare @mount float
+declare @idno2 int
+declare cursor_table cursor for
+	select
+		a.stationno,a.station,a.gen,a.cuadate,a.uindate,a.workno,a.mount
+	from @tmp a
+	order by a.stationno,a.workno
+open cursor_table
+fetch next from cursor_table
+into @stationno,@station,@gen,@cuadate,@uindate,@workno,@mount
+while(@@FETCH_STATUS <> -1)
+begin
+	declare cursor_table2 cursor for
+		select
+			a.idno,a.stationno,a.station,a.datea,a.usegen,isnull(a.workno,'')
+		from @result a
+		where  /*(a.datea between @cuadate and @uindate)*/(a.datea >= @cuadate) and (@stationno=a.stationno) and (a.usegen>0)
+		order by a.datea,a.workno
+	open cursor_table2
+	fetch next from cursor_table2
+	into @idno2,@stationno2,@station2,@datea2,@gen2,@workno2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@workno2='')
+		begin
+			if(@gen2 = @mount)
+			begin
+				update @result set usegen=@gen2-@mount,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
+				set @mount = 0
+				break
+			end
+			else if(@gen2 > @mount)
+			begin
+				update @result set usegen=@gen2-@mount,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
+				set @mount = 0
+				break
+			end
+			else if((@gen2 < @mount))
+			begin
+				update @result set usegen=0,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
+				set @mount = @mount-@gen2
+				continue
+			end
+		end
+		else
+		begin
+			set @gen2 = isnull((select min(usegen) from @result where (stationno=@stationno2) and (datea=@datea2)),0)
+			if(@gen2 = @mount and @gen2>0)
+			begin
+				insert into @result
+					select '0' gno,@stationno2,@station2,@gen,(@gen2-@mount),@datea2,@cuadate,@uindate,@workno,@mount
+				break
+			end
+			else if(@gen2 > @mount and @gen2>0)
+			begin
+				insert into @result
+					select '0' gno,@stationno2,@station2,@gen,(@gen2-@mount),@datea2,@cuadate,@uindate,@workno,@mount
+				set @mount = 0
+				break
+			end
+			else if((@gen2 < @mount) and @gen2>0)
+			begin
+				insert into @result
+					select '0' gno,@stationno2,@station2,@gen,0,@datea2,@cuadate,@uindate,@workno,@mount
+				set @mount = @mount-@gen2
+				continue
+			end
+
+		end
+		fetch next from cursor_table2
+		into @idno2,@stationno2,@station2,@datea2,@gen2,@workno2
+	end
+	close cursor_table2
+	deallocate cursor_table2
+	fetch next from cursor_table
+	into @stationno,@station,@gen,@cuadate,@uindate,@workno,@mount
+end
+close cursor_table
+deallocate cursor_table
+insert into @result(gno,stationno,station,gen,datea)
+	select
+		'1' gno,stationno,station,gen,'' datea
+	from @result
+	group by stationno,station,gen
+select
+	a.gno,a.idno recno,a.stationno,a.station stations,a.gen gena,round(a.usegen,4) usegen,a.datea,a.cuadate,a.uindate,a.workno,round(a.mount,4) mount
+from @result a
+order by a.stationno,a.gno,a.datea,a.workno;
