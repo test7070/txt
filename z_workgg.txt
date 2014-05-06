@@ -21,7 +21,8 @@ insert into @tmp
 	from view_cugu a
 	left join station b on (a.stationno=b.noa)
 	where (a.datea between @t_bdate and @t_edate) and
-			 (a.stationno between @t_bstationno and @t_estationno)
+		  (a.stationno between @t_bstationno and @t_estationno) and
+		  (isnull(a.workno,'') != '')
 	group by a.stationno,b.station,a.datea,b.gen
 select
 	a.gno,a.stationno,a.station,a.datea,a.gen,a.mount
@@ -362,110 +363,39 @@ declare @t_bstationno nvarchar(max)
 declare @t_estationno nvarchar(max)
 declare @t_bproductno nvarchar(max)
 declare @t_eproductno nvarchar(max)
-declare @now_date nvarchar(15)
-set @now_date=CONVERT (nvarchar(15), cast(GETDATE() as datetime),12 )+0890000
-set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
-set @t_bdate = case when '#non' = [1] then @now_date else [1] end
-set @t_edate = case when '#non' = [2] then @t_bdate else [2] end
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then char(255) else [2] end
 set @t_bstationno = case when '#non' = [4] then '' else [4] end
 set @t_estationno = case when '#non' = [5] then char(255) else [5] end
 set @t_bproductno = case when '#non' = [7] then '' else [7] end
 set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
 declare @tmp table(
 	gno nvarchar(10),
-	idno int identity(0,1),
 	datea nvarchar(10),
 	productno nvarchar(90),
 	product nvarchar(max),
-	cuadate nvarchar(10),
-	uindate nvarchar(10),
 	stationno nvarchar(90),
 	station nvarchar(max),
-	gen float,
-	rate float,
-	wtime1 float,
-	wtime2 float,
+	gen nvarchar(max),
 	value float
 )
 insert into @tmp
 	select
-		'0',a.cuadate,a.productno,a.product,a.cuadate,a.uindate,
-		a.stationno,isnull(b.station,''),isnull(b.gen,0),0 rate,a.wtime1,a.wtime2,0 value
-	from view_work a
+		'0' gen,a.datea,c.productno,c.product,a.stationno,b.station,
+		case when isnull(d.hours,0)=0 and isnull(d.minutes,0)=0 then null when isnull(d.hours,0)>0 then cast(round(d.hours,3) as nvarchar) + 'Hr.' else cast(round(d.minutes,3) as nvarchar) + 'Min.' end,
+		sum(a.hours)
+	from view_cugu a
 	left join station b on (a.stationno=b.noa)
-	where ((a.cuadate between @t_bdate and @t_edate) or (a.uindate between @t_bdate and @t_edate)) and (len(isnull(cuadate,''))=9) and
-		  (a.stationno between @t_bstationno and @t_estationno) and
-		  (a.productno between @t_bproductno and @t_eproductno)
-declare @idno int
-declare @cuadate nvarchar(10)
-declare @uindate nvarchar(10)
-declare @stationno nvarchar(90)
-declare @productno nvarchar(90)
-declare @gen float
-declare @wtime1 float
-declare @wtime2 float
-declare cursor_table cursor for
-	select a.idno,a.cuadate,a.uindate,a.stationno,a.productno,a.wtime1,a.wtime2,a.gen from @tmp a
-open cursor_table
-fetch next from cursor_table
-into @idno,@cuadate,@uindate,@stationno,@productno,@wtime1,@wtime2,@gen
-while(@@FETCH_STATUS <> -1)
-begin
-	declare @nowdays nvarchar(15) = @cuadate
-	declare @nowdays_AD nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@cuadate,3))+1911)+'/'+SUBSTRING(@cuadate,5,2)+'/'+RIGHT(@cuadate,2)
-	while((@nowdays <= @uindate))
-	begin
-		declare @value float = 0
-		if((@nowdays = @cuadate))
-		begin
-			set @value = isnull(@wtime1,0)
-		end
-		else if(@nowdays = @uindate)
-		begin
-			set @value = isnull(@wtime2,0)
-		end
-		else
-		begin
-			declare @cugGen float = (select top 1 cugt.gen from view_cug cug left join view_cugt cugt on cug.noa=cugt.noa where cug.stationno=@stationno and cugt.datea=@nowdays)
-			set @value = @value + isnull(@cugGen,@gen)
-		end
-		declare @tmpIdno int = (select top 1 idno from @tmp where (stationno=@stationno) and (productno=@productno) and (datea=@nowdays))
-		if(@tmpIdno is not null)
-		begin
-			update @tmp set value=@value where idno=@tmpIdno
-		end
-		else
-		begin
-			insert into @tmp(gno,datea,productno,product,cuadate,uindate,stationno,station,gen,rate,wtime1,wtime2,value)
-				select
-					a.gno,@nowdays,a.productno,a.product,a.cuadate,a.uindate,a.stationno,a.station,a.gen,a.rate,a.wtime1,a.wtime2,@value
-				from @tmp a
-				where a.idno=@idno
-		end
-		if(ISDATE(@nowdays_AD)=0)
-		begin
-			break
-		end
-		else
-		begin
-			set @nowdays_AD = convert(nvarchar,dateadd(day,1,@nowdays_AD),111)
-			set @now_date=CONVERT (nvarchar(15), cast(@nowdays_AD as datetime),12 )+0890000
-			set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
-			set @nowdays = @now_date
-		end
-	end
-	fetch next from cursor_table
-	into @idno,@cuadate,@uindate,@stationno,@productno,@wtime1,@wtime2,@gen
-end
-close cursor_table
-deallocate cursor_table
+	left join view_work c on (a.workno=c.noa)
+	outer apply(select hours,minutes from uca where noa=c.productno) d
+	where (a.datea between @t_bdate and @t_edate) and
+			 (c.productno between @t_bproductno and @t_eproductno) and
+			 (a.stationno between @t_bstationno and @t_estationno)
+	group by c.productno,c.product,a.stationno,b.station,a.datea,d.hours,d.minutes
 select
-	a.gno,a.idno,a.datea,a.productno,a.product,a.cuadate,a.uindate,a.stationno,
-	a.station,a.rate,a.wtime1,a.wtime2,a.value,
-	case when isnull(b.hours,0)=0 and isnull(b.minutes,0)=0 then null when isnull(b.hours,0)>0 then cast(round(b.hours,3) as nvarchar) + 'Hr.' else cast(round(b.minutes,3) as nvarchar) + 'Min.' end gen
+	a.gno,a.datea,a.productno,a.product,a.stationno,a.station,a.gen,a.value
 from @tmp a
-outer apply(select hours,minutes from uca where noa=a.productno) b
-order by productno,product,stationno,station,a.datea,a.cuadate,a.uindate;
+order by a.productno,a.stationno,a.datea;
 -----------------------------------------------------------------------------------------*
 z_workgg6:--z_workgg6
 declare @t_bdate nvarchar(10)
