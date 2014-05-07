@@ -693,11 +693,11 @@ select mount from view_ordes oes where oes.datea>=@t_edate and oes.productno=wb.
 select mount from view_workcs wcs where wcs.datea>=@t_edate and wcs.productno=wb.productno
 )tmp),0) uinmount,0,0
 from view_work wa left join view_works wb on wa.noa=wb.noa
-where len(wa.tggno)!=0 and (wcb.datea between @t_bdate and @t_edate)
+where len(wa.tggno)!=0 and (wa.tggno between @t_btggno and @t_etggno)
 and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,wa.ordeno)>0) 
 and ISNULL(wa.isfreeze,'0')!='1' --and isnull(wa.enda,'0')!='1'
 and isnull(wa.cuadate,'') between @t_bcdate and @t_ecdate 
-and (wa.tggno between @t_btggno and @t_etggno)
+and wa.noa in (select workno from view_workcs where datea between @t_bdate and @t_edate)
 group by wb.productno,wb.product,wb.unit 
 
 	
@@ -712,7 +712,7 @@ select
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,y_mount),1)),4,12)) y_mount,
 	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,n_mount),1)),4,12)) n_mount
 from @tmp;
-
+--***********************************************************************************************
 z_workctb:--z_workctb
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -952,3 +952,61 @@ z_workctb:--z_workctb
 	end
 	--*****************************************************************************************	
 	select * from @result where gno='1' or (gno='0' and datea between @t_bdate and @t_edate) order by productno, gno, recno;
+	
+--**************************************************************************************
+--------------------------------------------------------------------------------------------------------
+z_workc12:--z_workc12 ref. z_workd2
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_btggno nvarchar(30)
+declare @t_etggno nvarchar(30)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+set @t_btggno = case when '#non'=[5] then '' else [5] end
+set @t_etggno = case when '#non'=[6] then char(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	workno nvarchar(30),
+	tggno nvarchar(30),
+	tgg nvarchar(30),
+	productno nvarchar(30),
+	products nvarchar(90),
+	unit nvarchar(10),
+	amount float,
+	bmount float,
+	cmount float
+)
+
+insert into @tmp
+select '0'gno,wtmp.workno,w.tggno,w.comp,w.productno,w.product,w.unit
+,w.mount,isnull(wds.mount,0),w.mount-isnull(wds.mount,0) from (
+--有領料的workno
+select b.workno 
+from view_workc a left join view_workcs b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate and a.tggno between @t_btggno and @t_etggno and b.workno!=''
+group by b.workno)wtmp
+left join view_work w on wtmp.workno=w.noa 
+left join (
+	select a.workno,a.productno,SUM((case when b.typea='1' then 1 else -1 end)*(a.mount+a.inmount-a.outmount))mount 
+	from view_workds a left join view_workd b on a.noa=b.noa where b.datea between @t_bdate and @t_edate 
+	group by a.workno,a.productno
+) wds on w.noa=wds.workno and w.productno=wds.productno
+where w.mount!=isnull(wds.mount,0) 
+and ISNULL(w.isfreeze,'0')!='1' --and isnull(w.enda,'0')!='1'
+and isnull(w.cuadate,'') between @t_bcdate and @t_ecdate 
+
+insert into @tmp(gno,tggno,tgg,amount,bmount,cmount)
+select '1',tggno,tgg,sum(amount),sum(bmount),sum(cmount) from @tmp
+group by tggno,tgg
+
+select gno,workno,tggno,tgg,productno,products,unit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,amount),1)),0,30)) amount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bmount),1)),0,30)) bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cmount),1)),0,30)) cmount
+from @tmp order by tggno,gno,workno;
