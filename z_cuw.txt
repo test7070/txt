@@ -145,10 +145,99 @@ outer apply(
 		group by noa
 	) cuws
 	where (isnull(cuw.stationno,'') in (select stationno from stationgs where (isnull(noa,'')=isnull(a.stationgno,'')) and (noa between @t_bstationgno and @t_estationgno))) and
-			 (left(cuw.datea,6) between left(@t_bdate,6) and left(@t_edate,6))
+			 (left(cuw.datea,6) = left(a.datea,6))
 ) c 
 select
 	a.gno,a.datea,a.stationgno,a.stationgs,a.mans1,a.mans2,a.hours1,a.hours2,
 	a.hours3,a.mount1,a.hours4,a.mount2,a.cost1,a.cost2,a.cost3
 from @tmp a
 order by a.gno,a.stationgno;
+-------------------------------------------------------------------------------------------------------*
+z_cuw4:--z_cuw4
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationgno nvarchar(90)
+declare @t_estationgno nvarchar(90)
+declare @t_bstationno nvarchar(90)
+declare @t_estationno nvarchar(90)
+set @t_bdate = case when '#non'=[10] then '' else [10] end
+set @t_edate = case when '#non'=[11] then char(255) else [11] end
+set @t_bstationgno = case when '#non'=[12] then '' else [12] end
+set @t_estationgno = case when '#non'=[13] then char(255) else [13] end
+set @t_bstationno = case when '#non'=[2] then '' else [2] end
+set @t_estationno = case when '#non'=[3] then char(255) else [3] end
+declare @tmp table(
+	gno nvarchar(10),
+	stationgno nvarchar(90),
+	stationgs nvarchar(max),
+	stationno nvarchar(90),
+	stations nvarchar(max),
+	gen float,
+	datea nvarchar(10),
+	mans1 float,----直接人數
+	mans2 float,----間接人數
+	hours1 float,----當日人時
+	hours2 float,----當日機時
+	hours3 float,----當日工時
+	mount1 float,----當日完工製令數
+	hours4 float,----當月工時累計
+	mount2 float,----當月完工製令數
+	cost1 float,----直接人工成本
+	cost2 float,----間接人工成本
+	cost3 float----管銷費用
+)
+insert into @tmp
+	select
+		'0' gno,isnull(e.noa,''),isnull(e.namea,''),isnull(a.stationno,''),isnull(f.station,''),isnull(f.gen,0),isnull(a.datea,''),
+		sum((isnull(c.mans,0)+isnull(c.managermans,0))),
+		sum(isnull(c.supmans,0)),
+		sum((isnull(c.hours,0)+isnull(c.addhours,0))*(isnull(c.mans,0)+isnull(c.managermans,0)+isnull(c.supmans,0))),
+		sum(isnull(b.borntime,0)+isnull(b.addtime,0)),
+		sum(isnull(c.hours,0)+isnull(c.addhours,0)),
+		sum(isnull(b.mount,0)),0 hours4,0 mount2,
+		0 cost1,0 cost2,0 cost3
+	from view_cuw a
+	outer apply(
+		select
+			noa,sum(borntime) borntime,sum(addtime) addtime,sum(mount) mount
+		from view_cuws
+		where noa=a.noa
+		group by noa
+	) b
+	outer apply(
+		select
+			noa,sum(mans) mans,sum(supmans) supmans,sum(managermans) managermans,sum(hours) hours,sum(addhours) addhours
+		from view_cuwt
+		where noa=a.noa
+		group by noa
+	) c
+	outer apply(select top 1 noa from stationgs where stationno=a.stationno) d
+	left join stationg e on (d.noa=e.noa)
+	left join station f on (a.stationno=f.noa)
+	where (a.datea between @t_bdate and @t_edate) and
+			 (isnull(e.noa,'') between @t_bstationgno and @t_estationgno) and
+			 (isnull(a.stationno,'') between @t_bstationno and @t_estationno)
+	group by a.datea,e.noa,e.namea,isnull(a.stationno,''),isnull(f.station,''),isnull(f.gen,0)
+update a
+	set a.hours4=isnull(a.hours4,0)+isnull(c.borntime,0),a.mount2=isnull(a.mount2,0)+isnull(c.mount,0)
+from @tmp a
+outer apply(
+	select
+		sum(isnull(cuws.borntime,0)+isnull(cuws.addtime,0)) borntime,sum(isnull(cuws.mount,0)) mount
+	from view_cuw cuw
+	outer apply(
+		select
+			noa,sum(borntime) borntime,sum(addtime) addtime,sum(mount) mount
+		from view_cuws
+		where noa=cuw.noa
+		group by noa
+	) cuws
+	where (isnull(cuw.stationno,'') = isnull(a.stationno,'')) and
+			 (left(cuw.datea,6) = left(a.datea,6))
+) c 
+select
+	a.gno,a.datea,a.stationgno,a.stationgs,a.stationno,a.stations,a.gen,a.mans1,a.mans2,a.hours1,a.hours2,
+	a.hours3,a.mount1,a.hours4,a.mount2,a.cost1,a.cost2,a.cost3,
+	case when isnull(a.gen,0)=0 then 0 else round((isnull(a.hours3,0)/isnull(a.gen,0))*100,3) end rate
+from @tmp a
+order by a.gno,a.stationgno,a.stationno;
