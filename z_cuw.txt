@@ -114,7 +114,7 @@ insert into @tmp
 	from view_cuw a
 	outer apply(
 		select
-			noa,sum(borntime) borntime,sum(addtime) addtime,sum(mount) mount
+			noa,sum(borntime/60) borntime,sum(addtime/60) addtime,sum(mount) mount
 		from view_cuws where (noa=a.noa) group by noa
 	) b
 	outer apply(
@@ -133,7 +133,7 @@ outer apply(
 	select
 		sum(isnull(cuws.borntime,0)+isnull(cuws.addtime,0)) borntime,sum(isnull(cuws.mount,0)) mount
 	from view_cuw cuw
-	outer apply(select noa,sum(borntime) borntime,sum(addtime) addtime,sum(mount) mount from view_cuws where (noa=cuw.noa) group by noa) cuws
+	outer apply(select noa,sum(borntime/60) borntime,sum(addtime/60) addtime,sum(mount) mount from view_cuws where (noa=cuw.noa) group by noa) cuws
 	where (isnull(cuw.stationno,'') in (select stationno from stationgs where (isnull(noa,'')=isnull(a.stationgno,'')) and (noa between @t_bstationgno and @t_estationgno))) and
 			 (left(cuw.datea,6) = left(a.datea,6))
 ) c 
@@ -187,7 +187,7 @@ insert into @tmp
 		sum(isnull(b.mount,0)),0 hours4,0 mount2,
 		0 cost1,0 cost2,0 cost3
 	from view_cuw a
-	outer apply(select noa,sum(borntime) borntime,sum(addtime) addtime,sum(mount) mount from view_cuws where (noa=a.noa) group by noa) b
+	outer apply(select noa,sum(borntime/60) borntime,sum(addtime/60) addtime,sum(mount) mount from view_cuws where (noa=a.noa) group by noa) b
 	outer apply(
 		select
 			noa,sum(mans) mans,sum(supmans) supmans,sum(managermans) managermans,sum(hours) hours,sum(addhours) addhours
@@ -209,7 +209,7 @@ outer apply(
 	from view_cuw cuw
 	outer apply(
 		select
-			noa,sum(borntime) borntime,sum(addtime) addtime,sum(mount) mount
+			noa,sum(borntime/60) borntime,sum(addtime/60) addtime,sum(mount) mount
 		from view_cuws
 		where noa=cuw.noa
 		group by noa
@@ -223,3 +223,54 @@ select
 	case when isnull(a.gen,0)=0 then 0 else round((isnull(a.hours3,0)/isnull(a.gen,0))*100,3) end rate
 from @tmp a
 order by a.gno,a.stationgno,a.stationno;
+----------------------------------------------------------------------------------------------------*
+z_cuw5:--z_cuw5
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationgno nvarchar(90)
+declare @t_estationgno nvarchar(90)
+set @t_bdate = case when '#non'=[10] then '' else [10] end
+set @t_edate = case when '#non'=[11] then char(255) else [11] end
+set @t_bstationgno = case when '#non'=[12] then '' else [12] end
+set @t_estationgno = case when '#non'=[13] then char(255) else [13] end
+declare @tmp table(
+	gno nvarchar(10),
+	stationgno nvarchar(90),
+	stationgs nvarchar(max),
+	ahours float,
+	datea nvarchar(10),
+	hours1 float,----當日工時
+	mount1 float,----當日完工製令數
+	hours2 float,----加工時數
+	hours3 float,----加班累計
+	cost1 float,----加班成本
+	hours4 float,----當月工時累計
+	mount2 float----當月完工製令數
+)
+insert into @tmp
+	select
+		'0' gno,e.noa,e.namea,e.hours,a.datea,sum(c.hours+c.addhours),sum(b.mount),sum(c.addhours),
+		0 hours3,0 cost1,0 hours4,0 mount2
+	from view_cuw a
+	outer apply(select noa,sum(mount) mount from view_cuws where (noa=a.noa) group by noa) b
+	outer apply(select noa,sum(hours) hours,sum(addhours) addhours from view_cuwt where (noa=a.noa) group by noa) c
+	outer apply(select top 1 noa from stationgs where stationno=a.stationno) d
+	left join stationg e on (d.noa=e.noa)
+	group by e.noa,e.namea,e.hours,a.datea
+update a
+	set a.hours3=isnull(a.hours3,0)+isnull(c.addhours,0),a.hours4=isnull(a.hours4,0)+isnull(c.hours,0),a.mount2=isnull(a.mount2,0)+isnull(c.mount,0)
+from @tmp a
+outer apply(
+	select
+		sum(isnull(cuwt.addhours,0)+isnull(cuwt.hours,0)) hours,sum(isnull(cuws.mount,0)) mount,sum(cuwt.addhours) addhours
+	from view_cuw cuw
+	outer apply(select noa,sum(borntime/60) borntime,sum(addtime/60) addtime,sum(mount) mount from view_cuws where (noa=cuw.noa) group by noa) cuws
+	outer apply(select noa,sum(addhours) addhours,sum(hours) hours from view_cuwt where (noa=cuw.noa) group by noa) cuwt
+	where (isnull(cuw.stationno,'') in (select stationno from stationgs where (isnull(noa,'')=isnull(a.stationgno,'')) and (noa between @t_bstationgno and @t_estationgno))) and
+			 (left(cuw.datea,6) = left(a.datea,6))
+) c 
+select
+	a.gno,a.stationgno,a.stationgs,a.ahours,a.datea,a.hours1,a.mount1,
+	a.hours2,a.hours3,a.cost1,a.hours4,a.mount2
+from @tmp a
+order by a.gno,a.stationgno;
