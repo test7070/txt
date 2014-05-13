@@ -352,3 +352,133 @@ select
 	case when isnull(a.gen,0)=0 then 0 else round((isnull(a.hours1,0)/isnull(a.gen,0))*100,3) end rate
 from @tmp a
 order by a.gno,a.stationgno,a.stationno;
+----------------------------------------------------------------------------------------------------*
+z_cuw7:--z_cuw7
+declare @t_bstationno nvarchar(max)
+declare @t_estationno nvarchar(max)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationgno nvarchar(max)
+declare @t_estationgno nvarchar(max)
+declare @t_bsssno nvarchar(max)
+declare @t_esssno nvarchar(max)
+set @t_bdate = case when '#non'=[10] then '' else [10] end
+set @t_edate = case when '#non'=[11] then char(255) else [11] end
+set @t_bstationgno = case when '#non'=[12] then '' else [12] end
+set @t_estationgno = case when '#non'=[13] then char(255) else [13] end
+set @t_bstationno = case when '#non'=[2] then '' else [2] end
+set @t_estationno = case when '#non'=[3] then char(255) else [3] end
+set @t_bsssno = case when '#non'=[14] then '' else [14] end
+set @t_esssno = case when '#non'=[15] then char(255) else [15] end
+declare @tmpa table(
+	gno nvarchar(10),
+	stationgno nvarchar(90),
+	stationgs nvarchar(max),
+	stationno nvarchar(90),
+	stations nvarchar(max),
+	datea nvarchar(10),
+	namea nvarchar(max),
+	hours1 float,----當日工時累計
+	mount1 float----當日完工製令數
+)
+declare @tmp table(
+	gno nvarchar(10),
+	stationgno nvarchar(90),
+	stationgs nvarchar(max),
+	stationno nvarchar(90),
+	stations nvarchar(max),
+	datea nvarchar(10),
+	sssno nvarchar(max),
+	namea nvarchar(max),
+	hours1 float,----當日工時累計
+	mount1 float,----當日完工製令數
+	hours2 float,----當月工時累計
+	mount2 float,----當月完工製令數
+	cost1 float,----薪資成本
+	cost2 float----管銷費用
+)
+insert into @tmpa
+	select
+		'0' gno,e.noa,e.namea,f.noa,f.station,a.datea,c.allman,c.hours,b.mount
+	from view_cuw a
+	outer apply(select worktime,sum(mount) mount from view_cuws where noa=a.noa group by worktime) b
+	outer apply(
+		select
+			isnull(sales,'')+isnull(supworker,'')+isnull(manager,'') allman,
+			sum(isnull(hours,0)+isnull(addhours,0)) hours
+		from view_cuwt
+		where (worktime=b.worktime) and (noa=a.noa)
+		group by isnull(sales,'')+isnull(supworker,'')+isnull(manager,'')
+	) c
+	outer apply(select top 1 noa from stationgs where stationno=a.stationno) d
+	left join stationg e on (d.noa=e.noa)
+	left join station f on (a.stationno=f.noa)
+	where (isnull(c.allman,'') != '') and (a.datea between @t_bdate and @t_edate) and
+		  (a.stationno between @t_bstationno and @t_estationno) and
+		  (isnull(e.noa,'') between @t_bstationgno and @t_estationgno)
+declare @stationgno nvarchar(max)
+declare @stationgs nvarchar(max)
+declare @stationno nvarchar(max)
+declare @stations nvarchar(max)
+declare @datea nvarchar(max)
+declare @namea nvarchar(max)
+declare @hours1 float
+declare @mount1 float
+declare @item nvarchar(max)
+declare cursor_table cursor for
+	select stationgno,stationgs,stationno,stations,datea,namea,hours1,mount1 from @tmpa
+open cursor_table
+fetch next from cursor_table
+into @stationgno,@stationgs,@stationno,@stations,@datea,@namea,@hours1,@mount1
+while(@@FETCH_STATUS <> -1)
+begin
+	set @namea = '@' + replace(@namea,char(0x3B),',@')
+	declare cursor_table2 cursor for
+		select item from fnSplit(@namea) where isnull(ltrim(rtrim(item)),'') != ''
+	open cursor_table2
+	fetch next from cursor_table2
+	into @item
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into @tmp(gno,stationgno,stationgs,stationno,stations,datea,namea,hours1,mount1)
+			select '99' gno,@stationgno,@stationgs,@stationno,@stations,@datea,@item,@hours1,@mount1
+		fetch next from cursor_table2
+		into @item
+	end
+	close cursor_table2
+	deallocate cursor_table2
+	fetch next from cursor_table
+	into @stationgno,@stationgs,@stationno,@stations,@datea,@namea,@hours1,@mount1
+end
+close cursor_table
+deallocate cursor_table
+update a
+	set sssno=b.noa
+from @tmp a
+left join sss b on isnull(ltrim(rtrim(a.namea)),'')=isnull(ltrim(rtrim(b.namea)),'')
+delete @tmp where isnull(sssno,'') not between @t_bsssno and @t_esssno
+insert into @tmp(gno,stationgno,stationgs,stationno,stations,datea,sssno,namea,hours1,mount1)
+	select
+		'0' gno,stationgno,stationgs,stationno,stations,datea,sssno,namea,sum(hours1),sum(mount1)
+	from @tmp
+	where gno='99'
+	group by stationgno,stationgs,stationno,stations,datea,sssno,namea
+delete @tmp where gno='99'
+update a
+	set hours2=b.hours,mount2=b.mount
+from @tmp a
+outer apply(
+	select
+		sum(isnull(cuwt_t.hours,0)+isnull(cuwt_t.addhours,0)) hours,
+		sum(isnull(cuws_t.mount,0)) mount
+	from view_cuw cuw_t
+	left join view_cuwt cuwt_t on (cuw_t.noa=cuwt_t.noa)
+	left join view_cuws cuws_t on (cuw_t.noa=cuws_t.noa) and (cuwt_t.worktime=cuws_t.worktime)
+	where (charindex(a.namea,isnull(sales,'')+isnull(supworker,'')+isnull(manager,''))>0) and
+			 (left(a.datea,6)=left(cuw_t.datea,6)) and (isnull(cuw_t.stationno,'')=isnull(a.stationno,''))
+) b
+select
+	a.gno,a.stationgno,a.stationgs,a.stationno,a.stations,a.datea,a.sssno,a.namea,a.hours1,a.mount1,
+	a.hours2,a.mount2,a.cost1,a.cost2
+from @tmp a
+order by a.stationgno,a.datea,a.sssno;
