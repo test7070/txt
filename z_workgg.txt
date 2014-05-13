@@ -51,10 +51,11 @@ declare @tmp table(
 	gno nvarchar(10),
 	stationno nvarchar(50),
 	station nvarchar(50),
-	ogen float,
 	gen float,
 	cuadate nvarchar(10),
 	uindate nvarchar(10),
+	datea nvarchar(10),
+	nos nvarchar(10),
 	workno nvarchar(90),
 	hours float,
 	mount float
@@ -64,8 +65,8 @@ declare @result table(
 	idno int identity(0,1),
 	stationno nvarchar(50),
 	station nvarchar(50),
-	ogen float,
 	gen float,
+	ogen float,
 	usegen float,
 	datea nvarchar(10),
 	cuadate nvarchar(10),
@@ -76,8 +77,9 @@ declare @result table(
 )
 insert into @tmp
 	select
-		'0' gno,a.stationno,b.station,isnull(b.gen,0),isnull(b.gen,0),a.cuadate,a.uindate,a.noa,a.hours,a.mount
-	from view_work a
+		'0' gno,a.stationno,b.station,isnull(b.gen,0),a.cuadate,a.uindate,c.datea,c.nos,a.noa,c.hours,c.mount
+	from view_cugu c
+	left join view_work a on (a.noa=c.workno)
 	left join station b on (a.stationno=b.noa)
 	where (isnull(a.cuadate,'')!='' and isnull(a.uindate,'')!='' ) and (isnull(b.noa,'') != '') and
 		  (a.stationno between @t_bstationno and @t_estationno)
@@ -114,91 +116,76 @@ update a
 from @result a
 outer apply(select top 1 cugt.gen from view_cug cug left join view_cugt cugt on cug.noa=cugt.noa where (cug.stationno=a.stationno) and (cugt.datea=a.datea)) d
 declare @datea nvarchar(10)
-declare @datea2 nvarchar(10)
+declare @workno nvarchar(max)
 declare @stationno nvarchar(max)
 declare @station nvarchar(max)
-declare @stationno2 nvarchar(max)
-declare @station2 nvarchar(max)
 declare @gen float
-declare @ogen float
-declare @gen2 float
+declare @usegen float
 declare @cuadate nvarchar(10)
 declare @uindate nvarchar(10)
-declare @workno nvarchar(max)
-declare @workno2 nvarchar(max)
 declare @mount float
-declare @idno2 int
 declare @hours float
 declare cursor_table cursor for
 	select
-		a.stationno,a.station,a.ogen,a.gen,a.cuadate,a.uindate,a.workno,a.hours,a.mount
+		a.stationno,a.station,a.gen,a.cuadate,a.uindate,a.datea,a.workno,a.hours,a.mount
 	from @tmp a
-	order by a.stationno,a.workno
+	order by a.stationno,a.datea,a.nos
 open cursor_table
 fetch next from cursor_table
-into @stationno,@station,@ogen,@gen,@cuadate,@uindate,@workno,@hours,@mount
+into @stationno,@station,@gen,@cuadate,@uindate,@datea,@workno,@hours,@mount
 while(@@FETCH_STATUS <> -1)
 begin
-	declare cursor_table2 cursor for
-		select
-			a.idno,a.stationno,a.station,a.datea,a.usegen,isnull(a.workno,'')
-		from @result a
-		where  (a.datea between @cuadate and @uindate)/*(a.datea >= @cuadate)*/ and (@stationno=a.stationno) and (isnull(a.usegen,0)>=@hours)
-		order by a.datea,a.workno
-	open cursor_table2
-	fetch next from cursor_table2
-	into @idno2,@stationno2,@station2,@datea2,@gen2,@workno2
-	while(@@FETCH_STATUS <> -1)
+	declare @workno2 nvarchar(max) = (select workno from @result where (stationno=@stationno) and (datea=@datea))
+	if(@workno2 is null)
 	begin
-		set @gen2 = isnull((select min(usegen) from @result where (stationno=@stationno2) and (datea=@datea2)),0)
-		if(@workno2='')
-		begin
-			if(@gen2 >= @hours)
-			begin
-				update @result set usegen=@gen2-@hours,hours=@hours,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
-				set @hours = @gen2-@hours
-				break
-			end
-			else if((@gen2 < @hours))
-			begin
-				update @result set usegen=@gen2-@hours,hours=@hours,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
-				set @hours = @hours-@gen2
-			end
-		end
-		else
-		begin
-			if((@gen2 >= @hours) and @gen2>0)
-			begin
-				insert into @result
-					select '0' gno,@stationno2,@station2,@ogen,@gen,(@gen2-@hours),@datea2,@cuadate,@uindate,@workno,@hours,@mount
-				set @hours = @gen2-@hours
-				break
-			end
-			else if((@gen2 < @hours) and @gen2>0)
-			begin
-				insert into @result
-					select '0' gno,@stationno2,@station2,@ogen,@gen, @hours-@gen2,@datea2,@cuadate,@uindate,@workno,@hours,@mount
-				set @hours = @hours-@gen2
-			end
-		end
-		fetch next from cursor_table2
-		into @idno2,@stationno2,@station2,@datea2,@gen2,@workno2
+		update a
+			set gen=@gen,hours=@hours,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount
+		from @result a
+		where (a.stationno=@stationno) and (a.datea=@datea)
 	end
-	close cursor_table2
-	deallocate cursor_table2
+	else
+	begin
+		insert into @result(gno,stationno,station,gen,usegen,hours,datea,cuadate,uindate,workno,mount)
+			select '0',@stationno,@station,@gen,@gen,@hours,@datea,@cuadate,@uindate,@workno,@mount
+	end
 	fetch next from cursor_table
-	into @stationno,@station,@ogen,@gen,@cuadate,@uindate,@workno,@hours,@mount
+	into @stationno,@station,@gen,@cuadate,@uindate,@datea,@workno,@hours,@mount
 end
 close cursor_table
 deallocate cursor_table
-insert into @result(gno,stationno,station,ogen,datea)
+insert into @result(gno,stationno,station,datea,hours)
 	select
-		'1' gno,stationno,station,gen,'' datea
+		'1' gno,stationno,station,'' datea,sum(hours)
 	from @result
 	group by stationno,station,gen
+delete @result where stationno in (select stationno from @result where (isnull(hours,0)=0) and (gno='1'))
+declare @idno int
+declare @stationno_tmp nvarchar(max) = ''
+declare @datea_tmp nvarchar(10) = ''
+declare @nowgen float = 0
+declare cursor_table cursor for
+	select idno,stationno,datea,gen,hours from @result where gno='0' order by stationno,datea,idno
+open cursor_table
+fetch next from cursor_table
+into @idno,@stationno,@datea,@gen,@hours
+while(@@FETCH_STATUS <> -1)
+begin
+	if((@stationno_tmp <> @stationno) or (@datea_tmp <> @datea))
+	begin
+		set @nowgen = @gen
+		set @stationno_tmp = @stationno
+		set @datea_tmp = @datea
+	end
+	set @nowgen = @nowgen-isnull(@hours,0)
+	update @result set usegen = @nowgen where idno=@idno
+	fetch next from cursor_table
+	into @idno,@stationno,@datea,@gen,@hours
+end
+close cursor_table
+deallocate cursor_table
 select
-	a.gno,a.idno,a.stationno,a.station stations,
-	a.ogen ogena,a.gen gena,round(a.usegen,4) usegen,round(a.hours,4) hours,a.datea,a.cuadate,
+	a.gno,a.idno,a.stationno,a.station stations,a.ogen,a.gen gena,
+	round(a.usegen,4) usegen,round(a.hours,4) hours,a.datea,a.cuadate,
 	a.uindate,a.workno,round(a.mount,4) mount,
 	ROW_NUMBER()over(partition by a.stationno order by a.stationno,a.gno,a.datea,a.workno) recno,
 	'work?left(noa,'+cast(len(b.noa) as nvarchar)+')=$workno?'+b.accy qhref
