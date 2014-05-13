@@ -13,6 +13,11 @@ set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
 set @t_edate = case when '#non' = [7] then '999/99/99' else  [7] end
 set @t_orde = case when '#non' = [8] then '' else  [8] end
 ---------------------------------------------------------------------------------------------------------------------------------
+--今天日期
+declare @now_date nvarchar(30)
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+
 declare @tmp table(
 	gno  nvarchar(1),
 	accy nvarchar(10),
@@ -38,11 +43,12 @@ declare @tmp table(
 
 --插入已排程的製令且未完工
 insert into @tmp
-select '0',b.accy,a.nos,a.workno,case when b.processno='' then 'zzzz' else b.processno end,a.process
-,a.stationno,b.station,b.productno,b.product,a.mount,a.hours,'',1,a.datea,a.datea,a.datea
+select '0',b.accy,a.nos,a.workno,case when isnull(b.processno,'')='' then 'zzzz' else b.processno end,a.process
+,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
+,b.productno,b.product,a.mount,a.hours,'',1,a.datea,a.datea,a.datea
 ,c.hours,isnull(c.gen,0) gen
 from view_cugu a left join view_work b on a.workno=b.noa  
-left join station c on b.stationno=c.noa left join uca d on b.productno=d.noa
+left join station c on a.stationno=c.noa left join uca d on b.productno=d.noa
 where isnull(b.enda,'0')!='1' and isnull(b.isfreeze,'0')!='1' 
 and a.stationno between @t_bstation and @t_estation
 order by b.processno,b.datea,a.nos
@@ -80,11 +86,6 @@ order by a.stationno,case when a.cuadate='' then '999/99/99' else a.cuadate end
 declare @t_stationno nvarchar(50)
 declare @stationno nvarchar(50)
 declare @sidno nvarchar(50)
-
---今天日期
-declare @now_date nvarchar(30)
-set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
-set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
 
 insert into @tmp (gno,stationno,stations,workdate,enddate,datea,ghours,gens)
 select '1',stationno,MAX(stations),MAX(workdate),MAX(enddate),@now_date,MAX(ghours),MAX(gens) from @tmp group by stationno
@@ -416,4 +417,128 @@ begin
 	order by stationno,gno,workdate,idno
 end
 ;
+--**************************************************************************************************
+z_cugp2:--z_cugp2
+declare @t_bstation nvarchar(50)
+declare @t_estation nvarchar(50)
+declare @t_bprocess nvarchar(50)
+declare @t_eprocess nvarchar(50)
+declare @t_bdate nvarchar(50)
+declare @t_edate nvarchar(50)
 
+set @t_bstation = case when '#non' = [3] then '' else  [3] end
+set @t_estation = case when '#non' = [4] then CHAR(255) else  [4] end
+set @t_bprocess = case when '#non' = [5] then '' else  [5] end
+set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
+set @t_bdate = case when '#non' = [9] then '' else  [9] end
+set @t_edate = case when '#non' = [10] then CHAR(255) else  [10] end
+---------------------------------------------------------------------------------------------------------------------------------
+declare @tmp table(
+	gno nvarchar(2),
+	noq nvarchar(30),
+	nos nvarchar(30),
+	stationno nvarchar(90),
+	station nvarchar(90),
+	processno nvarchar(90),
+	process nvarchar(90),
+	productno nvarchar(30),
+	product nvarchar(90),
+	mount float,
+	hours float,
+	datea nvarchar(30),
+	workno nvarchar(50),
+	custno nvarchar(30),
+	comp nvarchar(90),
+	qhref nvarchar(max)
+)
+
+insert into @tmp 
+select '0',a.noq,a.nos,a.stationno,b.station,b.processno,a.process,b.productno,b.product,a.mount,a.hours,a.datea,a.workno
+,d.custno,d.comp,'work?noa=$workno?'+b.accy
+from view_cugu a left join view_work b on a.workno=b.noa 
+left join(select noa+'-'+noq cuano,ordeno+'-'+no2 ordeno from view_cuas 
+union all select noa+'-'+noq cuano,ordeno from view_workgs)c on b.cuano+'-'+b.cuanoq=c.cuano 
+left join view_orde d on CHARINDEX(d.noa,c.ordeno)>0 left join station e on a.stationno=e.noa 
+where (a.stationno between @t_bstation and @t_estation) 
+and (isnull(b.processno,'') between @t_bprocess and @t_eprocess) 
+and (a.datea between @t_bdate and @t_edate) 
+and a.datea!='' order by a.stationno,a.datea,a.nos,a.noq
+
+insert into @tmp (gno,stationno,station,hours,mount)
+select '1',stationno,MAX(station),sum(hours),sum(mount) from @tmp group by stationno
+
+select gno,noq,nos,stationno,station,processno,process,productno pno,product,datea,workno,custno,comp,qhref
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hours),1)),0,30)) hours
+,(select COUNT(*) from(select stationno,workno from @tmp where gno='0' and stationno=a.stationno and workno!='' group by stationno,workno)tmp) wmount 
+from @tmp a order by stationno,gno,datea,nos,noq;
+--**************************************************************************************************
+z_cugp3:--z_cugp3
+declare @t_ordeno nvarchar(50)
+declare @t_no2 nvarchar(50)
+declare @t_workgno nvarchar(50)
+declare @t_workgnoq nvarchar(50)
+
+set @t_ordeno = case when '#non' = [11] then '' else  [11] end
+set @t_no2 = case when '#non' = [12] then '' else  [12] end
+set @t_workgno = case when '#non' = [13] then '' else  [13] end
+set @t_workgnoq = case when '#non' = [14] then '' else  [14] end
+----------------------------------------------------------------------------------------------------------------------------------------------------
+declare @tmp table(
+	gno nvarchar(2),
+	workgno nvarchar(90),
+	workgnoq nvarchar(30),
+	ordeno nvarchar(MAX),
+	productno nvarchar(MAX),
+	product nvarchar(MAX),
+	workno nvarchar(90),
+	accy nvarchar(10),
+	datea nvarchar(20),
+	noq nvarchar(50),
+	nos nvarchar(50),
+	stationno nvarchar(90),
+	stations nvarchar(90),
+	processno nvarchar(90),
+	process nvarchar(90),
+	mproductno nvarchar(MAX),
+	mproduct nvarchar(MAX),
+	hours float,
+	mount float,
+	qhref nvarchar(max)
+)
+
+insert into @tmp 
+select '0',b.cuano,b.cuanoq,b.ordeno,d.productno,d.product,a.workno,a.accy,a.datea,a.noq,a.nos
+,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
+,b.processno,a.process,b.productno,b.product,a.hours,a.mount
+,'work?noa=$workno?'+b.accy
+from view_cugu a left join view_work b on a.workno=b.noa 
+left join station c on a.stationno=c.noa 
+left join view_workgs d on b.cuano=d.noa and b.cuanoq=d.noq
+where a.datea!='' and a.workno!=''
+and (len(@t_ordeno)=0 or CHARINDEX(@t_ordeno+'-'+@t_no2,b.ordeno)>0)
+and (len(@t_workgno)=0 or b.cuano=@t_workgno) and (len(@t_workgnoq)=0 or b.cuanoq=@t_workgnoq)
+order by b.cuano,b.cuanoq,a.datea,a.noq,a.nos
+
+insert into @tmp 
+select '0',e.workgno,e.workgnoq,e.ordeno,e.productno,e.product,a.workno,a.accy,a.datea,a.noq,a.nos
+,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
+,b.processno,a.process,b.productno,b.product,a.hours,a.mount,''
+from view_cugu a left join view_work b on a.workno=b.noa 
+left join station c on a.stationno=c.noa 
+left join view_workgs d on b.cuano=d.noa and b.cuanoq=d.noq
+left join @tmp e on a.datea=e.datea and a.stationno=e.stationno
+where a.datea!='' and a.workno=''
+and (len(@t_ordeno)=0 or CHARINDEX(@t_ordeno+'-'+@t_no2,b.ordeno)>0)
+and (len(@t_workgno)=0 or b.cuano=@t_workgno) and (len(@t_workgnoq)=0 or b.cuanoq=@t_workgnoq)
+order by b.cuano,b.cuanoq,a.datea,a.noq,a.nos
+
+insert into @tmp(gno,workgno,workgnoq,hours,mount)
+select '1',workgno,workgnoq,sum(hours),sum(mount) from @tmp group by workgno,workgnoq
+
+select gno,workgno wgnoa,workgnoq wgnoq,ordeno,productno,product,workno,accy,datea,noq,nos
+,stationno,stations,processno,process,mproductno mpno,mproduct,qhref
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hours),1)),0,30)) hours
+,(select COUNT(*) from(select workgno,workgnoq,workno from @tmp where gno='0' and workgno=a.workgno and workgnoq=a.workgnoq and workno!='' group by workgno,workgnoq,workno)tmp) wmount
+from @tmp a order by workgno,workgnoq,gno,datea,noq,nos;
