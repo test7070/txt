@@ -1,3 +1,1306 @@
+z_acccp08:--z_acccp08 不分部門
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_rank nvarchar(20) = '[2]'
+	declare @t_bno nvarchar(20) = [3]
+	declare @t_eno nvarchar(20) = [4]
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	----------------------------------------------------------------------------------------------	
+	declare @tmp table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	set @cmd =
+	" select a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7"+
+	" 	,isnull(a.dmoney,0),isnull(a.cmoney,0),'','',a.noq,b.zno,b.worker"+
+	" from acccs"+@t_accy+" a "+
+	" left join accc"+@t_accy+" b on a.accc3=b.accc3"+
+	" left join acpart"+@t_accy+" c on a.part=c.noa"+
+	" where (a.accc3 between @t_bno and @t_eno)"+
+	" and (b.accc3 is not null) "+
+	" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+	""
+	insert into @tmp(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+	execute sp_executesql @cmd,N'@t_bno nvarchar(20),@t_eno nvarchar(20),@islock int'
+	,@t_bno=@t_bno,@t_eno=@t_eno,@islock=@islock
+	--------------------------------------------------------------------------------------------------
+	declare @n int
+	declare @m int
+	declare @accc1 nvarchar(10)
+	declare @accc2 nvarchar(10)
+	declare @accc3 nvarchar(20)
+	declare @accc4 nvarchar(20)
+	declare @accc5 nvarchar(20)
+	declare @accc6 nvarchar(max)
+	declare @accc7 nvarchar(max)
+	declare @dmoney float
+	declare @cmoney float 
+	declare @partno nvarchar(20)
+	declare @part nvarchar(20)
+	declare @noq nvarchar(20)
+	declare @cn1 int
+	declare @cn2 int
+	declare @zno nvarchar(max)
+	declare @worker nvarchar(max)
+	--------------------------------------------------------------------------------------------------
+	--銀行帳號只顯示後面的碼數
+	declare cursor_table cursor for
+	select accc3,noq,accc5,rtrim(ltrim(accc6)) from @tmp where len(isnull(accc6,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@noq,@accc5,@accc6
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		if(LEFT(@accc5,4)='1112')
+		begin
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,6) where accc3=@accc3 and noq=@noq
+				end
+			end	
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,7) where accc3=@accc3 and noq=@noq
+				end
+			end	
+		end
+
+		fetch next from cursor_table
+		into @accc3,@noq,@accc5,@accc6
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	--摘要太長分多行
+	declare @tmp2 table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max),
+		cn1 int,
+		cn2 int
+	)
+	declare @tmpString nvarchar(max)
+	declare @maxcount_accc6 int
+	set @maxcount_accc6 = 16
+	declare @maxcount_accc7 int
+	set @maxcount_accc7 = 30
+	declare @string nvarchar(max)
+	
+	set @noq = ''
+	declare cursor_table cursor for
+	select a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,b.accc7,a.partno,a.part,a.zno,a.worker
+	,a.dmoney,a.cmoney
+	,row_number()over(order by a.accc3)
+	from(
+		select accc1,accc2,accc3,accc4,accc5,accc6,partno,part,zno,worker,sum(isnull(dmoney,0)) dmoney,sum(isnull(cmoney,0)) cmoney
+		from @tmp
+		group by accc1,accc2,accc3,accc4,accc5,accc6,partno,part,zno,worker) a
+	outer apply (select top(1) accc7 from @tmp where accc3=a.accc3 and accc5=a.accc5  
+		order by case when a.dmoney>a.cmoney and dmoney>0 then 1
+					  when a.cmoney>a.dmoney and cmoney>0 then 2
+					  else 3 end	
+			,noq) b
+	open cursor_table
+	fetch next from cursor_table
+	into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@partno,@part,@zno,@worker,@dmoney,@cmoney,@cn1
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+		values(@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1,0)
+		--accc6
+		set @accc6=REPLACE(@accc6,'  ','')
+		select @n=0,@string=@accc6,@tmpString="",@cn2=0
+		
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc6)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc6=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		--accc7
+		set @accc7=REPLACE(@accc7,'  ','')
+		select @n=0,@string=@accc7,@tmpString="",@cn2=0
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc7)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc7=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		fetch next from cursor_table
+		into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@partno,@part,@zno,@worker,@dmoney,@cmoney,@cn1
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	--分頁
+	declare @tmp3 table(
+		page int,
+		nn int,
+		gno nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	set @rowline = 14
+	set @endline = 4
+	
+	declare @gno nvarchar(10)
+	
+	set @curline = 0
+	declare cursor_table cursor for
+	select accc3,accc2,accc1 from @tmp2 group by accc3,accc2,accc1
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@accc2,@accc1
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @page = 0,@zno='',@worker=''
+		select @zno=zno,@worker=worker from @tmp2 where accc3=@accc3
+		
+		declare cursor_table2 cursor for
+		select accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2 from @tmp2 where accc3=@accc3
+		open cursor_table2
+		fetch next from cursor_table2
+		into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		while(@@FETCH_STATUS <> -1)
+		begin			
+			select @n=MAX(@cn2) from @tmp2 where accc3=@accc3 and noq=@noq
+			
+			if(@cn2=0)
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '2' else '1' end --最後一行格線有所不同
+			end
+			else
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '4' else '3' end --最後一行格線有所不同
+			end			
+			insert into @tmp3(page,nn,gno
+				,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+			select @page,@curline%@rowline,@gno		
+				,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker
+			set @curline = @curline + 1
+			--是否換頁
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+			
+			fetch next from cursor_table2
+			into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		while(@rowline-@curline%@rowline != @endline)
+		begin
+			insert into @tmp3(page,nn,gno,accc1,accc2,accc3,zno,worker)
+			select @page,@curline%@rowline,case when (@curline+1)%@rowline=0 then '9' else '0' end,@accc1,@accc2,@accc3,@zno,@worker
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+		--合計
+		select @dmoney=0,@cmoney=0
+		select @dmoney=SUM(dmoney),@cmoney=SUM(cmoney) from @tmp2 where accc3=@accc3
+
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'5',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'6',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'7',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'8',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		
+		fetch next from cursor_table
+		into @accc3,@accc2,@accc1
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	select a.* 
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +case a.accc1 when '1' then '現金收入傳票' when '2' then '現金支出傳票' when '3' then '轉帳傳票' end +'('+LEFT(@t_accy,3)+')'+'</a>' titela 
+	,a.page+1 pp1
+	,b.page+1 pp2
+	,case when isnull(a.dmoney,0)=0 and a.accc4='借' then '0' when isnull(a.dmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.dmoney),1)),4,17)) end dd
+	,case when isnull(a.cmoney,0)=0 and a.accc4!='借' then '0' when isnull(a.cmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.cmoney),1)),4,17)) end cc
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc6+'</a>' caccc6
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc7+'</a>' caccc7
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.zno+'</a>' czno
+	from @tmp3 a
+	outer apply (select max(page) page from @tmp3 b where accc3=a.accc3) b
+	order by a.accc3,a.page,a.nn;
+	
+z_acccp07:--z_acccp07 不分部門
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_rank nvarchar(20) = '[2]'
+	declare @t_bno nvarchar(20) = [3]
+	declare @t_eno nvarchar(20) = [4]
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	----------------------------------------------------------------------------------------------	
+	declare @tmp table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	set @cmd =
+	" select a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7"+
+	" 	,isnull(a.dmoney,0),isnull(a.cmoney,0),'','',a.noq,b.zno,b.worker"+
+	" from acccs"+@t_accy+" a "+
+	" left join accc"+@t_accy+" b on a.accc3=b.accc3"+
+	" left join acpart"+@t_accy+" c on a.part=c.noa"+
+	" where (a.accc3 between @t_bno and @t_eno)"+
+	" and (b.accc3 is not null) "+
+	" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+	""
+	insert into @tmp(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+	execute sp_executesql @cmd,N'@t_bno nvarchar(20),@t_eno nvarchar(20),@islock int'
+	,@t_bno=@t_bno,@t_eno=@t_eno,@islock=@islock
+	--------------------------------------------------------------------------------------------------
+	declare @n int
+	declare @m int
+	declare @accc1 nvarchar(10)
+	declare @accc2 nvarchar(10)
+	declare @accc3 nvarchar(20)
+	declare @accc4 nvarchar(20)
+	declare @accc5 nvarchar(20)
+	declare @accc6 nvarchar(max)
+	declare @accc7 nvarchar(max)
+	declare @dmoney float
+	declare @cmoney float 
+	declare @partno nvarchar(20)
+	declare @part nvarchar(20)
+	declare @noq nvarchar(20)
+	declare @cn1 int
+	declare @cn2 int
+	declare @zno nvarchar(max)
+	declare @worker nvarchar(max)
+	--------------------------------------------------------------------------------------------------
+	--銀行帳號只顯示後面的碼數
+	declare cursor_table cursor for
+	select accc3,noq,accc5,rtrim(ltrim(accc6)) from @tmp where len(isnull(accc6,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@noq,@accc5,@accc6
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		if(LEFT(@accc5,4)='1112')
+		begin
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,6) where accc3=@accc3 and noq=@noq
+				end
+			end	
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,7) where accc3=@accc3 and noq=@noq
+				end
+			end	
+		end
+
+		fetch next from cursor_table
+		into @accc3,@noq,@accc5,@accc6
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	--摘要太長分多行
+	declare @tmp2 table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max),
+		cn1 int,
+		cn2 int
+	)
+	declare @tmpString nvarchar(max)
+	declare @maxcount_accc6 int
+	set @maxcount_accc6 = 16
+	declare @maxcount_accc7 int
+	set @maxcount_accc7 = 30
+	declare @string nvarchar(max)
+	
+	declare cursor_table cursor for
+	select accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker
+		,row_number()over(order by accc3,noq)
+	from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+		values(@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1,0)
+		--accc6
+		set @accc6=REPLACE(@accc6,'  ','')
+		select @n=0,@string=@accc6,@tmpString="",@cn2=0
+		
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc6)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc6=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		--accc7
+		set @accc7=REPLACE(@accc7,'  ','')
+		select @n=0,@string=@accc7,@tmpString="",@cn2=0
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc7)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc7=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		fetch next from cursor_table
+		into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	--分頁
+	declare @tmp3 table(
+		page int,
+		nn int,
+		gno nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	set @rowline = 14
+	set @endline = 4
+	
+	declare @gno nvarchar(10)
+	
+	set @curline = 0
+	declare cursor_table cursor for
+	select accc3,accc2,accc1 from @tmp2 group by accc3,accc2,accc1
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@accc2,@accc1
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @page = 0,@zno='',@worker=''
+		select @zno=zno,@worker=worker from @tmp2 where accc3=@accc3
+		
+		declare cursor_table2 cursor for
+		select accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2 from @tmp2 where accc3=@accc3
+		open cursor_table2
+		fetch next from cursor_table2
+		into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		while(@@FETCH_STATUS <> -1)
+		begin			
+			select @n=MAX(@cn2) from @tmp2 where accc3=@accc3 and noq=@noq
+			
+			if(@cn2=0)
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '2' else '1' end --最後一行格線有所不同
+			end
+			else
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '4' else '3' end --最後一行格線有所不同
+			end			
+			insert into @tmp3(page,nn,gno
+				,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+			select @page,@curline%@rowline,@gno		
+				,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker
+			set @curline = @curline + 1
+			--是否換頁
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+			
+			fetch next from cursor_table2
+			into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		while(@rowline-@curline%@rowline != @endline)
+		begin
+			insert into @tmp3(page,nn,gno,accc1,accc2,accc3,zno,worker)
+			select @page,@curline%@rowline,case when (@curline+1)%@rowline=0 then '9' else '0' end,@accc1,@accc2,@accc3,@zno,@worker
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+		--合計
+		select @dmoney=0,@cmoney=0
+		select @dmoney=SUM(dmoney),@cmoney=SUM(cmoney) from @tmp2 where accc3=@accc3
+
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'5',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'6',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'7',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'8',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		
+		fetch next from cursor_table
+		into @accc3,@accc2,@accc1
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	select a.* 
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +case a.accc1 when '1' then '現金收入傳票' when '2' then '現金支出傳票' when '3' then '轉帳傳票' end +'('+LEFT(@t_accy,3)+')'+'</a>' titela 
+	,a.page+1 pp1
+	,b.page+1 pp2
+	,case when isnull(a.dmoney,0)=0 and a.accc4='借' then '0' when isnull(a.dmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.dmoney),1)),4,17)) end dd
+	,case when isnull(a.cmoney,0)=0 and a.accc4!='借' then '0' when isnull(a.cmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.cmoney),1)),4,17)) end cc
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc6+'</a>' caccc6
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc7+'</a>' caccc7
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.zno+'</a>' czno
+	from @tmp3 a
+	outer apply (select max(page) page from @tmp3 b where accc3=a.accc3) b
+	order by a.accc3,a.page,a.nn;
+z_acccp06:--z_acccp06
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_rank nvarchar(20) = '[2]'
+	declare @t_bno nvarchar(20) = [3]
+	declare @t_eno nvarchar(20) = [4]
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	----------------------------------------------------------------------------------------------	
+	declare @tmp table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	set @cmd =
+	" select a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7"+
+	" 	,isnull(a.dmoney,0),isnull(a.cmoney,0),a.part,c.part,a.noq,b.zno,b.worker"+
+	" from acccs"+@t_accy+" a "+
+	" left join accc"+@t_accy+" b on a.accc3=b.accc3"+
+	" left join acpart"+@t_accy+" c on a.part=c.noa"+
+	" where (a.accc3 between @t_bno and @t_eno)"+
+	" and (b.accc3 is not null) "+
+	" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+	""
+	insert into @tmp(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+	execute sp_executesql @cmd,N'@t_bno nvarchar(20),@t_eno nvarchar(20),@islock int'
+	,@t_bno=@t_bno,@t_eno=@t_eno,@islock=@islock
+	--------------------------------------------------------------------------------------------------
+	declare @n int
+	declare @m int
+	declare @accc1 nvarchar(10)
+	declare @accc2 nvarchar(10)
+	declare @accc3 nvarchar(20)
+	declare @accc4 nvarchar(20)
+	declare @accc5 nvarchar(20)
+	declare @accc6 nvarchar(max)
+	declare @accc7 nvarchar(max)
+	declare @dmoney float
+	declare @cmoney float 
+	declare @partno nvarchar(20)
+	declare @part nvarchar(20)
+	declare @noq nvarchar(20)
+	declare @cn1 int
+	declare @cn2 int
+	declare @zno nvarchar(max)
+	declare @worker nvarchar(max)
+	--------------------------------------------------------------------------------------------------
+	--銀行帳號只顯示後面的碼數
+	declare cursor_table cursor for
+	select accc3,noq,accc5,rtrim(ltrim(accc6)) from @tmp where len(isnull(accc6,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@noq,@accc5,@accc6
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		if(LEFT(@accc5,4)='1112')
+		begin
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,6) where accc3=@accc3 and noq=@noq
+				end
+			end	
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,7) where accc3=@accc3 and noq=@noq
+				end
+			end	
+		end
+
+		fetch next from cursor_table
+		into @accc3,@noq,@accc5,@accc6
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	--摘要太長分多行
+	declare @tmp2 table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max),
+		cn1 int,
+		cn2 int
+	)
+	declare @tmpString nvarchar(max)
+	declare @maxcount_accc6 int
+	set @maxcount_accc6 = 16
+	declare @maxcount_accc7 int
+	set @maxcount_accc7 = 30
+	declare @string nvarchar(max)
+	
+	set @noq = ''
+	declare cursor_table cursor for
+	select a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,b.accc7,a.partno,a.part,a.zno,a.worker
+	,a.dmoney,a.cmoney
+	,row_number()over(order by a.accc3)
+	from(
+		select accc1,accc2,accc3,accc4,accc5,accc6,partno,part,zno,worker,sum(isnull(dmoney,0)) dmoney,sum(isnull(cmoney,0)) cmoney
+		from @tmp
+		group by accc1,accc2,accc3,accc4,accc5,accc6,partno,part,zno,worker) a
+	outer apply (select top(1) accc7 from @tmp where accc3=a.accc3 and accc5=a.accc5  
+		order by case when a.dmoney>a.cmoney and dmoney>0 then 1
+					  when a.cmoney>a.dmoney and cmoney>0 then 2
+					  else 3 end	
+			,noq) b
+	open cursor_table
+	fetch next from cursor_table
+	into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@partno,@part,@zno,@worker,@dmoney,@cmoney,@cn1
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+		values(@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1,0)
+		--accc6
+		set @accc6=REPLACE(@accc6,'  ','')
+		select @n=0,@string=@accc6,@tmpString="",@cn2=0
+		
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc6)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc6=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		--accc7
+		set @accc7=REPLACE(@accc7,'  ','')
+		select @n=0,@string=@accc7,@tmpString="",@cn2=0
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc7)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc7=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		fetch next from cursor_table
+		into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@partno,@part,@zno,@worker,@dmoney,@cmoney,@cn1
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	--分頁
+	declare @tmp3 table(
+		page int,
+		nn int,
+		gno nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	set @rowline = 14
+	set @endline = 4
+	
+	declare @gno nvarchar(10)
+	
+	set @curline = 0
+	declare cursor_table cursor for
+	select accc3,accc2,accc1 from @tmp2 group by accc3,accc2,accc1
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@accc2,@accc1
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @page = 0,@zno='',@worker=''
+		select @zno=zno,@worker=worker from @tmp2 where accc3=@accc3
+		
+		declare cursor_table2 cursor for
+		select accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2 from @tmp2 where accc3=@accc3
+		open cursor_table2
+		fetch next from cursor_table2
+		into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		while(@@FETCH_STATUS <> -1)
+		begin			
+			select @n=MAX(@cn2) from @tmp2 where accc3=@accc3 and noq=@noq
+			
+			if(@cn2=0)
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '2' else '1' end --最後一行格線有所不同
+			end
+			else
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '4' else '3' end --最後一行格線有所不同
+			end			
+			insert into @tmp3(page,nn,gno
+				,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+			select @page,@curline%@rowline,@gno		
+				,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker
+			set @curline = @curline + 1
+			--是否換頁
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+			
+			fetch next from cursor_table2
+			into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		while(@rowline-@curline%@rowline != @endline)
+		begin
+			insert into @tmp3(page,nn,gno,accc1,accc2,accc3,zno,worker)
+			select @page,@curline%@rowline,case when (@curline+1)%@rowline=0 then '9' else '0' end,@accc1,@accc2,@accc3,@zno,@worker
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+		--合計
+		select @dmoney=0,@cmoney=0
+		select @dmoney=SUM(dmoney),@cmoney=SUM(cmoney) from @tmp2 where accc3=@accc3
+
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'5',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'6',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'7',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'8',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		
+		fetch next from cursor_table
+		into @accc3,@accc2,@accc1
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	select a.* 
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +case a.accc1 when '1' then '現金收入傳票' when '2' then '現金支出傳票' when '3' then '轉帳傳票' end +'('+LEFT(@t_accy,3)+')'+'</a>' titela 
+	,a.page+1 pp1
+	,b.page+1 pp2
+	,case when isnull(a.dmoney,0)=0 and a.accc4='借' then '0' when isnull(a.dmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.dmoney),1)),4,17)) end dd
+	,case when isnull(a.cmoney,0)=0 and a.accc4!='借' then '0' when isnull(a.cmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.cmoney),1)),4,17)) end cc
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc6+'</a>' caccc6
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc7+'</a>' caccc7
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.zno+'</a>' czno
+	from @tmp3 a
+	outer apply (select max(page) page from @tmp3 b where accc3=a.accc3) b
+	order by a.accc3,a.page,a.nn;
+	
+z_acccp05:--z_acccp05
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_rank nvarchar(20) = '[2]'
+	declare @t_bno nvarchar(20) = [3]
+	declare @t_eno nvarchar(20) = [4]
+	----------------------------------------------------------------------------------------------	
+	set @islock = case when cast(@t_rank as int)>=8 then 0 else 1 end --鎖定的不顯示
+	----------------------------------------------------------------------------------------------	
+	declare @tmp table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	set @cmd =
+	" select a.accc1,a.accc2,a.accc3,a.accc4,a.accc5,a.accc6,a.accc7"+
+	" 	,isnull(a.dmoney,0),isnull(a.cmoney,0),a.part,c.part,a.noq,b.zno,b.worker"+
+	" from acccs"+@t_accy+" a "+
+	" left join accc"+@t_accy+" b on a.accc3=b.accc3"+
+	" left join acpart"+@t_accy+" c on a.part=c.noa"+
+	" where (a.accc3 between @t_bno and @t_eno)"+
+	" and (b.accc3 is not null) "+
+	" and ((@islock=0) or (@islock=1 and isnull(b.lok,0)=0))"+
+	""
+	insert into @tmp(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+	execute sp_executesql @cmd,N'@t_bno nvarchar(20),@t_eno nvarchar(20),@islock int'
+	,@t_bno=@t_bno,@t_eno=@t_eno,@islock=@islock
+	--------------------------------------------------------------------------------------------------
+	declare @n int
+	declare @m int
+	declare @accc1 nvarchar(10)
+	declare @accc2 nvarchar(10)
+	declare @accc3 nvarchar(20)
+	declare @accc4 nvarchar(20)
+	declare @accc5 nvarchar(20)
+	declare @accc6 nvarchar(max)
+	declare @accc7 nvarchar(max)
+	declare @dmoney float
+	declare @cmoney float 
+	declare @partno nvarchar(20)
+	declare @part nvarchar(20)
+	declare @noq nvarchar(20)
+	declare @cn1 int
+	declare @cn2 int
+	declare @zno nvarchar(max)
+	declare @worker nvarchar(max)
+	--------------------------------------------------------------------------------------------------
+	--銀行帳號只顯示後面的碼數
+	declare cursor_table cursor for
+	select accc3,noq,accc5,rtrim(ltrim(accc6)) from @tmp where len(isnull(accc6,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@noq,@accc5,@accc6
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		if(LEFT(@accc5,4)='1112')
+		begin
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,6) where accc3=@accc3 and noq=@noq
+				end
+			end	
+			if(@accc6 LIKE '%-[0-9][0-9][0-9][0-9][0-9][0-9][0-9]' ESCAPE '/')
+			begin
+				set @m = CHARINDEX(' ',@accc6)
+				if(@m=0)
+				begin
+					set @m = patindex('%-[0-9]%',@accc6)
+					set @m = case when @m>0 then @m-1 else @m end
+				end
+				if(@m>0)
+				begin
+					update @tmp set accc6 = SUBSTRING(@accc6,1,@m) + right(@accc6,7) where accc3=@accc3 and noq=@noq
+				end
+			end	
+		end
+
+		fetch next from cursor_table
+		into @accc3,@noq,@accc5,@accc6
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	--摘要太長分多行
+	declare @tmp2 table(
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max),
+		cn1 int,
+		cn2 int
+	)
+	declare @tmpString nvarchar(max)
+	declare @maxcount_accc6 int
+	set @maxcount_accc6 = 16
+	declare @maxcount_accc7 int
+	set @maxcount_accc7 = 30
+	declare @string nvarchar(max)
+	
+	declare cursor_table cursor for
+	select accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker
+		,row_number()over(order by accc3,noq)
+	from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+		values(@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1,0)
+		--accc6
+		set @accc6=REPLACE(@accc6,'  ','')
+		select @n=0,@string=@accc6,@tmpString="",@cn2=0
+		
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc6)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc6=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc6,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		--accc7
+		set @accc7=REPLACE(@accc7,'  ','')
+		select @n=0,@string=@accc7,@tmpString="",@cn2=0
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount_accc7)
+			begin
+				if exists(select * from @tmp2 where accc3=@accc3 and cn1=@cn1 and cn2=@cn2)
+				begin
+					update @tmp2 set accc7=@tmpString where accc3=@accc3 and cn1=@cn1 and cn2=@cn2
+				end
+				else
+				begin
+					insert into @tmp2(accc1,accc2,accc3,accc4,accc5,accc7,dmoney,cmoney,partno,part,noq,zno,worker,cn1,cn2)
+					values(@accc1,@accc2,@accc3,@accc4,@accc5,@tmpString,0,0,@partno,@part,@noq,@zno,@worker,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ""
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		fetch next from cursor_table
+		into @accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker,@cn1
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	--分頁
+	declare @tmp3 table(
+		page int,
+		nn int,
+		gno nvarchar(10),
+	
+		accc1 nvarchar(10),
+		accc2 nvarchar(10),
+		accc3 nvarchar(20),
+		accc4 nvarchar(20),
+		accc5 nvarchar(20),
+		accc6 nvarchar(max),
+		accc7 nvarchar(max),	
+		dmoney float,
+		cmoney float,
+		partno nvarchar(20),
+		part nvarchar(20),
+		noq nvarchar(10),
+		zno nvarchar(max),
+		worker nvarchar(max)
+	)
+	
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	set @rowline = 14
+	set @endline = 4
+	
+	declare @gno nvarchar(10)
+	
+	set @curline = 0
+	declare cursor_table cursor for
+	select accc3,accc2,accc1 from @tmp2 group by accc3,accc2,accc1
+	open cursor_table
+	fetch next from cursor_table
+	into @accc3,@accc2,@accc1
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @page = 0,@zno='',@worker=''
+		select @zno=zno,@worker=worker from @tmp2 where accc3=@accc3
+		
+		declare cursor_table2 cursor for
+		select accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,cn1,cn2 from @tmp2 where accc3=@accc3
+		open cursor_table2
+		fetch next from cursor_table2
+		into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		while(@@FETCH_STATUS <> -1)
+		begin			
+			select @n=MAX(@cn2) from @tmp2 where accc3=@accc3 and noq=@noq
+			
+			if(@cn2=0)
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '2' else '1' end --最後一行格線有所不同
+			end
+			else
+			begin
+				set @gno = case when (@curline+1)%@rowline=0 then '4' else '3' end --最後一行格線有所不同
+			end			
+			insert into @tmp3(page,nn,gno
+				,accc1,accc2,accc3,accc4,accc5,accc6,accc7,dmoney,cmoney,partno,part,noq,zno,worker)
+			select @page,@curline%@rowline,@gno		
+				,@accc1,@accc2,@accc3,@accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@zno,@worker
+			set @curline = @curline + 1
+			--是否換頁
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+			
+			fetch next from cursor_table2
+			into @accc4,@accc5,@accc6,@accc7,@dmoney,@cmoney,@partno,@part,@noq,@cn1,@cn2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		while(@rowline-@curline%@rowline != @endline)
+		begin
+			insert into @tmp3(page,nn,gno,accc1,accc2,accc3,zno,worker)
+			select @page,@curline%@rowline,case when (@curline+1)%@rowline=0 then '9' else '0' end,@accc1,@accc2,@accc3,@zno,@worker
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+		--合計
+		select @dmoney=0,@cmoney=0
+		select @dmoney=SUM(dmoney),@cmoney=SUM(cmoney) from @tmp2 where accc3=@accc3
+
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'5',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'6',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'7',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		insert into @tmp3(page,nn,gno,accc1,accc2,accc3,dmoney,cmoney,zno,worker)
+		select @page,@curline%@rowline,'8',@accc1,@accc2,@accc3,@dmoney,@cmoney,@zno,@worker
+		set @curline = @curline + 1
+		
+		fetch next from cursor_table
+		into @accc3,@accc2,@accc1
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	select a.* 
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +case a.accc1 when '1' then '現金收入傳票' when '2' then '現金支出傳票' when '3' then '轉帳傳票' end +'('+LEFT(@t_accy,3)+')'+'</a>' titela 
+	,a.page+1 pp1
+	,b.page+1 pp2
+	,case when isnull(a.dmoney,0)=0 and a.accc4='借' then '0' when isnull(a.dmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.dmoney),1)),4,17)) end dd
+	,case when isnull(a.cmoney,0)=0 and a.accc4!='借' then '0' when isnull(a.cmoney,0)=0 then '' else reverse(substring(reverse(convert(nvarchar(20),CONVERT(money,a.cmoney),1)),4,17)) end cc
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc6+'</a>' caccc6
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.accc7+'</a>' caccc7
+	,'<a style="font-family: Times New Roman,標楷體, serif'+CHAR(59)+'">' +a.zno+'</a>' czno
+	from @tmp3 a
+	outer apply (select max(page) page from @tmp3 b where accc3=a.accc3) b
+	order by a.accc3,a.page,a.nn;
+
 z_acccp04:--z_acccp04     SQL與z_acccp02 一樣,  XLS格式不同而已
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
