@@ -1300,46 +1300,133 @@ declare @t_bxsssno nvarchar(10)
 declare @t_exsssno nvarchar(10) 
 set @t_bxsssno = case when '#non' = [1] then '' else [1] end 
 set @t_exsssno = case when '#non' = [2] then CHAR(255) else [2] end
-declare @tmp table( 
-gno nvarchar(1), 
-noa nvarchar(10), 
-mon nvarchar(10), 
-namea nvarchar(50), 
-he_comp float, 
-la_comp float, 
-re_comp float, 
-he_person float, 
-la_person float, 
-re_person float, 
-total1 float, 
-total2 float, 
-payc nvarchar(20), 
-pay float, 
-unpay float, 
-salary float, 
-sa_retire float, 
-sa_labor float, 
-sa_health float, 
-mount float, 
-disaster float, 
-comp nvarchar(90) 
+------------------------------------------------------------------------------------------------------------------------------------------------
+declare @cmd nvarchar(max) 
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(1), 
+	noa nvarchar(10), 
+	mon nvarchar(10), 
+	namea nvarchar(50), 
+	he_comp float, 
+	la_comp float, 
+	re_comp float, 
+	he_person float, 
+	la_person float, 
+	re_person float, 
+	total1 float, 
+	total2 float, 
+	payc nvarchar(20), 
+	pay float, 
+	unpay float, 
+	salary float, 
+	sa_retire float, 
+	sa_labor float, 
+	sa_health float, 
+	mount float, 
+	disaster float, 
+	comp nvarchar(90) 
 ) 
 
-insert into @tmp 
+insert into #tmp 
 select '0' gno,a.noa,mon,(select namea from labase where labase.noa = a.noa) namea, 
-a.he_comp,a.la_comp,a.re_comp,a.he_person, a.la_person,a.re_person ,
+a.he_comp,a.la_comp,a.re_comp,a.he_person, a.la_person,a.re_person , 
 total1,total2,payc,pay,unpay,salary,sa_retire,sa_labor,sa_health, 
 mount,disaster,e.nick 
-from salinsures a
-left join acomp e on a.cno=e.noa
-where (mon between @t_bxmon and @t_exmon) and
-(a.noa between @t_bxsssno and @t_exsssno)
+from salinsures a 
+left join acomp e on a.cno=e.noa 
+where (mon between @t_bxmon and @t_exmon) and 
+(a.noa between @t_bxsssno and @t_exsssno) 
 
-insert into @tmp 
+declare @noa nvarchar(50)
+declare @hbdate nvarchar(10)
+declare @hedate nvarchar(10)
+declare @lbdate nvarchar(10)
+declare @ledate nvarchar(10)
+declare @rbdate nvarchar(10)
+declare @redate nvarchar(10)
+declare @where nvarchar(MAX)
+declare @mindate nvarchar(MAX)
+declare @maxdate nvarchar(MAX)
+
+declare cursor_table cursor for 
+select noa from #tmp group by noa
+open cursor_table 
+fetch next from cursor_table 
+into @noa
+while(@@FETCH_STATUS <> -1) 
+begin 
+	set @where=''
+	declare cursor_table2 cursor for 
+	select health_bdate,health_edate,labor_bdate,labor_edate,retire_bdate,retire_edate from labased where noa=@noa
+	open cursor_table2 
+	fetch next from cursor_table2
+	into @hbdate,@hedate,@lbdate,@ledate,@rbdate,@redate
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+		set @mindate='999/99/99' set @maxdate=''
+
+		if @mindate>@hbdate
+			set @mindate=@hbdate
+		if @mindate>@lbdate
+			set @mindate=@lbdate
+		if @mindate>@rbdate
+			set @mindate=@rbdate
+		
+		if @maxdate<@hedate
+			set @maxdate=@hedate
+		if @maxdate<@ledate
+			set @maxdate=@ledate
+		if @maxdate<@redate
+			set @maxdate=@redate
+		if @maxdate=''
+			set @maxdate=CHAR(255)
+		
+		
+		if(LEN(@where)>0)
+		begin
+			set @where=@where+" and mon not between "
+		end
+		else
+		begin
+			set @where=@where+" mon not between "
+		end
+		
+		if(@mindate='') 
+			set @where=@where+"'' and "
+		else 
+			set @where=@where+" left('"+@mindate+"',6) and "
+			
+		if(@maxdate=CHAR(255)) 	
+			set @where=@where+" CHAR(255)"
+		else
+			set @where=@where+" left('"+@maxdate+"',6) "
+		
+		fetch next from cursor_table2
+		into @hbdate,@hedate,@lbdate,@ledate,@rbdate,@redate
+	end 
+	close cursor_table2
+	deallocate cursor_table2
+	
+	if(LEN(@where)>0)
+		EXEC("delete #tmp where noa='"+@noa+"' and ("+@where+")")
+		--select @noa,@where
+	fetch next from cursor_table 
+	into @noa
+end 
+close cursor_table 
+deallocate cursor_table 
+
+insert into #tmp 
 select '1' gno,noa,'',namea,SUM(he_comp),SUM(la_comp),SUM(re_comp),SUM(he_person),SUM(la_person), 
 SUM(re_person),SUM(total1),SUM(total2),'',SUM(pay),SUM(unpay),SUM(salary),SUM(sa_retire), 
 SUM(sa_labor),SUM(sa_health),SUM(mount),SUM(disaster),'' 
-from @tmp 
+from #tmp 
 group by noa,namea 
 
 select gno, noa,mon,namea, 
@@ -1359,8 +1446,76 @@ reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,sa_retire),1)),4,12
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,sa_labor),1)),4,12)) sa_labor, 
 reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,sa_health),1)),4,12)) sa_health, 
 mount,disaster,comp 
-from @tmp order by noa,gno;
------------------------------------------------------------------------------------------------
+from #tmp order by noa,gno 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
+
+--declare @tmp table( 
+--gno nvarchar(1), 
+--noa nvarchar(10), 
+--mon nvarchar(10), 
+--namea nvarchar(50), 
+--he_comp float, 
+--la_comp float, 
+--re_comp float, 
+--he_person float, 
+--la_person float, 
+--re_person float, 
+--total1 float, 
+--total2 float, 
+--payc nvarchar(20), 
+--pay float, 
+--unpay float, 
+--salary float, 
+--sa_retire float, 
+--sa_labor float, 
+--sa_health float, 
+--mount float, 
+--disaster float, 
+--comp nvarchar(90) 
+--) 
+
+--insert into @tmp 
+--select '0' gno,a.noa,mon,(select namea from labase where labase.noa = a.noa) namea, 
+--a.he_comp,a.la_comp,a.re_comp,a.he_person, a.la_person,a.re_person ,
+--total1,total2,payc,pay,unpay,salary,sa_retire,sa_labor,sa_health, 
+--mount,disaster,e.nick 
+--from salinsures a
+--left join acomp e on a.cno=e.noa
+--where (mon between @t_bxmon and @t_exmon) and
+--(a.noa between @t_bxsssno and @t_exsssno)
+
+--insert into @tmp 
+--select '1' gno,noa,'',namea,SUM(he_comp),SUM(la_comp),SUM(re_comp),SUM(he_person),SUM(la_person), 
+--SUM(re_person),SUM(total1),SUM(total2),'',SUM(pay),SUM(unpay),SUM(salary),SUM(sa_retire), 
+--SUM(sa_labor),SUM(sa_health),SUM(mount),SUM(disaster),'' 
+--from @tmp 
+--group by noa,namea 
+
+--select gno, noa,mon,namea, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,he_person),1)),4,12)) he_person, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,he_comp),1)),4,12)) he_comp, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,la_person),1)),4,12)) la_person, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,la_comp),1)),4,12)) la_comp, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,re_person),1)),4,12)) re_person, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,re_comp),1)),4,12)) re_comp, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total1),1)),4,12)) total1, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total2),1)),4,12)) total2, 
+--payc, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,pay),1)),4,12)) pay, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,salary),1)),4,12)) salary, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,sa_retire),1)),4,12)) sa_retire, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,sa_labor),1)),4,12)) sa_labor, 
+--reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,sa_health),1)),4,12)) sa_health, 
+--mount,disaster,comp 
+--from @tmp order by noa,gno
+----------------------------------------------------------------------------------------------
 z_labase8:--z_labase8
 declare @t_bxmon nvarchar(20)
 declare @t_exmon nvarchar(20)
