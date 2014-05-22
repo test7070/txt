@@ -3,10 +3,12 @@ declare @t_bdate nvarchar(10)
 declare @t_edate nvarchar(10)
 declare @t_bstationno nvarchar(10)
 declare @t_estationno nvarchar(10)
+declare @t_showover nvarchar(10)
 set @t_bdate = case when '#non' = [1] then '' else [1] end
 set @t_edate = case when '#non' = [2] then @t_bdate else [2] end
 set @t_bstationno = case when '#non' = [4] then '' else [4] end
 set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+set @t_showover = case when '#non' = [9] then '' else [9] end
 declare @tmp table(
 	gno nvarchar(10),
 	stationno nvarchar(50),
@@ -17,7 +19,7 @@ declare @tmp table(
 )
 insert into @tmp
 	select
-		'0' gno,a.stationno,b.station,a.datea,isnull(c.gen,isnull(b.gen,0)),sum(a.hours)
+		'99' gno,a.stationno,b.station,a.datea,isnull(c.gen,isnull(b.gen,0)),sum(a.hours)
 	from view_cugu a
 	left join station b on (a.stationno=b.noa)
 	outer apply(select top 1 gen from view_cugt where (datea=a.datea) and (stationno=a.stationno)) c
@@ -25,6 +27,17 @@ insert into @tmp
 		  (a.stationno between @t_bstationno and @t_estationno) and
 		  (isnull(a.workno,'') != '')
 	group by a.stationno,b.station,a.datea,c.gen,b.gen
+update @tmp set gen=8 where gen=0
+insert into @tmp
+	select
+		'0' gno,a.stationno,a.station,a.datea,a.gen,sum(a.mount)
+	from @tmp a
+	group by a.stationno,a.station,a.datea,a.gen
+delete @tmp where gno='99' or mount=0
+if(@t_showover='1')
+begin
+	delete @tmp where mount<gen
+end
 select
 	a.gno,a.stationno,a.station,a.datea,a.gen,a.mount
 from @tmp a
@@ -309,9 +322,9 @@ insert into @tmp
  			 (isnull(c.noa,'') != '')/*----預防 cugu有work被刪掉*/ and (isnull(c.tggno,'')='')
 insert into @tmp(gno,stationno,stations,datea,gen,mount,hours)
 	select
-		'1' gno,a.stationno,a.stations,a.datea,avg(a.gen),sum(a.mount),sum(a.hours)
+		'1' gno,a.stationno,a.stations,char(255),avg(a.gen),sum(a.mount),sum(a.hours)
 	from @tmp a
-	group by a.stationno,a.stations,a.datea
+	group by a.stationno,a.stations
 update @tmp set rate = (isnull(gen,0)-isnull(hours,0)) where gno='1'
 if(@t_showdiff='1')
 begin
@@ -332,14 +345,14 @@ begin
 	close cursor_table
 	deallocate cursor_table
 end
-insert into @tmp(gno,stationno,datea)
-	select '2' gno,char(255),a.datea from @tmp a where gno='0' group by a.datea
+insert into @tmp(gno,stationno,stations,datea)
+	select '2' gno,a.stationno,a.stations,char(255) from @tmp a where gno='0' group by a.stationno,a.stations
 select
 	a.gno,a.accy,a.stationno,a.stations,a.gen,a.datea,a.cuadate,a.uindate,
 	a.workno,a.productno,a.mount,a.unit,a.hours,a.rate,
 	'work?left(noa,'+cast(len(a.workno) as nvarchar)+')=$workno?'+a.accy qhref
 from @tmp a
-order by a.datea,a.stationno,a.gno;
+order by a.stationno,a.datea,a.gno;
 --------------------------------------------------------------------------------------------------------*
 z_workgg5:--z_workgg5
 declare @t_bdate nvarchar(10)
@@ -348,12 +361,14 @@ declare @t_bstationno nvarchar(max)
 declare @t_estationno nvarchar(max)
 declare @t_bproductno nvarchar(max)
 declare @t_eproductno nvarchar(max)
+declare @t_xgroupano nvarchar(max)
 set @t_bdate = case when '#non' = [1] then '' else [1] end
 set @t_edate = case when '#non' = [2] then char(255) else [2] end
 set @t_bstationno = case when '#non' = [4] then '' else [4] end
 set @t_estationno = case when '#non' = [5] then char(255) else [5] end
 set @t_bproductno = case when '#non' = [7] then '' else [7] end
 set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_xgroupano = case when '#non' = [6] then '' else [6] end
 declare @tmp table(
 	gno nvarchar(10),
 	datea nvarchar(10),
@@ -373,10 +388,12 @@ insert into @tmp
 	left join station b on (a.stationno=b.noa)
 	left join view_work c on (a.workno=c.noa)
 	outer apply(select hours,minutes from uca where noa=c.productno) d
+	left join uca e on c.productno=e.noa
 	where (a.datea between @t_bdate and @t_edate) and
 			 (c.productno between @t_bproductno and @t_eproductno) and
-			 (a.stationno between @t_bstationno and @t_estationno)
-	group by c.productno,c.product,a.stationno,b.station,a.datea,d.hours,d.minutes
+			 (a.stationno between @t_bstationno and @t_estationno) and
+			 (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano)
+	 group by c.productno,c.product,a.stationno,b.station,a.datea,d.hours,d.minutes
 select
 	a.gno,a.datea,a.productno,a.product,a.stationno,a.station,a.gen,a.value
 from @tmp a
@@ -388,10 +405,12 @@ declare @t_edate nvarchar(10)
 declare @t_bproductno nvarchar(max)
 declare @t_eproductno nvarchar(max)
 declare @now_date nvarchar(15)
+declare @t_xgroupano nvarchar(max)
 set @t_bdate = case when '#non' = [1] then '' else [1] end
 set @t_edate = case when '#non' = [2] then char(255) else [2] end
 set @t_bproductno = case when '#non' = [7] then '' else [7] end
 set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_xgroupano = case when '#non' = [6] then '' else [6] end
 declare @tmp table(
 	gno nvarchar(10),
 	datea nvarchar(10),
@@ -405,15 +424,17 @@ insert into @tmp
 		'0' gno,a.odate,b.productno,b.product,sum(b.mount),isnull(c.mount,0)
 	from view_orde a
 	left join view_ordes b on (a.noa=b.noa)
-	outer apply(
+	left join(
 		select
-			sum(cugu.mount) mount
+			work.productno,cugu.datea,sum(cugu.mount) mount
 		from view_cugu cugu
 		left join view_work work on (cugu.workno=work.noa)
-		where (work.productno=b.productno) and (cugu.datea=a.odate)
-	) c
+		group by work.productno,cugu.datea
+	) c on (c.productno=b.productno) and (c.datea=a.odate)
+	left join uca e on b.productno=e.noa
 	where (a.odate between @t_bdate and @t_edate) and
-		  (b.productno between @t_bproductno and @t_eproductno)
+		  (b.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano)
 	group by a.odate,b.productno,b.product,c.mount
 	order by a.odate
 select
@@ -427,10 +448,12 @@ declare @t_edate nvarchar(10)
 declare @t_bproductno nvarchar(max)
 declare @t_eproductno nvarchar(max)
 declare @now_date nvarchar(15)
+declare @t_xgroupano nvarchar(max)
 set @t_bdate = case when '#non' = [1] then '' else [1] end
 set @t_edate = case when '#non' = [2] then char(255) else [2] end
 set @t_bproductno = case when '#non' = [7] then '' else [7] end
 set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_xgroupano = case when '#non' = [6] then '' else [6] end
 declare @tmp table(
 	gno nvarchar(10),
 	datea nvarchar(10),
@@ -443,8 +466,10 @@ insert into @tmp
 		'0' gno,a.datea,b.productno,b.product,sum(a.mount)
 	from view_cugu a
 	left join view_work b on a.workno=b.noa
+	left join uca e on b.productno=e.noa
 	where (a.datea between @t_bdate and @t_edate) and
-		  (b.productno between @t_bproductno and @t_eproductno)
+		  (b.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano)
 	group by a.datea,b.productno,b.product
 	order by a.datea
 select
