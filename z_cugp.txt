@@ -457,7 +457,12 @@ declare @tmp table(
 	custno nvarchar(30),
 	comp nvarchar(90),
 	qhref nvarchar(max),
-	ordeno nvarchar(max)
+	ordeno nvarchar(max),
+	dhours float,
+	thours float,
+	dgen float,
+	gen float,
+	smount float
 )
 
 declare @tmpb table( 
@@ -475,6 +480,7 @@ declare @tmpb table(
 insert into @tmp 
 select '0',b.cuano,b.cuanoq,b.rank,a.noq,a.nos,a.stationno,b.station,b.processno,a.process,b.productno,b.product,a.mount,a.hours,a.datea,a.workno
 ,d.custno,d.comp,'work?noa=$workno?'+b.accy,b.ordeno
+,0,0,isnull((select gen from view_cugt where noa=a.stationno and datea=a.datea),0),isnull(e.gen,8),isnull(e.mount,1)
 from view_cugu a left join view_work b on a.workno=b.noa 
 left join(select noa+'-'+noq cuano,ordeno+'-'+no2 ordeno from view_cuas 
 union all select noa+'-'+noq cuano,ordeno from view_workgs)c on b.cuano+'-'+b.cuanoq=c.cuano 
@@ -484,24 +490,43 @@ and (isnull(b.processno,'') between @t_bprocess and @t_eprocess)
 and (a.datea between @t_bdate and @t_edate) 
 and a.datea!='' order by a.stationno,a.datea,a.nos,a.noq
 
+--更新累計時數
+update a
+set thours=(select SUM(hours) from @tmp where stationno=a.stationno and a.datea+'-'+a.nos+'-'+a.noq>=datea+'-'+nos+'-'+noq)
+,dhours=(select SUM(hours) from @tmp where stationno=a.stationno and a.datea=datea and a.nos+'-'+a.noq>=nos+'-'+noq)
+from @tmp a
+
 insert into @tmpb
 select '0',b.cuano,b.cuanoq,b.rank,a.noq,a.nos,a.datea,a.workno,b.ordeno 
 from view_cugu a left join view_work b on a.workno=b.noa 
 where a.datea!=''
 
-update a set rank='<font color="red">'+a.rank+'</font>',datea='<font color="red">'+a.datea+'</font>'
-from @tmp a 
-outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
-where a.rank>b.rank
+--有問題的階層
+--update a set rank='<font color="red">'+a.rank+'</font>',datea='<font color="red">'+a.datea+'</font>'
+--from @tmp a 
+--outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
+--where a.rank>b.rank
 
 insert into @tmp (gno,stationno,station,hours,mount)
 select '1',stationno,MAX(station),sum(hours),sum(mount) from @tmp group by stationno
 
-select gno,noq,nos,stationno,station,processno,process,productno pno,product,datea,workno,custno,comp,qhref,dbo.charbr(ordeno,16) ordeno
+select gno,noq,nos,stationno,station,processno,process,productno pno,product
+,(case when dhours>(case when dgen=0 then gen else dgen end) then '<font color="red">' else '' end)
++(case when a.rank>b.rank then '<font color="FA8000">' else '' end)+datea+(case when a.rank>b.rank then '</font>' else '' end)
++(case when dhours>(case when dgen=0 then gen else dgen end) then '</font>' else '' end) datea
+,workno,custno,comp,qhref,dbo.charbr(ordeno,16) ordeno
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hours),1)),0,30)) hours
+,(case when dhours>(case when dgen=0 then gen else dgen end) then '<font color="red">' else '' end)
++reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dhours),1)),0,30)) 
++(case when dhours>(case when dgen=0 then gen else dgen end) then '</font>' else '' end)dhours
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,thours),1)),0,30)) thours
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dgen),1)),0,30)) dgen
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gen),1)),0,30)) gen
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),4,30)) smount
 ,(select COUNT(*) from(select stationno,workno from @tmp where gno='0' and stationno=a.stationno and workno!='' group by stationno,workno)tmp) wmount 
-from @tmp a order by stationno,gno,REPLACE(REPLACE(datea,'<font color="red">',''),'</font>',''),nos,noq;
+from @tmp a outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b 
+order by stationno,gno,datea,nos,noq;
 --**************************************************************************************************
 z_cugp3:--z_cugp3
 declare @t_ordeno nvarchar(50)
