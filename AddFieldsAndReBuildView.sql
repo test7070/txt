@@ -1,6 +1,6 @@
 declare @alterTable nvarchar(max) = '' ----資料表名稱
 declare @addCoulmns nvarchar(max) = '' --修改一次只能一個(欄位名稱與資料型態以1個空白分隔)--EX: 'post nvarchar(50),transtyle nvarchar(15)'
-declare @isAlter int = 0 ------0=新增 1=修改
+declare @isAlter int = 0 ------0=新增 1=修改 2=更改名稱(格式為:  舊名稱->新名稱)
 declare @cmd nvarchar(max)
 declare @table_name nvarchar(max)
 declare @tmp table(
@@ -45,6 +45,12 @@ begin
 			execute sp_executesql @cmd
 		end
 		set @cmd = 'alter table ['+@table_name+'] alter column ' + @addCoulmns
+	end
+	else if(@isAlter=2)
+	begin
+		declare @oldname nvarchar(max) = substring(@addCoulmns,0,charindex('->',@addCoulmns))
+		declare @newname nvarchar(max) = substring(@addCoulmns,charindex('->',@addCoulmns)+2,len(@addCoulmns))
+		set @cmd = 'execute sp_rename '''+@table_name+'.'+@oldname+''', '''+@newname+''', ''COLUMN'';'
 	end
 	execute sp_executesql @cmd
 	print '[' + @table_name + '] -> ' + @cmd
