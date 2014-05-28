@@ -1,3 +1,105 @@
+trans_ef_copy:--trans_ef_copy 
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @workerno nvarchar(20) = [1]
+	declare @worker nvarchar(20) = [2]
+	declare @t_noa nvarchar(20) = [3]
+	declare @t_mon nvarchar(10) = [4]
+	declare @t_weekday nvarchar(max) = [5] --日一二三四五六  => 1234567
+	-----------------------------------------------------------------------------
+	if not exists(select * from view_trans where noa=@t_noa)
+	begin
+		select '單據不存在' errmsg
+		return
+	end
+	if exists(select COUNT(1) from view_trans where noa=@t_noa having COUNT(1)>1)
+	begin
+		select '單據重複' errmsg
+		return
+	end
+	--------------------------------------------------------------------------------
+	declare @tmpa table(
+		datea nvarchar(20),
+		[day] int,
+		noa nvarchar(20)
+	)
+	declare @datea date = cast(cast(left(@t_mon,3) as int)+1911 as nvarchar)+right(@t_mon,3)+'/01'
+	declare @nextdate date = @datea
+	while MONTH(@datea)=MONTH(@nextdate)
+	begin
+		insert into @tmpa(datea,[day])
+		select right('000'+cast(YEAR(@nextdate)-1911 as nvarchar),3)+'/'+right('00'+cast(MONTH(@nextdate) as nvarchar),2)+'/'+right('00'+cast(day(@nextdate) as nvarchar),2)
+		,DATEPART(WEEKDAY, @nextdate)
+		set @nextdate = dateadd(DD,1,@nextdate)
+	end
+	delete @tmpa where CHARINDEX(CAST([day] as nvarchar),@t_weekday)=0
+	-----------------------------------------------------------------------------------
+	declare @noa nvarchar(20)
+	declare @maxnoa nvarchar(20)
+	declare @xdatea nvarchar(20)
+	declare @accy nvarchar(20)
+	----------------------------------------------------
+	--排除本張出車單
+	select @xdatea=datea from view_trans where noa=@t_noa
+	delete @tmpa where datea =@xdatea
+	----------------------------------------------------
+	declare cursor_table cursor for
+	select datea from @tmpa
+	open cursor_table
+	fetch next from cursor_table
+	into @xdatea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @maxnoa = ''
+		select top 1 @maxnoa = noa from view_trans where LEFT(noa,9)='BA'+REPLACE(@xdatea,'/','') order by noa desc
+		if len(ISNULL(@maxnoa,''))=0
+		begin
+			set @maxnoa = 'BA'+REPLACE(@xdatea,'/','')+'001'
+		end
+		else
+		begin
+			set @maxnoa = LEFT(@maxnoa,9)+ right('000'+cast(cast(RIGHT(@maxnoa,3) as int)+1 as nvarchar),3)
+		end
+		if exists(select * from view_trans where noa=@maxnoa)
+		begin
+			select '【'+@maxnoa+'】單號已存在' errmsg
+			return
+		end
+		update @tmpa set noa=@maxnoa where datea=@xdatea
+
+		fetch next from cursor_table
+		into @xdatea
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------
+	declare cursor_table cursor for
+	select datea,noa from @tmpa
+	open cursor_table
+	fetch next from cursor_table
+	into @xdatea,@noa
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @accy = LEFT(@xdatea,3)
+		
+		set @cmd = " insert into trans"+@accy+"(worker,noa,noq,custno,comp,nick,driverno,driver,carno,straddrno,endaddrno,straddr,endaddr,trandate,datea,inmount,pton,mount,price,total,outmount,pton2,mount2,price2,price3,discount,total2,calctype,carteamno"
+			+" ,po,unit,sender,stel,saddr,addressee,atel,aaddr,miles,tggno,tgg,memo)"
+			+" select @worker,@noa,'001',custno,comp,nick,driverno,driver,carno,straddrno,endaddrno,straddr,endaddr,@xdatea,@xdatea,inmount,pton,mount,price,total,outmount,pton2,mount2,price2,price3,discount,total2,calctype,carteamno"
+			+" ,po,unit,sender,stel,saddr,addressee,atel,aaddr,miles,tggno,tgg,'出車單【'+@t_noa+'】複製'"
+			+" from view_trans where noa=@t_noa"
+		execute sp_executesql @cmd,N'@worker nvarchar(20),@t_noa nvarchar(20),@noa nvarchar(20),@xdatea nvarchar(20)'
+			,@worker=@worker,@t_noa=@t_noa,@noa=@noa,@xdatea=@xdatea
+		fetch next from cursor_table
+		into @xdatea,@noa 
+	end
+	--寫入DRUN
+	insert into drun(datea,timea,usera,action,noa,tablea,title)
+	select convert(nvarchar,getdate(),111),left(convert(nvarchar,getdate(),108),5)
+		,@workerno,'Insert',noa,'trans','出車單複製'
+	from @tmpa
+	
+	select * from @tmpa;
+
 tran_sum:--tran_sum
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
