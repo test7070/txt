@@ -9,12 +9,10 @@ declare @now_date nvarchar(max)
 set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
 declare @default_orde_memo nvarchar(max) = @now_date + 'Orde'
-declare @default_workg_memo nvarchar(max) = @now_date + 'Workg'
 declare @orde_deli nvarchar(max) = 'E'
-declare @workg_deli nvarchar(max) = 'WG'
 declare @t_accy nvarchar(max) = left(@now_date,3)
 declare @t_worker nvarchar(max) = [2]
-declare @import_where int = 0 ----0=匯入到訂單 1=匯入到排產
+declare @cmd nvarchar(max)
 ---------------------------------------------------------------
 declare @a nvarchar(max)
 declare @b nvarchar(max)
@@ -914,7 +912,17 @@ declare @stationg nvarchar(max)
 declare @datea nvarchar(10)
 declare @mount float
 declare @lastdatea nvarchar(10) = ''
-declare @orde table(
+IF OBJECT_ID('tempdb..#orde_tmp')is not null
+BEGIN
+	set @cmd = 'drop table #orde_tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#ordes_tmp')is not null
+BEGIN
+	set @cmd = 'drop table #ordes_tmp'
+	EXECUTE sp_executesql @cmd
+END
+create table #orde_tmp (
 	noa int,
 	datea nvarchar(10),
 	odatea nvarchar(10),
@@ -925,7 +933,7 @@ declare @orde table(
 	stype nvarchar(10),
 	memo nvarchar(max)
 )
-declare @ordes table(
+create table #ordes_tmp(
 	noa int,
 	no2 nvarchar(10),
 	productno nvarchar(max),
@@ -940,27 +948,6 @@ declare @ordes table(
 	notv float,
 	datea nvarchar(10),
 	custno nvarchar(max),
-	memo nvarchar(max)
-)
-declare @workg table(
-	noa int,
-	datea nvarchar(10),
-	stype nvarchar(10),
-	bdate nvarchar(10),
-	edate nvarchar(10),
-	worker nvarchar(50),
-	memo nvarchar(max)
-)
-declare @workgs table(
-	noa int,
-	noq nvarchar(10),
-	productno nvarchar(max),
-	product nvarchar(max),
-	spec nvarchar(max),
-	style nvarchar(max),
-	mount float,
-	stationno nvarchar(max),
-	station nvarchar(max),
 	memo nvarchar(max)
 )
 declare @w_noa int = 0
@@ -980,120 +967,73 @@ begin
 	end
 	if(@w_noq = 0)
 	begin
-		if(@import_where =0)
-		begin
-			insert into @orde
-				select @w_noa,@datea,@datea,@default_cno,@default_acomp,
-						 @default_custno,@default_comp,@default_stype,@default_orde_memo
-		end
-		if(@import_where =1)
-		begin
-			insert into @workg
-				select @w_noa,@datea,2 stype,@datea bdate,@datea edate,@t_worker worker,@default_workg_memo
-		end
+		insert into #orde_tmp
+			select @w_noa,@datea,@datea,@default_cno,@default_acomp,
+					 @default_custno,@default_comp,@default_stype,@default_orde_memo
 	end
 	set @w_noq = @w_noq+1
-		if(@import_where =0)
-		begin
-			insert into @ordes
-				select
-					@w_noa,RIGHT(REPLICATE('0', 3) + CAST(@w_noq as NVARCHAR), 3),a.productno,a.product,isnull(b.spec,''),isnull(b.style,''),isnull(b.unit,''),
-					a.mount,0 price,0 total,0 c1,a.mount notv,a.datea,@default_custno,@default_orde_memo
-				from @tmp a
-				left join view_ucaucc b on (a.productno=b.noa)
-				where a.idno=@idno
-		end
-		if(@import_where =1)
-		begin
-			insert into @workgs
-				select
-					@w_noa,RIGHT(REPLICATE('0', 3) + CAST(@w_noq as NVARCHAR), 3),a.productno,a.product,isnull(b.spec,''),isnull(b.style,''),
-					a.mount,a.stationno,a.station,@default_workg_memo
-				from @tmp a
-				left join view_ucaucc b on (a.productno=b.noa)
-				where a.idno=@idno
-		end
+	insert into #ordes_tmp
+		select
+			@w_noa,RIGHT(REPLICATE('0', 3) + CAST(@w_noq as NVARCHAR), 3),a.productno,a.product,isnull(b.spec,''),isnull(b.style,''),isnull(b.unit,''),
+			a.mount,0 price,0 total,0 c1,a.mount notv,a.datea,@default_custno,@default_orde_memo
+		from @tmp a
+		left join view_ucaucc b on (a.productno=b.noa)
+		where a.idno=@idno
 	fetch next from cursor_table
 	into @idno,@datea
 end
 close cursor_table
 deallocate cursor_table
 declare @new_noa nvarchar(max)
-if(@import_where = 0)
+-------匯入訂單All <<Start>>-------
+declare cursor_table cursor for
+	select a.noa,datea from #orde_tmp a order by a.datea
+open cursor_table
+fetch next from cursor_table
+into @idno,@datea
+while(@@FETCH_STATUS <> -1)
 begin
-	-------匯入訂單All <<Start>>-------
-	declare cursor_table cursor for
-		select a.noa,@datea from @orde a order by a.datea
-	open cursor_table
+	---------------------------取得最新的訂單編號<<Start>>
+	select @new_noa = max(noa) from view_orde where left(noa,(7+(len(@orde_deli))))=(@orde_deli + replace(@datea,'/',''))
+	if(@new_noa is null)
+	begin
+		set @new_noa = @orde_deli + replace(@datea,'/','') + '001'
+	end
+	else
+	begin
+		set @new_noa = @orde_deli + replace(@datea,'/','') + RIGHT(REPLICATE('0', 3) + CAST((cast(right(@new_noa,3) as int)+1) as NVARCHAR), 3)
+	end
+	---------------------------取得最新的訂單編號<<End>>
+	---------------------------匯入訂單<<Start>>
+	declare @thisNoaYear nvarchar(10) = left(@datea,3)
+	set @cmd = 'insert into orde'+@thisNoaYear+'(noa,datea,odate,cno,acomp,custno,comp,stype,memo,enda,isproj,cancel,tel,fax,post,addr,paytype,trantype,salesno,sales) ' + 
+						 'select ' + 
+						 'N''' + @new_noa + ''',a.datea,a.odatea,a.cno,a.acomp,a.custno,a.comp,a.stype,a.memo,0,1,0,b.tel,b.fax,b.zip_comp,b.addr_comp,b.paytype,b.trantype,b.salesno,b.sales ' + 
+						 'from #orde_tmp a ' + 
+						 'outer apply(select * from cust where noa=a.custno) b ' + 
+						 'where (a.noa='+cast(@idno as nvarchar)+') '
+	EXECUTE sp_executesql @cmd
+	set @cmd = 'insert into ordes'+@thisNoaYear+'(noa,no2,productno,product,spec,style,unit,mount,price,total,c1,notv,datea,custno,memo,enda,cancel) ' + 
+						 'select ' + 
+						 'N'''+@new_noa+''',a.no2,a.productno,a.product,a.spec,a.style,a.unit,a.mount,a.price,a.total,a.c1,a.notv,a.datea,a.custno,a.memo,0,0 ' + 
+						 'from #ordes_tmp a ' + 
+						 'where (a.noa='+cast(@idno as nvarchar)+') '
+	EXECUTE sp_executesql @cmd
+	---------------------------匯入訂單<<End>>
 	fetch next from cursor_table
 	into @idno,@datea
-	while(@@FETCH_STATUS <> -1)
-	begin
-		---------------------------取得最新的訂單編號<<Start>>
-		select @new_noa = max(noa) from view_orde where left(noa,(7+(len(@orde_deli))))=(@orde_deli + replace(@datea,'/',''))
-		if(@new_noa is null)
-		begin
-			set @new_noa = @orde_deli + replace(@datea,'/','') + '001'
-		end
-		else
-		begin
-			set @new_noa = @orde_deli + replace(@datea,'/','') + RIGHT(REPLICATE('0', 3) + CAST((cast(right(@new_noa,3) as int)+1) as NVARCHAR), 3)
-		end
-		---------------------------取得最新的訂單編號<<End>>
-		---------------------------匯入訂單<<Start>>
-		insert into orde103(noa,datea,odate,cno,acomp,custno,comp,stype,memo,enda,isproj,cancel,tel,fax,post,addr,paytype,trantype,salesno,sales)
-			select
-				@new_noa,a.datea,a.odatea,a.cno,a.acomp,a.custno,a.comp,a.stype,a.memo,0,1,0,b.tel,b.fax,b.zip_comp,b.addr_comp,b.paytype,b.trantype,b.salesno,b.sales
-			from @orde a
-			outer apply(select * from cust where noa=a.custno) b
-			where (a.noa=@idno)
-		insert into ordes103(noa,no2,productno,product,spec,style,unit,mount,price,total,c1,notv,datea,custno,memo,enda,cancel)
-			select
-				@new_noa,a.no2,a.productno,a.product,a.spec,a.style,a.unit,a.mount,a.price,a.total,a.c1,a.notv,a.datea,a.custno,a.memo,0,0
-			from @ordes a
-			where (a.noa=@idno)
-		---------------------------匯入訂單<<End>>
-		fetch next from cursor_table
-		into @idno,@datea
-	end
-	close cursor_table
-	deallocate cursor_table
-	-------匯入訂單All <<End>>-------
 end
-if(@import_where = 1)
-begin
-	-------匯入排產All <<Start>>-------
-	declare cursor_table cursor for
-		select a.noa,a.datea from @workg a order by a.datea
-	open cursor_table
-	fetch next from cursor_table
-	into @idno,@datea
-	while(@@FETCH_STATUS <> -1)
-	begin
-		---------------------------取得最新的排產編號<<Start>>
-		select @new_noa = max(noa) from view_workg where left(noa,(7+(len(@workg_deli))))=(@workg_deli + replace(@datea,'/',''))
-		if(@new_noa is null)
-		begin
-			set @new_noa = @workg_deli + replace(@datea,'/','') + '001'
-		end
-		else
-		begin
-			set @new_noa = @workg_deli + replace(@datea,'/','') + RIGHT(REPLICATE('0', 3) + CAST((cast(right(@new_noa,3) as int)+1) as NVARCHAR), 3)
-		end
-		---------------------------取得最新的排產編號<<End>>
-		---------------------------匯入排產<<Start>>
-		insert into workg103(noa,datea,stype,bdate,edate,worker,memo)
-			select @new_noa,a.datea,a.stype,a.bdate,a.edate,a.worker,a.memo from @workg a where (a.noa=@idno)
-		insert into workgs103(noa,noq,productno,product,spec,style,mount,stationno,station,memo)
-			select
-				@new_noa,a.noq,a.productno,a.product,a.spec,a.style,a.mount,a.stationno,a.station,a.memo
-			from @workgs a
-			where (a.noa=@idno)
-		---------------------------匯入排產<<End>>
-		fetch next from cursor_table
-		into @idno,@datea
-	end
-	close cursor_table
-	deallocate cursor_table
-	-------匯入排產All <<End>>-------
-end;
+close cursor_table
+deallocate cursor_table
+-------匯入訂單All <<End>>-------
+IF OBJECT_ID('tempdb..#orde_tmp')is not null
+BEGIN
+	set @cmd = 'drop table #orde_tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#ordes_tmp')is not null
+BEGIN
+	set @cmd = 'drop table #ordes_tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
