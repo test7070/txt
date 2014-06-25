@@ -1,3 +1,140 @@
+z_trd_ds02:--z_trd_ds02 和 z_trd_ds01 一樣
+z_trd_ds01:--z_trd_ds01
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_bcustno nvarchar(20) = case when '#non'=[2] then '' else [2] end
+	declare @t_ecustno nvarchar(20) = case when '#non'=[3] then char(255) else [3] end
+	declare @t_bdate nvarchar(10) = case when '#non'=[4] then '' else [4] end
+	declare @t_edate nvarchar(10) = case when '#non'=[5] then char(255) else [5] end
+	--------------------------------------------------------------------------------------------
+	declare @tmp table(
+		custno nvarchar(20),
+		gno nvarchar(10),
+		recno int,
+		tranaccy nvarchar(10),
+		tranno nvarchar(20),
+		trandate nvarchar(10),
+		carno nvarchar(20),
+		straddr nvarchar(50),
+		product nvarchar(50),
+		mount decimal(20,3),
+		price decimal(15,2),
+		discount float,
+		total float,
+		
+		custchgtype nvarchar(20),
+		custchgno nvarchar(20),
+		custchgdate nvarchar(10),
+		item nvarchar(50),
+		money2 float,
+		
+		totmoney float,
+		tottax float,
+		totpay float,
+		tottoal float,
+		unpay float,
+		tot float
+	)
+	---------------------------------------------------------------------------------
+	insert into @tmp(custno,gno,recno,tranaccy,tranno,trandate,carno,straddr,product,mount,price,discount,total)
+	select a.custno,'1',ROW_NUMBER()over(partition by a.custno order by isnull(c.trandate,''),isnull(c.noa,''))
+		,c.accy,c.noa,c.trandate,c.carno,c.straddr,c.product,c.mount,c.price,c.custdiscount,c.total
+	from view_trd a
+	left join view_trds b on a.accy=b.accy and a.noa=b.noa
+	left join view_trans c on b.tranaccy=c.accy and b.tranno=c.noa
+	where ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.custno,'') between @t_bcustno and @t_ecustno
+	
+	insert into @tmp(custno,gno,recno,custchgtype,custchgno,custchgdate,item,money2)
+	select a.custno,'2',ROW_NUMBER()over(partition by a.custno order by isnull(b.datea,''),isnull(b.noa,''))
+		,case when isnull(b.plusmoney,0)>0 then '加' else '減' end,b.noa,b.datea
+		,isnull(b.plusitem,'')+isnull(b.minusitem,''),ISNULL(b.plusmoney,0)+ISNULL(b.minusmoney,0)
+	from view_trd a
+	left join custchg b on a.noa=b.trdno
+	where ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and (isnull(b.plusmoney,0)>0 or isnull(b.minusmoney,0)>0)
+	and ISNULL(a.custno,'') between @t_bcustno and @t_ecustno
+	-----------------------------------------------------------------------------------------
+	insert into @tmp(custno,gno,totmoney,tottax,totpay)
+	select a.custno,'3'
+		,SUM(ISNULL(a.[money],0)+ISNULL(a.plusmoney,0)-ISNULL(a.minusmoney,0))
+		,SUM(ISNULL(a.tax,0))
+		,SUM(ISNULL(b.paysale,0))
+	from view_trd a
+	outer apply (select SUM(ISNULL(paysale,0)) paysale from umms where vccano=a.noa) b 
+	where ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.custno,'') between @t_bcustno and @t_ecustno
+	group by a.custno
+	
+	--前期
+	declare @custno nvarchar(20)
+	declare @unpay float
+	declare cursor_table cursor for
+	select a.custno,sum(isnull(a.total,0)-isnull(b.paysale,0))
+	from view_trd a
+	outer apply (select SUM(ISNULL(paysale,0)) paysale from umms where vccano=a.noa) b 
+	where isnull(a.datea,'') < @t_bdate
+	and ISNULL(a.custno,'') between @t_bcustno and @t_ecustno
+	and (isnull(a.total,0)!=isnull(b.paysale,0))
+	group by a.custno
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@unpay
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from @tmp where custno=@custno and gno='3')
+			update @tmp set unpay = @unpay where custno=@custno and gno='3'
+		else
+			insert into @tmp(custno,gno,totmoney,tottax,totpay,unpay)
+			select @custno,'3',0,0,0,@unpay
+		fetch next from cursor_table
+		into @custno,@unpay
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update @tmp set unpay=isnull(unpay,0) where gno='3'
+	update @tmp set tottoal = totmoney+tottax-totpay,tot=totmoney+tottax-totpay+unpay where gno='3'
+	----------------------------------------------------------------------------------------------
+	declare @string1 nvarchar(max) = ''
+	declare @string2 nvarchar(max) = ''
+	
+	select top 1 @string1='公司地址：'+isnull(addr,''),@string2='公司電話：'+isnull(tel,'') from acomp order by noa
+	
+	select a.recno rr
+		,case when a.gno='1' then "trans_ds?noa=\'"+a.tranno+"\'" 
+			when a.gno='2' then "custchg?noa=\'"+a.custchgno+"\'" end 
+			+ " and "+cast(a.recno as nvarchar)+"=$rr?"+isnull(tranaccy,'') ghref
+		,a.trandate a01
+		,a.carno a02
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(a.straddr,'')+'</a>' a03
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(a.product,'')+'</a>' a04
+		,a.mount a05
+		,a.price a06
+		,a.discount a07
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.total),1)),4,12)) a08
+		,a.custchgdate b01
+		,a.custchgtype b02
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(a.item,'')+'</a>' b03
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.money2),1)),4,12)) b04
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.totmoney),1)),4,12)) c01
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.tottax),1)),4,12)) c02
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.totpay),1)),4,12)) c03
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.unpay),1)),4,12)) c04
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.tot),1)),4,12)) c05
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(b.comp,'')+'</a>' d01
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(b.addr_comp,'')+'</a>' d02
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(b.serial,'')+'</a>' d03
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(a.custno,'')+'</a>' d04
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(b.tel,'')+'</a>' d05
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+ISNULL(b.fax,'')+'</a>' d06
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+@string1+'</a>' e01
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+@string2+'</a>' e02
+		,a.* 
+	from @tmp a
+	left join cust b on a.custno=b.noa
+	order by a.custno,a.gno,a.recno;
+
+
 z_trd05:--z_trd05
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
