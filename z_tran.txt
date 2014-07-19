@@ -211,10 +211,13 @@ z_tran17b:--z_tran17b
 	declare @t_carno nvarchar(max) = case when '#non'=[48] then '' else [48] end
 	declare @t_carkind nvarchar(max) = case when '#non'=[49] then '' else [49] end	
 	declare @t_pageline int = 30  --一頁的行數
+	declare @t_detail nvarchar(max) = case when '#non'=[50] then '' else [50] end
 	-----------------------------------------------------------------
 	declare @tmp table(
 		gno nvarchar(10),
 		pno nvarchar(10),
+		rno nvarchar(max),
+		mon nvarchar(10),
 		carkindno nvarchar(20),
 		carkind nvarchar(20),
 		oilmount float,
@@ -298,6 +301,48 @@ z_tran17b:--z_tran17b
 		-etc-oil-wmoney-cmoney-dmoney-emoney-ticket-bonus-tax-depreciation-round(money1*0.03,0)+driverpay
 	update @tmp set gno = '4' where profit<0 and pno='1'
 	----------------------------------------------------------------------------------------------------
+	if len(@t_detail)>0
+	begin
+		update @tmp set gno='5',rno=driverno+CHAR(255) where gno='1'
+		update @tmp set gno='6',rno=driverno+CHAR(255) where gno='4'
+		
+		insert into @tmp(rno,mon,gno,pno,carkindno,carkind,driverno,driver,insures,money1,money2
+			,custplus,custminus,driverplus,driverminus,reserve,tolls,etc,oil
+			,wmoney,wmoneycar,wmoneyplate,cmoney,dmoney,emoney,ticket,bonus,tax,depreciation
+			,miles,oilmount,driverpay)
+		select a.driverno+a.mon,a.mon,'7','1',isnull(b.carkindno,''),ISNULL(c.kind,''),ISNULL(a.driverno,''),ISNULL(f.namea,'')
+			,sum(ISNULL(a.insures,0)),sum(ISNULL(a.money1,0)),sum(ISNULL(a.money2,0))
+			,sum(ISNULL(a.custplus,0)),sum(ISNULL(a.custminus,0)),sum(ISNULL(a.driverplus,0)),sum(ISNULL(a.driverminus,0))
+			,sum(ISNULL(a.reserve,0)),sum(ISNULL(a.tolls,0)),sum(ISNULL(a.etc,0)),sum(ISNULL(a.oil,0))
+			,sum(ISNULL(a.wmoney,0)),sum(ISNULL(a.wmoneycar,0)),sum(ISNULL(a.wmoneyplate,0)),sum(ISNULL(a.cmoney,0)),sum(ISNULL(a.dmoney,0)),sum(ISNULL(a.emoney,0))
+			,sum(ISNULL(a.ticket,0)),sum(ISNULL(a.bonus,0)),sum(ISNULL(a.tax,0)),sum(ISNULL(a.depreciation,0))
+			,sum(ISNULL(d.miles,0))
+			,sum(ISNULL(d.mount,0))
+			,sum(ISNULL(a.driverpay,0))
+		from trans_sum a
+		left join car2 b on a.carno=b.carno
+		left join carkind c on b.carkindno=c.noa
+		left join (select carno,SUM(isnull(mount,0)) mount,SUM(ISNULL(miles,0)) miles 
+			from oil where LEFT(datea,6) between @t_bmon and @t_emon group by carno) d on a.carno=d.carno
+		left join (select carno,driverno,count(1) mount 
+			from (SELECT DISTINCT isnull(carno,'') carno,isnull(driverno,'') driverno,trandate from trans_sum where mon between @t_bmon and @t_emon) a 
+			group by carno,driverno) e on a.carno=e.carno and a.driverno=e.driverno
+		left join driver f on a.driverno=f.noa
+		where a.mon between @t_bmon and @t_emon
+		and b.cartype = '2' --公司車
+		and isnull(a.driverno,'') between @t_bdriverno and @t_edriverno
+		and (len(@t_carno)=0 or (len(ISNULL(b.carno,''))>0 and CHARINDEX(','+b.carno+',',','+@t_carno+',')>0))
+		and (len(@t_carkind)=0 or (len(ISNULL(b.carkindno,''))>0 and CHARINDEX(','+b.carkindno+',',','+@t_carkind+',')>0))
+		group by a.driverno+a.mon,a.mon,isnull(b.carkindno,''),ISNULL(c.kind,''),ISNULL(a.driverno,''),ISNULL(f.namea,'')
+		
+		update @tmp set oilrate=case when money1!=0 then oil/money1*100 else 0 end
+		,kl=case when oilmount!=0 then miles/oilmount else 0 end	
+	
+		update @tmp set tax2 = round(money1*0.03,0)
+		,profit=money1-money2-insures+custplus-custminus-driverplus+driverminus-reserve-tolls
+		-etc-oil-wmoney-cmoney-dmoney-emoney-ticket-bonus-tax-depreciation-round(money1*0.03,0)+driverpay
+	end
+	----------------------------------------------------------------------------------------------------
 	declare @n int
 	declare @carkindno nvarchar(20)
 	declare @carkind nvarchar(20)
@@ -351,6 +396,7 @@ z_tran17b:--z_tran17b
 	order by case when len(carkindno)=0 then CHAR(255) else carkindno end
 		,pno
 		,case when len(driverno)=0 then CHAR(255) else driverno end
+		,rno
 		;
 		
 z_tran17a:--z_tran17a
