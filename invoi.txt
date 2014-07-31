@@ -6,10 +6,24 @@ declare @rc2key nvarchar(20)=[3]--進貨KEY
 declare @price_c nvarchar(20)=[4]--價格小數點位數
 declare @userno nvarchar(20)=[5]--userno
 declare @worker nvarchar(20)=[6]--worker
+declare @format nvarchar(20)=[7]--日期格式 
 declare @isrc2 nvarchar(50) = isnull((select isgenrc2 from invoi where noa=@noa),'0')
 declare @rc2no nvarchar(50) = isnull((select rc2no from invoi where noa=@noa),'')
 declare @datea nvarchar(50) = isnull((select datea from invoi where noa=@noa),'')
 declare @accy nvarchar(50)=isnull((select top 1 accy from view_rc2 where noa=@rc2no),'')
+
+declare @fdate nvarchar(20)--轉換的日期格式 
+set @fdate=case when left(@format,4)='YYY/' then --中式 
+right('000'+cast(cast(LEFT(@datea,4)as int)-1911 as nvarchar(20)),3)+right(@datea,6) else @datea end 
+
+declare @fxmon nvarchar(20)--轉換的日期格式 月份
+set @fxmon=case when left(@format,4)='YYY/' then --中式 
+left(@fdate,6) else left(@fdate,7) end
+
+declare @fnmon nvarchar(20)--轉換的日期格式 月份 並 加1個月
+set @fnmon=case when left(@format,4)='YYY/' then --中式 
+left(cast(CONVERT (VARCHAR(7),DATEADD(m,1,@datea),12 )+0890000 as nvarchar(20)),3)+'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(m,1,@datea),12 )+0890000 as nvarchar(20)),4,2)
+else left(CONVERT (VARCHAR(10),DATEADD(m,1,@datea ),111),7)end
 	
 if(@condition='0')--刪除
 begin
@@ -35,20 +49,19 @@ begin
 		begin
 			--產生新的出貨單號
 			set @rc2no=
-			case when isnull((select MAX(noa) from view_rc2 where datea=@datea),'') >= isnull((select MAX(noa) from dno where tablea='rc2' and noa like @rc2key+REPLACE(@datea,'/','')+'%'),'')
-			then isnull((select MAX(noa) from view_rc2 where datea=@datea),'') else (select MAX(noa) from dno where tablea='rc2' and noa like @rc2key+REPLACE(@datea,'/','')+'%') end
-			set @rc2no=@rc2key+REPLACE(@datea,'/','')+right('000'+cast(cast(right(@rc2no,3) as int) +1 as nvarchar(50)),3)
+			case when isnull((select MAX(noa) from view_rc2 where datea=@fdate),'') >= isnull((select MAX(noa) from dno where tablea='rc2' and noa like @rc2key+REPLACE(@fdate,'/','')+'%'),'')
+			then isnull((select MAX(noa) from view_rc2 where datea=@fdate),'') else (select MAX(noa) from dno where tablea='rc2' and noa like @rc2key+REPLACE(@fdate,'/','')+'%') end
+			set @rc2no=@rc2key+REPLACE(@fdate,'/','')+right('000'+cast(cast(right(@rc2no,3) as int) +1 as nvarchar(50)),3)
 		end
 		--出貨單產生
-		set @accy=left(@datea,3)
+		set @accy=right('000'+cast(cast(LEFT(@datea,4)as int)-1911 as nvarchar(20)),3)
 		
 		--bbm
 		EXEC("insert rc2"+@accy+" (noa,typea,stype,datea,mon,invo,cno,acomp,tggno,tgg,paytype,tel,trantype,addr,addr2
 		,money,taxtype,tax,total,coin,floata,totalus,worker,memo,unpay,payed,usunpay,uspayed)
-		select '"+@rc2no+"','1','7',a.datea
+		select '"+@rc2no+"','1','7','"+@fdate+"'
 		,case when (select startdate from tgg where noa=a.tggno)!=0 and right(a.datea,2)>=(select startdate from tgg where noa=a.tggno) then 
-		left(cast(CONVERT (VARCHAR(7),DATEADD(m,1,cast(cast(LEFT(a.datea,3)as int)+1911 as nvarchar(20))+right(a.datea,6)),12 )+0890000 as nvarchar(20)),3)	+'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(m,1,cast(cast(LEFT(a.datea,3)as int)+1911 as nvarchar(20))+right(a.datea,6)),12 )+0890000 as nvarchar(20)),4,2) else left(a.datea,6) end
-		,a.noa,a.cno,b.acomp,a.tggno,a.tgg,c.paytype,c.tel,c.trantype,c.addr_home,a.addr
+		'"+@fnmon+"' else '"+@fxmon+"' end ,a.noa,a.cno,b.acomp,a.tggno,a.tgg,c.paytype,c.tel,c.trantype,c.addr_home,a.addr
 		,round((a.amount*(case when isnull(a.floata,0)=0 then 1 else a.floata end)),0),'4',0,case when (select count(*) from ucca)=0 then round((a.amount*(case when isnull(a.floata,0)=0 then 1 else a.floata end)),0) else 0 end
 		,a.coin,case when isnull(a.floata,0)=0 then 0 else round(1/a.floata,5) end ,(case when isnull(a.floata,0)=0 then 0 else a.amount end),'"+@worker+"',a.memo
 		,round((a.amount*(case when isnull(a.floata,0)=0 then 1 else a.floata end)),0),0,a.amount,0
@@ -56,9 +69,9 @@ begin
 		
 		--bbs
 		EXEC("insert rc2s"+@accy+" (noa,noq,datea,mon,productno,product,spec,style,unit,mount,price,total,memo,tggno,typea,uno,weight)
-		select '"+@rc2no+"',b.noq,a.datea
+		select '"+@rc2no+"',b.noq,'"+@fdate+"'
 		,case when (select startdate from tgg where noa=a.tggno)!=0 and right(a.datea,2)>=(select startdate from tgg where noa=a.tggno) then 
-		left(cast(CONVERT (VARCHAR(7),DATEADD(m,1,cast(cast(LEFT(a.datea,3)as int)+1911 as nvarchar(20))+right(a.datea,6)),12 )+0890000 as nvarchar(20)),3)	+'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(m,1,cast(cast(LEFT(a.datea,3)as int)+1911 as nvarchar(20))+right(a.datea,6)),12 )+0890000 as nvarchar(20)),4,2) else left(a.datea,6) end
+		'"+@fnmon+"' else '"+@fxmon+"' end
 		,b.productno,(select top 1 product from view_ucaucc where noa=b.productno),(select top 1 spec from view_ucaucc where noa=b.productno)
 		,(select top 1 unit from view_ucaucc where noa=b.productno),(select top 1 unit from view_ucaucc where noa=b.productno)
 		,b.quantity,round(b.price*(case when isnull(a.floata,0)=0 then 1 else a.floata end),"+@price_c+"),round(b.amount*(case when isnull(a.floata,0)=0 then 1 else a.floata end),0),b.memo,a.tggno,'1',b.uno,b.weight

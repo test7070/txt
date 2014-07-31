@@ -1,0 +1,233 @@
+post:--post
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(100)=[1]--單據編號[1]
+declare @condition nvarchar(20)=[2]--動作 0 刪除, 1 新增[2]
+declare @ordekey nvarchar(20)=[3]--訂單KEY
+declare @ordckey nvarchar(20)=[4]--採購KEY
+declare @userno nvarchar(20)=[5]--userno
+declare @worker nvarchar(20)=[6]--worker
+declare @format nvarchar(20)=[7]--日期格式 
+declare @price_v nvarchar(20)=[8]--價格小數點位數vcc
+declare @price_r nvarchar(20)=[9]--價格小數點位數rc2
+declare @ordeno nvarchar(50) = isnull((select ordeno from view_ordg where noa=@noa),'')
+declare @ordcno nvarchar(50) = isnull((select ordcno from view_ordg where noa=@noa),'')
+declare @invono nvarchar(50) = isnull((select invono from view_ordg where noa=@noa),'')
+declare @invoino nvarchar(50) = isnull((select invoino from view_ordg where noa=@noa),'')
+declare @datea nvarchar(50) = isnull((select datea from view_ordg where noa=@noa),'')
+declare @accy nvarchar(50) = isnull((select top 1 accy from view_ordg where noa=@noa),'')
+declare @typea nvarchar(50)=isnull((select top 1 typea from view_ordg where noa=@noa),'1')
+declare @orde_accy nvarchar(50)=isnull((select top 1 accy from view_orde where noa=@ordeno),'')
+declare @ordc_accy nvarchar(50)=isnull((select top 1 accy from view_ordc where noa=@ordcno),'')
+
+declare @fdate nvarchar(20)--轉換的日期格式 
+set @fdate=case when left(@format,4)='YYY/' then --中式 
+right('000'+cast(cast(LEFT(@datea,4)as int)-1911 as nvarchar(20)),3)+right(@datea,6) else @datea end 
+
+declare @ordcdatea nvarchar(20)--ordc有效日
+set @ordcdatea=case when left(@format,4)='YYY/' then --中式 
+left(cast(CONVERT (VARCHAR(7),DATEADD(d,20,@datea),12 )+0890000 as nvarchar(20)),3)
++'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(d,20,@datea),12 )+0890000 as nvarchar(20)),4,2)
++'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(d,20,@datea),12 )+0890000 as nvarchar(20)),6,2)
+else CONVERT (VARCHAR(10),DATEADD(d,20,@datea ),111) end
+
+declare @trandate nvarchar(20)--ordc預定交貨日
+set @trandate=case when left(@format,4)='YYY/' then --中式 
+left(cast(CONVERT (VARCHAR(7),DATEADD(d,10,@datea),12 )+0890000 as nvarchar(20)),3)
++'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(d,10,@datea),12 )+0890000 as nvarchar(20)),4,2)
++'/'+substring(cast(CONVERT (VARCHAR(7),DATEADD(d,10,@datea),12 )+0890000 as nvarchar(20)),6,2)
+else CONVERT (VARCHAR(10),DATEADD(d,10,@datea ),111) end
+	
+if(@condition='0')--刪除
+begin
+	if(len(@ordeno)>0 and len(@orde_accy)>0)
+	begin
+		EXEC("delete orde"+@orde_accy+" where noa='"+@ordeno+"'")
+		EXEC("delete ordes"+@orde_accy+" where noa='"+@ordeno+"'")
+	end
+	if(len(@ordcno)>0 and len(@ordc_accy)>0)
+	begin
+		EXEC("delete ordc"+@ordc_accy+" where noa='"+@ordcno+"'")
+		EXEC("delete ordcs"+@ordc_accy+" where noa='"+@ordcno+"'")
+	end
+	if(len(@invono)>0)
+	begin
+		EXEC("delete invo where noa='"+@invono+"'")
+		EXEC("delete invos where noa='"+@invono+"'")
+	end
+	if(len(@invoino)>0)
+	begin
+		EXEC("delete invoi where noa='"+@invoino+"'")
+		EXEC("delete invois where noa='"+@invoino+"'")
+	end
+end
+	
+if(@condition='1')--新增
+begin
+	--避免KEY重複
+	if(len(@ordeno)>0 and len(@orde_accy)>0)
+	begin
+		EXEC("delete orde"+@orde_accy+" where noa='"+@ordeno+"'")
+		EXEC("delete ordes"+@orde_accy+" where noa='"+@ordeno+"'")
+	end
+	if(len(@ordcno)>0 and len(@ordc_accy)>0)
+	begin
+		EXEC("delete ordc"+@ordc_accy+" where noa='"+@ordcno+"'")
+		EXEC("delete ordcs"+@ordc_accy+" where noa='"+@ordcno+"'")
+	end
+	if(len(@invono)>0)
+	begin
+		EXEC("delete invo where noa='"+@invono+"'")
+		EXEC("delete invos where noa='"+@invono+"'")
+	end
+	if(len(@invoino)>0)
+	begin
+		EXEC("delete invoi where noa='"+@invoino+"'")
+		EXEC("delete invois where noa='"+@invoino+"'")
+	end
+	
+	if(@typea='1')--訂單----------------------------------------------------------------------------
+	begin
+		--ordc begin---------------------------------------------------------------
+		if(len(@ordcno)=0) --無採購編號
+		begin
+			--產生新的採購編號
+			set @ordcno=
+			case when isnull((select MAX(noa) from view_ordc where odate=@fdate),'') >= isnull((select MAX(noa) from dno where tablea='ordc' and noa like @ordckey+REPLACE(@fdate,'/','')+'%'),'')
+			then isnull((select MAX(noa) from view_ordc where odate=@fdate),'') else (select MAX(noa) from dno where tablea='ordc' and noa like @ordckey+REPLACE(@fdate,'/','')+'%') end
+			set @ordcno=@ordckey+REPLACE(@fdate,'/','')+right('000'+cast(cast(right(@ordcno,3) as int) +1 as nvarchar(50)),3)
+		end
+		
+		--採購產生
+		set @accy=right('000'+cast(cast(LEFT(@datea,4)as int)-1911 as nvarchar(20)),3)
+		
+		--bbm
+		EXEC("insert ordc"+@accy+" (noa,kind,odate,datea,contract,cno,acomp,tggno,tgg,paytype,tel,fax,trantype,addr,addr2
+		,trandate,salesno,sales,money,tax,taxtype,total,coin,floata,totalus,apv,worker,isproj,enda,cancel,quatno)
+		select '"+@ordcno+"','1','"+@fdate+"','"+@ordcdatea+"',a.contract,a.cno,b.acomp,a.tggno,a.tgg,c.paytype,c.tel,c.fax,c.trantype,c.addr_comp,b.addr
+		,'"+@trandate+"',c.salesno,c.sales,0,0,a.taxtype,0,a.bcoin,case when isnull(a.bfloat,0)=0 then 0 else round(1/a.bfloat,5) end
+		,case when isnull(a.bfloat,0)=0 then 0 else (select sum(btotal) from view_ordgs where noa='"+@noa+"' and (bmount>0 or bweight>0) and productno!='' ) end,'','"+@worker+"',1,0,0,'"+@noa+"'
+		from view_ordg a left join acomp b on a.cno=b.noa left join tgg c on a.tggno=c.noa where a.noa='"+@noa+"' ")
+		
+		--bbs
+		EXEC("insert ordcs"+@accy+" (noa,no2,kind,odate,datea,trandate,productno,product,spec,style,unit,mount,weight,price,total,c1,notv,memo,enda,cancel,omount,stdmount)
+		select '"+@ordcno+"',b.noq,'1','"+@fdate+"','"+@ordcdatea+"','"+@trandate+"',b.productno,b.product,b.spec,b.style,b.bunit,b.bmount,b.bweight
+		,round(b.bprice*(case when isnull(a.bfloat,0)=0 then 1 else a.bfloat end),"+@price_r+"),round(b.btotal*(case when isnull(a.bfloat,0)=0 then 1 else a.bfloat end),0),0
+		,case when charindex(','+UPPER(b.bunit)+',',',KG,M2,M,批,公斤,噸,頓,')>0 then b.bweight else b.bmount end,'',0,0
+		,case when charindex(','+UPPER(b.bunit)+',',',KG,M2,M,批,公斤,噸,頓,')>0 then b.bweight else b.bmount end,(select top 1 stdmount from view_ucaucc where noa=b.productno)
+		from view_ordg a left join view_ordgs b on a.noa=b.noa where a.noa='"+@noa+"'  and (b.bmount>0 or b.bweight>0) and b.productno!='' ")
+		
+		--重新計算bbm的小計
+		EXEC("update a
+		set money=isnull((select sum(total) from ordcs"+@accy+" b where a.noa=b.noa),0)
+		,tax=(case when taxtype='1' then round((isnull((select sum(total) from ordcs"+@accy+" b where a.noa=b.noa),0)*(isnull((select taxrate from view_ordg where noa='"+@noa+"'),0)/100)),0)
+		when taxtype='3' then  isnull((select sum(total) from ordcs"+@accy+" b where a.noa=b.noa),0)/(1+(isnull((select taxrate from view_ordg where noa='"+@noa+"'),0)/100))*(isnull((select taxrate from view_ordg where noa='"+@noa+"'),0)/100)
+		else 0 end) ,total=isnull((select sum(total) from ordcs"+@accy+" b where a.noa=b.noa),0)
+		from ordc"+@accy+" a where a.noa='"+@ordcno+"' ")
+		
+		EXEC("update a
+		set money=case when taxtype='1' then money else money-tax end
+		,total=case when taxtype='1' then total+tax else total end
+		,totalus=(case when taxtype='1' then total+tax else total end)*floata
+		from ordc"+@accy+" a	 where a.noa='"+@ordcno+"' ")
+		--ordc end---------------------------------------------------------------
+		
+		--orde begin---------------------------------------------------------------
+		if(len(@ordeno)=0) --無訂單編號
+		begin
+			--產生新的訂單編號
+			set @ordeno=
+			case when isnull((select MAX(noa) from view_orde where odate=@fdate),'') >= isnull((select MAX(noa) from dno where tablea='orde' and noa like @ordekey+REPLACE(@fdate,'/','')+'%'),'')
+			then isnull((select MAX(noa) from view_orde where odate=@fdate),'') else (select MAX(noa) from dno where tablea='orde' and noa like @ordekey+REPLACE(@fdate,'/','')+'%') end
+			set @ordeno=@ordekey+REPLACE(@fdate,'/','')+right('000'+cast(cast(right(@ordeno,3) as int) +1 as nvarchar(50)),3)
+		end
+		
+		--訂單產生
+		set @accy=right('000'+cast(cast(LEFT(@datea,4)as int)-1911 as nvarchar(20)),3)
+		
+		--bbm
+		EXEC("insert orde"+@accy+" (noa,stype,odate,datea,contract,cno,acomp,custno,comp,paytype,tel,fax,trantype,addr,addr2
+		,ordcno	,salesno,sales,money,tax,taxtype,total,coin,floata,totalus,apv,worker,isproj,enda,cancel,postname)
+		select '"+@ordeno+"','3','"+@fdate+"','',a.contract,a.cno,b.acomp,a.custno,a.comp,c.paytype,c.tel,c.fax,c.trantype,c.addr_comp,c.addr_home
+		,'"+@ordcno+"',c.salesno,c.sales,0,0,a.taxtype,0,a.coin,case when isnull(a.floata,0)=0 then 0 else round(1/a.floata,5) end
+		,case when isnull(a.floata,0)=0 then 0 else (select sum(total) from view_ordgs where noa='"+@noa+"' and (mount>0 or weight>0) and productno!='' ) end,'','"+@worker+"',1,0,0,'"+@noa+"'
+		from view_ordg a left join acomp b on a.cno=b.noa left join cust c on a.custno=c.noa where a.noa='"+@noa+"' ")
+		
+		--bbs
+		EXEC("insert ordes"+@accy+" (noa,no2,odate,productno,product,spec,style,unit,mount,weight,price,total,c1,notv,memo,enda,cancel,datea)
+		select '"+@ordeno+"',b.noq,'"+@fdate+"',b.productno,b.product,b.spec,b.style,b.unit,b.mount,b.weight
+		,round(b.price*(case when isnull(a.floata,0)=0 then 1 else a.floata end),"+@price_v+"),round(b.total*(case when isnull(a.floata,0)=0 then 1 else a.floata end),0),0
+		,case when charindex(','+UPPER(b.unit)+',',',KG,M2,M,批,公斤,噸,頓,')>0 then b.weight else b.mount end,'',0,0,''
+		from view_ordg a  left join view_ordgs b on a.noa=b.noa where a.noa='"+@noa+"'  and (b.mount>0 or b.weight>0) and b.productno!='' ")
+		
+		--重新計算bbm的小計
+		EXEC("update a
+		set money=isnull((select sum(total) from ordes"+@accy+" b where a.noa=b.noa),0)
+		,tax=(case when taxtype='1' then round((isnull((select sum(total) from ordes"+@accy+" b where a.noa=b.noa),0)*(isnull((select taxrate from view_ordg where noa='"+@noa+"'),0)/100)),0)
+		when taxtype='3' then  isnull((select sum(total) from ordes"+@accy+" b where a.noa=b.noa),0)/(1+(isnull((select taxrate from view_ordg where noa='"+@noa+"'),0)/100))*(isnull((select taxrate from view_ordg where noa='"+@noa+"'),0)/100)
+		else 0 end) ,total=(select sum(total) from ordes"+@accy+" b where a.noa=b.noa)
+		from orde"+@accy+" a where a.noa='"+@ordeno+"' ")
+		
+		EXEC("update a
+		set money=case when taxtype='1' then money else money-tax end
+		,total=case when taxtype='1' then total+tax else total end
+		,totalus=(case when taxtype='1' then total+tax else total end)*floata
+		from orde"+@accy+" a	where a.noa='"+@ordeno+"' ")
+		--orde end---------------------------------------------------------------
+		
+		--更新ordeno,ordcno
+		EXEC("update ordg"+@accy+" set ordeno='"+@ordeno+"',ordcno='"+@ordcno+"' where noa='"+@noa+"' ")
+		
+		--插入dno
+		if((select count(*) from dno where noa=@ordeno and tablea='orde')=0)
+		begin
+			insert dno (tablea,noa,usera)
+			select 'orde',@ordeno,@userno
+		end
+		if((select count(*) from dno where noa=@ordcno and tablea='ordc')=0)
+		begin
+			insert dno (tablea,noa,usera)
+			select 'ordc',@ordcno,@userno
+		end
+	end
+	else --發票----------------------------------------------------------------------------
+	begin
+		--invoi begin------------------------------------
+		if(len(@invoino)>0)
+		begin
+			insert invois(noa,noq,productno,description,unit,quantity,weight,price,amount)
+			select a.invoino,b.noq,b.productno,(select case when isnull(engpro,'')!='' then engpro else b.product end from ucc where noa=b.productno)
+			,b.bunit,b.bmount,b.bweight,b.bprice,b.btotal
+			from view_ordg a  left join view_ordgs b on a.noa=b.noa 
+			where a.noa=@noa and (b.bmount>0 or b.bweight>0) and b.productno!=''
+			
+			insert invoi(noa,produceno,datea,tggno,tgg,addr,contract,cno,coin,floata,total,amount,isgenrc2)
+			select a.invoino,a.noa,a.datea,a.tggno,a.tgg,b.addr_home,a.contract,a.cno,a.bcoin,a.bfloat
+			,isnull((select sum(bmount) from view_ordgs where noa=@noa and (bmount>0 or bweight>0) and productno!=''),0)
+			,isnull((select sum(btotal) from view_ordgs where noa=@noa and (bmount>0 or bweight>0) and productno!=''),0),0  
+			from view_ordg a left join tgg b on a.tggno=b.noa
+			where a.noa=@noa and (select count(*) from view_ordgs where noa=@noa and (bmount>0 or bweight>0) and productno!='') >0
+		end
+		--invoi end--------------------------------------
+		
+		--invo begin------------------------------------
+		if(len(@invono)>0)
+		begin
+			insert invos(noa,noq,productno,description,unit,quantity,weight,price,amount)
+			select a.invono,b.noq,b.productno,(select case when isnull(engpro,'')!='' then engpro else b.product end from ucc where noa=b.productno)
+			,b.unit,b.mount,b.weight,b.price,b.total
+			from view_ordg a  left join view_ordgs b on a.noa=b.noa 
+			where a.noa=@noa and (b.mount>0 or b.weight>0) and b.productno!=''
+			
+			insert invo(noa,produceno,datea,custno,comp,addr,contract,cno,coin,floata,total,amount,isgenvcc)
+			select a.invono,a.noa,a.datea,a.custno,a.comp,b.addr_home,a.contract,a.cno,a.coin,a.floata
+			,isnull((select sum(mount) from view_ordgs where noa=@noa and (mount>0 or weight>0) and productno!=''),0)
+			,isnull((select sum(total) from view_ordgs where noa=@noa and (mount>0 or weight>0) and productno!=''),0),0  
+			from view_ordg a left join cust b on a.custno=b.noa
+			where a.noa=@noa and (select count(*) from view_ordgs where noa=@noa and (mount>0 or weight>0) and productno!='') >0			
+		end
+		--invo end--------------------------------------
+	end
+	select @ordeno ordeno,@ordcno ordcno
+end
+
+;
