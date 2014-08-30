@@ -1,4 +1,4 @@
-z_lc6a:--z_lc6a
+z_lc8a:--z_lc8a
 declare @t_xnoa nvarchar(20)
 set @t_xnoa = case when '#non' = [1] then '' else [1] end
 
@@ -28,7 +28,7 @@ declare @tmp  table(
 )
 
 insert @tmp
-select top 1 '0',1,0,lcno,bankno,bank,tggno,tgg,lcodate,lcdate,lcmoney,'',null,lcmoney,0,0,0,'1'
+select top 1 '0',1,0,lcno,bankno,bank,tggno,tgg,lcodate,lcdate,lcmoney,'',null,lcmoney,0,0,null,'1'
 from lcs where lcno=@t_xnoa
 
 declare @t_lcmoney float
@@ -40,7 +40,9 @@ declare @t_date nvarchar(50)=(select lcdate from @tmp where idno=0)
 
 declare @money float
 declare @datea nvarchar(50)
-declare @banks_count int=0
+declare @weight float
+declare @tablea nvarchar(50)
+declare @count int=0
 
 if((select count(*) from @tmp)>0)
 begin
@@ -48,37 +50,55 @@ begin
 	
 	--ref. se2/prg/z_lc6 func.getbanks
 	declare cursor_table cursor for
-	select money,datea from banks where bankt='1' and charindex('L/C',banktname)>0 and lcno2=@t_xnoa order by datea
+	select 'banks' tablea,money,datea,0 weight from banks where bankt='1' and charindex('L/C',banktname)>0 and lcno2=@t_xnoa
+	union all 
+	select 'rc2' tablea,(b.total+round(b.weight*a.price,0)),a.datea,b.weight from view_rc2 a left join view_rc2s b on a.noa=b.noa where a.datea between @t_odate and @t_date and a.tggno=@t_tggno
+	order by datea,tablea desc
 	open cursor_table
 	fetch next from cursor_table
-	into @money,@datea
+	into @tablea,@money,@datea,@weight
 	while(@@FETCH_STATUS <> -1)
 	begin
-		if(@banks_count=0)
+		if(@count=0)
 		begin
-			update @tmp 
-			set emoney=@t_lcmoney-@money,datea=@datea,money=@money,weight=0,source='2'
+			if @tablea='banks'
+			begin
+				update @tmp 
+				set emoney=@t_lcmoney-@money,datea=@datea,money=@money,weight=0,source='2'
+			end
+			else
+			begin
+				update @tmp 
+				set emoney=@t_lcmoney-@money,datea=@datea,money=@money,weight=@weight,source='1'
+			end
 		end
 		else
 		begin
-			insert @tmp (gno,orderno,pageno,bmoney,emoney,datea,money,weight,source)
-			select '0',0,0,@t_lcmoney,@t_lcmoney-@money,@datea,@money,0,'2'
+			if @tablea='banks'
+			begin
+				insert @tmp (gno,orderno,pageno,bmoney,emoney,datea,money,weight,source)
+				select '0',0,0,@t_lcmoney,@t_lcmoney-@money,@datea,@money,0,'2'
+			end
+			else
+			begin
+				insert @tmp (gno,orderno,pageno,bmoney,emoney,datea,money,weight,source)
+				select '0',0,0,@t_lcmoney,@t_lcmoney,@datea,@money,@weight,'1'
+			end
 		end
 		
-		set @t_lcmoney=@t_lcmoney-@money
-		set @banks_count=@banks_count+1
+		if @tablea='banks'
+		begin
+			set @t_lcmoney=@t_lcmoney-@money
+		end
+			
+		set @count=@count+1
 		
 		fetch next from cursor_table
-		into @money,@datea
+		into @tablea,@money,@datea,@weight
 	end
 	close cursor_table
 	deallocate cursor_table
 	
---ref. se2/prg/z_lc6 func.getrc2s
-
-set @rc2money=isnull((select sum(b.total+round(b.weight*a.price,0)) from view_rc2 a left join view_rc2s b on a.noa=b.noa
-where a.datea between @t_odate and @t_date and a.tggno=@t_tggno),0)
-
 end
 
 --頁數---------------------------------------------------------------------
@@ -151,16 +171,20 @@ end
 if((select count(*) from @tmp)>0)
 begin
 	insert @tmp(gno,lcno,datea,rc2money,banksmoney)
-	select '1',@t_xnoa,char(255),@rc2money,isnull(sum(money),0) from @tmp where gno='0'
+	select '1',@t_xnoa,char(255),isnull(sum(case when source='1' then money else 0 end),0)
+	,isnull(sum(case when source='2' then money else 0 end),0) from @tmp where gno='0'
 end
 
 select 
 dbo.getComma(bmoney,2) bmoney,
-dbo.getComma(money,2) money,
+case when source='1' then dbo.getComma(money,2) else null end rmoney,
+case when source='2' then dbo.getComma(money,2) else null end smoney,
+case when source='1' then datea else null end rdate,
+case when source='2' then datea else null end sdate,
 dbo.getComma(emoney,2) emoney,
 dbo.getComma(rc2money,2) rc2money,
 dbo.getComma(banksmoney,2) banksmoney,
-dbo.getComma(weight,2) weight,
+case when source='1' then dbo.getComma(weight,2) else null end weight,
 *
-from @tmp  order by isnull(datea,char(255)),gno;
+from @tmp  order by isnull(datea,char(255)),source,gno;
 -----------------------------------------------------------------------------------------------------------------
