@@ -153,15 +153,17 @@ z_vccadc05a:--z_vccadc05a
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax)
+	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax,total)
 	select a.noa, a.cno,b.nick
 		,case when left(a.productno,3)='N01' then '0000' else a.custno end 
 		,case when left(a.productno,3)='N01' then '資售' when left(a.productno,3)='N03' then '佣金收入' else a.comp end 
 		,a.smemo 
 		,a.[money]
 		,a.[stax]
+		,a.total
 	from vcca a
 	left join acomp b on a.cno=b.noa
 	where a.[money]!=0
@@ -182,8 +184,28 @@ z_vccadc05a:--z_vccadc05a
 	where a.[money]!=0
 	and LEFT(a.datea,6) between @t_bmon and @t_emon
 	and case when left(b.productno,3)='N01' then '0000' else a.custno end between @t_bcustno and @t_ecustno
-	----------------------------------------------------------------------
+	-------------------------------------------------------------------------------------------
 	declare @tmpa table(
+		gno nvarchar(10),
+		cno nvarchar(20),
+		acomp nvarchar(40),
+		custno nvarchar(20),
+		comp nvarchar(max),
+		taxrate nvarchar(max),
+		[money] float,
+		tax float,
+		total float
+	)
+	insert into @tmpa(gno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	select '1',cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
+	from @tmp
+	group by cno,acomp,custno,comp,taxrate
+	--------------------------------------------------------------------------------------------
+	update @tmpa set [money]=round(total/ (1+cast(replace(REPLACE(taxrate,'2聯',''),'%','') as float)/100),0)
+	where CHARINDEX('2聯',taxrate)>0
+	update @tmpa set tax = total-[money] where CHARINDEX('2聯',taxrate)>0
+	------------------------------------------------------------------------------------------------
+	declare @tmpb table(
 		recno int,
 		gno nvarchar(10),
 		cno nvarchar(20),
@@ -191,20 +213,20 @@ z_vccadc05a:--z_vccadc05a
 		[money] float,
 		tax float
 	)
-	insert into @tmpa(gno,cno,acomp,[money],tax)
+	insert into @tmpb(gno,cno,acomp,[money],tax)
 	select '1',cno,acomp,sum([money]),sum(round(tax,1)) 
 	from (
 		select cno,acomp,custno,comp,taxrate,sum([money])money,sum(round(tax,2)) tax
-		from @tmp
+		from @tmpa
 		group by cno,acomp,custno,comp,taxrate) a
 	group by cno,acomp
 	
-	update @tmpa set recno=isnull(b.rr,0)
-	from @tmpa a
-	left join (select ROW_NUMBER()over(order by[money] desc) rr,* from @tmpa ) b on a.cno=b.cno and a.acomp=b.acomp
+	update @tmpb set recno=isnull(b.rr,0)
+	from @tmpb a
+	left join (select ROW_NUMBER()over(order by[money] desc) rr,* from @tmpb ) b on a.cno=b.cno and a.acomp=b.acomp
 	--------------------------------------------------
-	insert into @tmpa(gno,[money],tax)
-	select '2',SUM([money]),SUM(round(tax,0)) from @tmpa where gno='1' 
+	insert into @tmpb(gno,[money],tax)
+	select '2',SUM([money]),SUM(round(tax,0)) from @tmpb where gno='1' 
 	--------------------------------------------------
 	select * 
 	,case when recno=0 then '' else cast(recno as nvarchar) end rr
@@ -212,7 +234,7 @@ z_vccadc05a:--z_vccadc05a
 	,acomp a02
 	,case when [money]<0 then '('+dbo.getComma(abs([money]),0)+')'  else dbo.getComma([money],0) end a03
 	,case when tax<0 then '('+dbo.getComma(abs([tax]),0)+')'  else dbo.getComma([tax],0) end a04
-	from @tmpa 
+	from @tmpb 
 	order by gno,recno;
 
 z_vccadc03a:--z_vccadc03a
@@ -220,6 +242,7 @@ z_vccadc03a:--z_vccadc03a
 	declare @t_emon nvarchar(10) = case when '#non'=[2] then char(255) else [2] end 
 	declare @t_bcustno nvarchar(20) = case when '#non' = [7] then '' else [7] end
 	declare @t_ecustno nvarchar(20) = case when '#non' = [8] then CHAR(255) else [8] end
+	----------------------------------------------------------------------
 	----------------------------------------------------------------------
 	declare @tmp table(
 		noa nvarchar(20),
@@ -229,15 +252,17 @@ z_vccadc03a:--z_vccadc03a
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax)
+	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax,total)
 	select a.noa, a.cno,b.nick
 		,case when left(a.productno,3)='N01' then '0000' else a.custno end 
 		,case when a.productno='N01' or a.productno='N03' then a.memo when a.productno='N011' then a.product else a.comp end 
 		,a.smemo 
 		,a.[money]
 		,a.[stax]
+		,a.total
 	from vcca a
 	left join acomp b on a.cno=b.noa
 	where a.[money]!=0
@@ -267,12 +292,18 @@ z_vccadc03a:--z_vccadc03a
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmpa(gno,cno,acomp,custno,comp,taxrate,[money],tax)
-	select '1',cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)) 
+	insert into @tmpa(gno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	select '1',cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
 	from @tmp
 	group by cno,acomp,custno,comp,taxrate
+	--------------------------------------------------------------------------------------------
+	update @tmpa set [money]=round(total/ (1+cast(replace(REPLACE(taxrate,'2聯',''),'%','') as float)/100),0)
+	where CHARINDEX('2聯',taxrate)>0
+	update @tmpa set tax = total-[money] where CHARINDEX('2聯',taxrate)>0
+	--------------------------------------------------------------------------------------------
 	------------------------------------------------
 	insert into @tmpa(gno,cno,[money],tax)
 	select '2',cno,SUM([money]),SUM(round(tax,1)) from @tmpa where gno='1' group by cno
@@ -303,15 +334,17 @@ z_vccadc04a:--z_vccadc04a
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax)
+	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax,total)
 	select a.noa, a.cno,b.nick
 		,case when left(a.productno,3)='N01' then '0000' else a.custno end 
 		,case when left(a.productno,3)='N01' then '資售' when left(a.productno,3)='N03' then '佣金收入' else isnull(c.nick,a.comp) end 
 		,a.smemo 
 		,a.[money]
 		,a.[stax]
+		,a.total
 	from vcca a
 	left join acomp b on a.cno=b.noa
 	left join cust c on a.custno=c.noa
@@ -335,6 +368,26 @@ z_vccadc04a:--z_vccadc04a
 	and case when left(b.productno,3)='N01' then '0000' else a.custno end between @t_bcustno and @t_ecustno
 	----------------------------------------------------------------------
 	declare @tmpa table(
+		gno nvarchar(10),
+		cno nvarchar(20),
+		acomp nvarchar(40),
+		custno nvarchar(20),
+		comp nvarchar(max),
+		taxrate nvarchar(max),
+		[money] float,
+		tax float,
+		total float
+	)
+	insert into @tmpa(gno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	select '1',cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
+	from @tmp
+	group by cno,acomp,custno,comp,taxrate
+	--------------------------------------------------------------------------------------------
+	update @tmpa set [money]=round(total/ (1+cast(replace(REPLACE(taxrate,'2聯',''),'%','') as float)/100),0)
+	where CHARINDEX('2聯',taxrate)>0
+	update @tmpa set tax = total-[money] where CHARINDEX('2聯',taxrate)>0
+	--------------------------------------------------------------------------------------------
+	declare @tmpb table(
 		recno int,
 		gno nvarchar(10),
 		custno nvarchar(20),
@@ -342,17 +395,17 @@ z_vccadc04a:--z_vccadc04a
 		[money] float,
 		tax float
 	)
-	insert into @tmpa(gno,custno,comp,[money],tax)
+	insert into @tmpb(gno,custno,comp,[money],tax)
 	select '1',custno,comp,sum([money]),sum(round(tax,2)) 
-	from @tmp
+	from @tmpa
 	group by custno,comp
 	
-	update @tmpa set recno=isnull(b.rr,0)
-	from @tmpa a
-	left join (select ROW_NUMBER()over(order by[money] desc) rr,* from @tmpa where custno!='0000') b on a.custno=b.custno and a.comp=b.comp
+	update @tmpb set recno=isnull(b.rr,0)
+	from @tmpb a
+	left join (select ROW_NUMBER()over(order by[money] desc) rr,* from @tmpb where custno!='0000') b on a.custno=b.custno and a.comp=b.comp
 	--------------------------------------------------
-	insert into @tmpa(gno,[money],tax)
-	select '2',SUM([money]),SUM(round(tax,0)) from @tmpa where gno='1' 
+	insert into @tmpb(gno,[money],tax)
+	select '2',SUM([money]),SUM(round(tax,0)) from @tmpb where gno='1' 
 	--------------------------------------------------
 	select * 
 	,case when recno=0 then '' else cast(recno as nvarchar) end rr
@@ -360,7 +413,7 @@ z_vccadc04a:--z_vccadc04a
 	,comp a02
 	,case when [money]<0 then '('+dbo.getComma(abs([money]),0)+')'  else dbo.getComma([money],0) end a03
 	,case when tax<0 then '('+dbo.getComma(abs([tax]),0)+')'  else dbo.getComma([tax],0) end a04
-	from @tmpa 
+	from @tmpb
 	order by gno,recno;
 	
 z_vccadc02a:--z_vccadc02a
@@ -377,15 +430,17 @@ z_vccadc02a:--z_vccadc02a
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax)
+	insert into @tmp(noa,cno,acomp,custno,comp,taxrate,[money],tax,total)
 	select a.noa, a.cno,b.nick
 		,case when left(a.productno,3)='N01' then '0000' else a.custno end 
 		,case when a.productno='N01' or a.productno='N03' then a.memo when a.productno='N011' then a.product else isnull(c.nick,a.comp) end 
 		,a.smemo 
 		,a.[money]
 		,a.[stax]
+		,a.total
 	from vcca a
 	left join acomp b on a.cno=b.noa
 	left join cust c on a.custno=c.noa
@@ -417,12 +472,17 @@ z_vccadc02a:--z_vccadc02a
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmpa(gno,cno,acomp,custno,comp,taxrate,[money],tax)
-	select '1',cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)) 
+	insert into @tmpa(gno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	select '1',cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
 	from @tmp
 	group by cno,acomp,custno,comp,taxrate
+	--------------------------------------------------------------------------------------------
+	update @tmpa set [money]=round(total/ (1+cast(replace(REPLACE(taxrate,'2聯',''),'%','') as float)/100),0)
+	where CHARINDEX('2聯',taxrate)>0
+	update @tmpa set tax = total-[money] where CHARINDEX('2聯',taxrate)>0
 	------------------------------------------------
 	insert into @tmpa(gno,custno,[money],tax)
 	select '2',custno,SUM([money]),round(SUM(tax),0) from @tmpa where gno='1' group by custno
@@ -460,25 +520,28 @@ z_vccadc00:--z_vccadc00
 		[money] float,
 		total float,
 		tax float,
-		memo nvarchar(max)
+		memo nvarchar(max),
+		rev nvarchar(20), --3聯OR2聯
+		xtotal float --發票金額
 	)
 	create index custno on #z_fax(custno,recno)
 	
-	insert into #z_fax(recno,tablea,cno,custno,datea,noa,noq,productno,[money])
+	insert into #z_fax(recno,tablea,cno,custno,datea,noa,noq,productno,[money],xtotal,rev)
 	select ROW_NUMBER()over(partition by custno order by floor((CAST(SUBSTRING(datea,5,2) as int)+1)/2),case when tablea='vccb' then 1 else 2 end,datea)
-		,*
+		,a.*,b.rev
 	from(
-		select 'vcca' tablea,cno,custno,datea,noa,'' noq,productno,[money]
+		select 'vcca' tablea,cno,custno,datea,noa,'' noq,productno,[money],total
 		from vcca
 		where ISNULL([money],0)>0 
 		and LEFT(datea,3)=@t_accy
 		union all
-		select 'vccb',a.cno,a.custno,a.datea,a.noa,b.noq,b.productno,-b.total
+		select 'vccb',a.cno,a.custno,a.datea,a.noa,b.noq,b.productno,-b.total,0
 		from vccb a
 		left join vccbs b on a.noa=b.noa
 		where ISNULL(b.total,0)!=0
 		and LEFT(a.datea,3)=@t_accy
 		)a
+	left join vccar b on a.noa between b.binvono and b.einvono
 	order by custno,floor((CAST(SUBSTRING(datea,5,2) as int)+1)/2),case when tablea='vccb' then 1 else 2 end,datea
 	--------------------------------------------------------------------------------------------------
 	declare @cno nvarchar(20)
@@ -492,6 +555,7 @@ z_vccadc00:--z_vccadc00
 	declare @total float
 	declare @tax float
 	declare @memo nvarchar(max)
+	declare @rev nvarchar(20)
 	
 	declare @tmpa table(
 		custno nvarchar(20),
@@ -520,6 +584,8 @@ z_vccadc00:--z_vccadc00
 	close cursor_table
 	deallocate cursor_table
 	
+	declare @xtotal float
+
 	declare cursor_table cursor for
 	select custno,cno,taxrate from @tmpa
 	open cursor_table
@@ -530,28 +596,34 @@ z_vccadc00:--z_vccadc00
 		set @total = 0
 
 		declare cursor_table2 cursor for
-		select tablea,noa,noq,productno,[money] from #z_fax 
-		where custno=@custno 
+		select tablea,noa,noq,productno,[money],xtotal,rev from #z_fax 
+		where custno=@custno
 		and (cno=@cno or (select count(1) from @tmpa where custno=@custno)=1 )
 		order by recno 
 		open cursor_table2
 		fetch next from cursor_table2
-		into @tablea,@noa,@noq,@productno,@money
+		into @tablea,@noa,@noq,@productno,@money,@xtotal,@rev
 		while(@@FETCH_STATUS <> -1)
 		begin
 			set @tax = 0
 			set @memo = ''
-			if(left(@productno,3)='N01')
+			if(@rev='2')
+			begin
+				set @money= round(@xtotal / (1+5/100),0)
+				set @tax= @xtotal - @money
+				set @memo = '2聯5%'
+			end
+			else if(left(@productno,3)='N01')
 			begin
 				set @tax = round(@money * 5 / 100,4)
 				set @memo = '5%'
 			end
-			if(@productno='N03' or @cno='08')
+			else if(@productno='N03' or @cno='08')
 			begin
 				set @tax = round(@money * @taxrate / 100,4)
 				set @memo = CAST(@taxrate as nvarchar)+'%'
 			end
-			if(left(@productno,3)!='N01' and @productno!='N03' and @cno!='08')--N01資售 固定5%, N03佣金 不用3千萬加1%,台發也不用3千萬加1%
+			else if(left(@productno,3)!='N01' and @productno!='N03' and @cno!='08')--N01資售 固定5%, N03佣金 不用3千萬加1%,台發也不用3千萬加1%
 			begin
 				if @tablea='vcca'
 				begin
@@ -597,10 +669,11 @@ z_vccadc00:--z_vccadc00
 				end
 				set @total = @total + @money
 			end	
-			update #z_fax set total = @total, tax=@tax, memo=@memo where noa=@noa and noq=@noq
+
+			update #z_fax set total = @total, tax=@tax, [money]=@money, memo=@memo where noa=@noa and noq=@noq
 	
 			fetch next from cursor_table2
-			into @tablea,@noa,@noq,@productno,@money
+			into @tablea,@noa,@noq,@productno,@money,@xtotal,@rev
 		end
 		close cursor_table2
 		deallocate cursor_table2
@@ -612,7 +685,7 @@ z_vccadc00:--z_vccadc00
 	deallocate cursor_table
 
 	update vcca set stax=0,smemo='' where LEFT(datea,3)=@t_accy
-	update vcca set stax = b.tax,smemo=b.memo
+	update vcca set stax = b.tax,smoney=b.[money],smemo=b.memo
 	from vcca a
 	left join #z_fax b on a.noa=b.noa and b.tablea='vcca'
 	where b.noa is not null 
