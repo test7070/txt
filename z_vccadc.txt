@@ -14,15 +14,17 @@
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmpx(noa,cno,acomp,custno,comp,taxrate,[money],tax)
+	insert into @tmpx(noa,cno,acomp,custno,comp,taxrate,[money],tax,total)
 	select a.noa, a.cno,b.nick
 		,case when left(a.productno,3)='N01' then '0000' else a.custno end 
 		,case when left(a.productno,3)='N01' then '資售' when left(a.productno,3)='N03' then '佣金收入' else a.comp end 
 		,a.smemo 
 		,a.[money]
 		,a.[stax]
+		,a.total
 	from vcca a
 	left join acomp b on a.cno=b.noa
 	where a.[money]!=0
@@ -34,7 +36,8 @@
 	select b.invono,a.cno,c.nick
 		,case when left(b.productno,3)='N01' then '0000' else a.custno end 
 		,case when left(b.productno,3)='N01' or left(b.productno,3)='N03' then b.product else a.comp end 
-		,'折讓單'+isnull(b.smemo,'')
+		--,'折讓單'+isnull(b.smemo,'')
+		,isnull(b.smemo,'')
 		,-b.total
 		,b.stax
 	from vccb a
@@ -53,15 +56,17 @@
 		comp nvarchar(max),
 		taxrate nvarchar(max),
 		[money] float,
-		tax float
+		tax float,
+		total float
 	)
-	insert into @tmpy(noa,cno,acomp,custno,comp,taxrate,[money],tax)
+	insert into @tmpy(noa,cno,acomp,custno,comp,taxrate,[money],tax,total)
 	select a.noa, a.cno,b.nick
 		,case when left(a.productno,3)='N01' then '0000' else a.custno end 
 		,case when left(a.productno,3)='N01' then '資售' when left(a.productno,3)='N03' then '佣金收入' else a.comp end 
 		,a.smemo 
 		,a.[money]
 		,a.[stax]
+		,a.total
 	from vcca a
 	left join acomp b on a.cno=b.noa
 	where a.[money]!=0
@@ -73,7 +78,8 @@
 	select b.invono,a.cno,c.nick
 		,case when left(b.productno,3)='N01' then '0000' else a.custno end 
 		,case when left(b.productno,3)='N01' or left(b.productno,3)='N03' then b.product else a.comp end 
-		,'折讓單'+isnull(b.smemo,'')
+		--,'折讓單'+isnull(b.smemo,'')
+		,isnull(b.smemo,'')
 		,-b.total
 		,b.stax
 	from vccb a
@@ -82,8 +88,8 @@
 	where a.[money]!=0
 	and LEFT(a.datea,6) between @t_bmon2 and @t_emon2
 	and case when left(b.productno,3)='N01' then '0000' else a.custno end between @t_bcustno and @t_ecustno
-	----------------------------------------------------------------------
-	declare @tmpa table(
+	---------------------------------------------------------------------
+	declare @tmpz table(
 		gno nvarchar(10),
 		custno nvarchar(20),
 		comp nvarchar(max),
@@ -96,35 +102,148 @@
 		tax2 float,
 		diff float
 	)
-	insert into @tmpa(gno,custno,comp,taxrate,money1,tax1)
+	----------------------------------------------------------------------
+	--   111111111111111111111111
+	declare @tmpa table(
+		gno nvarchar(10),
+		recno int,
+		pno int,
+		cno nvarchar(20),
+		acomp nvarchar(40),
+		custno nvarchar(20),
+		comp nvarchar(max),
+		taxrate nvarchar(max),
+		[money] float,
+		tax float,
+		total float
+	)
+	insert into @tmpa(gno,recno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	select '1',ROW_NUMBER()over(partition by custno order by cno )
+		,cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
+	from @tmpx
+	group by cno,acomp,custno,comp,taxrate
+	--------------------------------------------------------------------------------------------
+	update @tmpa set [money]=round(total/ 1.05,0)where CHARINDEX('2聯',taxrate)>0 
+	
+	declare @custno nvarchar(20)
+	declare @recno int
+	declare @taxrate nvarchar(max)
+	declare @money float
+	
+	declare @tax float
+	declare @string nvarchar(max)
+	declare @value nvarchar(max)
+	declare @rate nvarchar(max)
+	
+	declare cursor_table cursor for
+	select custno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@recno,@taxrate,@money
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		while CHARINDEX(SPACE(1),@taxrate)>0
+		begin
+			set @string = substring(@taxrate,0,CHARINDEX(SPACE(1),@taxrate))
+			set @taxrate = SUBSTRING(@taxrate,CHARINDEX(SPACE(1),@taxrate)+1,len(@taxrate)-len(@string))
+			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
+			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
+	
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(custno=@custno and recno=@recno) and custno=@custno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		end
+
+		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
+		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
+		update @tmpa set [money]=[money]+cast(@value as float)
+		where not(custno=@custno and recno=@recno) and custno=@custno
+		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		
+		delete @tmpa where custno=@custno and recno=@recno
+		fetch next from cursor_table
+		into @custno,@recno,@taxrate,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
+	---------------------------------------------------------------------------------------------------------------------------
+	insert into @tmpz(gno,custno,comp,taxrate,money1,tax1)
 	select '1',a.custno,a.comp,b.taxrate,sum([money]),sum(tax) 
-	from @tmpx a
-	outer apply(select top 1 taxrate from @tmpx a where custno=a.custno)b
+	from @tmpa a
+	outer apply(select top 1 taxrate from @tmpa where custno=a.custno)b
 	group by custno,comp,b.taxrate
 	
-	update @tmpa set money2=b.[money],tax2=b.tax
-	from @tmpa a
+	----------------------------------------------------------------------
+	--   2222222
+	delete @tmpa
+
+	insert into @tmpa(gno,recno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	select '1',ROW_NUMBER()over(partition by custno order by cno )
+		,cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
+	from @tmpy
+	group by cno,acomp,custno,comp,taxrate
+	--------------------------------------------------------------------------------------------
+	update @tmpa set [money]=round(total/ 1.05,0)where CHARINDEX('2聯',taxrate)>0 
+
+	declare cursor_table cursor for
+	select custno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@recno,@taxrate,@money
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		while CHARINDEX(SPACE(1),@taxrate)>0
+		begin
+			set @string = substring(@taxrate,0,CHARINDEX(SPACE(1),@taxrate))
+			set @taxrate = SUBSTRING(@taxrate,CHARINDEX(SPACE(1),@taxrate)+1,len(@taxrate)-len(@string))
+			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
+			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
+	
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(custno=@custno and recno=@recno) and custno=@custno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		end
+
+		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
+		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
+		update @tmpa set [money]=[money]+cast(@value as float)
+		where not(custno=@custno and recno=@recno) and custno=@custno
+		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		
+		delete @tmpa where custno=@custno and recno=@recno
+		fetch next from cursor_table
+		into @custno,@recno,@taxrate,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
+	---------------------------------------------------------------------------------------------------------------------------
+	update @tmpz set money2=b.[money],tax2=b.tax
+	from @tmpz a
 	left join (
 		select a.custno,a.comp,b.taxrate,sum([money])[money],sum(tax)tax 
-		from @tmpy a
-		outer apply(select top 1 taxrate from @tmpy a where custno=a.custno)b
+		from @tmpa a
+		outer apply(select top 1 taxrate from @tmpa a where custno=a.custno)b
 		group by custno,comp,b.taxrate
 		)b on a.custno=b.custno
 	where b.custno is not null
 	
-	insert into @tmpa(gno,custno,comp,taxrate,money2,tax2)
+	insert into @tmpz(gno,custno,comp,taxrate,money2,tax2)
 	select '1',a.custno,a.comp,b.taxrate,sum([money]),sum(tax) 
-	from @tmpy a
-	outer apply(select top 1 taxrate from @tmpy a where custno=a.custno)b
-	where not exists(select * from @tmpa where custno=a.custno)
+	from @tmpa a
+	outer apply(select top 1 taxrate from @tmpa a where custno=a.custno)b
+	where not exists(select * from @tmpz where custno=a.custno)
 	group by custno,comp,b.taxrate
 	--------------------------------------------------
 	--------------------------------------------------
-	insert into @tmpa(gno,money1,tax1,money2,tax2)
+	insert into @tmpz(gno,money1,tax1,money2,tax2)
 	select '2',SUM(ISNULL(money1,0)),SUM(ISNULL(tax1,0)),SUM(ISNULL(money2,0)),SUM(ISNULL(tax2,0))
-	from @tmpa
+	from @tmpz
 	--------------------------------------------------
-	update @tmpa set diff = ISNULL(money1,0)-ISNULL(money2,0)
+	update @tmpz set diff = ISNULL(money1,0)-ISNULL(money2,0)
 		,title1 = @t_bmon1 +' - '+@t_emon1+' 月份'
 		,title2 = @t_bmon2 +' - '+@t_emon2+' 月份'
 	--------------------------------------------------
@@ -136,7 +255,7 @@
 	,dbo.getComma([money2],0) a05
 	,dbo.getComma([tax2],0) a06
 	,case when diff<0 then '('+ dbo.getComma(-[diff],0)+')' else dbo.getComma([diff],0) end+case when diff>0 then '↑' when diff<0 then '↓' else '' end a07
-	from @tmpa 
+	from @tmpz 
 	order by gno,custno;
 	
 z_vccadc05a:--z_vccadc05a
