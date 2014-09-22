@@ -81,7 +81,132 @@ begin
 		end
 	end
 end;
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+orde2ordb:--ordb2ordb
+--訂單轉至請購單
+SET QUOTED_IDENTIFIER OFF
+declare @year nvarchar(20)=[1]--年度
+declare @sssno nvarchar(max)=[2] --採購員編號
+declare @ordbno nvarchar(max)=[3] --目前請購代號
+declare @ordbdata nvarchar(MAX)=[4]--轉請購資料
+declare @ordbum nvarchar(max) --目前請購序號
 
+declare @nowdate nvarchar(30) --今天日期
+set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
+
+declare @ordbdate nvarchar(30)--請購有效日
+set @ordbdate=CONVERT (VARCHAR(7), GETDATE()+10,12 )+0890000
+set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate,2)
+
+declare @accy nvarchar(20)=left(@nowdate,3)
+declare @cmd nvarchar(max)
+
+set @cmd="select @ordbum= isnull(right((select top 1 noa from view_ordb where CHARINDEX('"+@ordbno+"'+ REPLACE('"+@nowdate+"','/',''),noa)>0 order by noa desc),3),'0')"
+EXEC SP_EXECUTESQL @cmd, N'@ordbum nvarchar(max) OUTPUT', @ordbum OUTPUT
+-----------------------------------------------------------------------
+declare @string nvarchar(max)
+declare @n int
+
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #tmp(
+		idno int identity(0,1),
+		noa nvarchar(90),
+		no2 nvarchar(90),
+		mount float,
+		tggno nvarchar(90),
+		price float
+	)
+	
+	set @string = @ordbdata
+	while(1=1)
+	begin
+		set @n = PATINDEX('%##%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #tmp 
+				select dbo.split(@string,'^',0),dbo.split(@string,'^',1)
+				,cast(dbo.split(@string,'^',2) as float)
+				,dbo.split(@string,'^',3)
+				,cast(dbo.split(@string,'^',4) as float)
+			end
+			break
+		end
+		
+		insert into #tmp 
+		select dbo.split(LEFT(@string,@n-2),'^',0),dbo.split(LEFT(@string,@n-2),'^',1)
+		,cast(dbo.split(LEFT(@string,@n-2),'^',2) as float)
+		,dbo.split(LEFT(@string,@n-2),'^',3)
+		,cast(dbo.split(LEFT(@string,@n-2),'^',4) as float)
+		
+		set @string = SUBSTRING(@string,@n+2,LEN(@string)-@n)
+	end
+	
+	declare @tggno nvarchar(max)
+	declare @ordbnos nvarchar(max)=''
+	declare cursor_table cursor for 
+	select tggno from #tmp group by tggno order by tggno
+	open cursor_table 
+	fetch next from cursor_table 
+	into @tggno
+	while(@@FETCH_STATUS <> -1) 
+	begin
+		--bbm
+		EXEC("insert into ordb"+@accy+" (datea,odate,noa,kind,tggno,tgg,nick,paytype,trantype,tel,fax,cno,acomp,salesno,sales,worker,money,taxtype,total,memo,enda,isproj,cancel
+		,tax,weight,floata,mount,price,totalus,isctrlweight,ordgweight,ordeweight,signprocess,apv)
+		select '"+@ordbdate+"','"+@nowdate+"','"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
+		,'1' kind,'"+@tggno+"' tggno,isnull((select top 1 comp from tgg where noa='"+@tggno+"'),'') tgg
+		,isnull((select top 1 (case when isnull(nick,'')='' then left(comp,4) else nick end) from tgg where noa='"+@tggno+"'),'') nick
+		,isnull((select top 1 paytype from tgg where noa='"+@tggno+"'),'') paytype
+		,isnull((select top 1 trantype from tgg where noa='"+@tggno+"'),'') trantype
+		,isnull((select top 1 tel from tgg where noa='"+@tggno+"'),'') tel
+		,isnull((select top 1 fax from tgg where noa='"+@tggno+"'),'') fax
+		,isnull((select top 1 noa from acomp),'') cno,isnull((select top 1 acomp from acomp),'') acomp
+		,'"+@sssno+"' salesno
+		,isnull((select top 1 namea from sss where noa='"+@sssno+"'),'') sales
+		,isnull((select top 1 namea from nhpe where noa='"+@sssno+"'),'') worker
+		,0 money,'0' taxtype, 0 total,'"+@nowdate+"'+' 訂單作業轉來 'memo,0,1,0,0,0,0,0,0,0,0,0,0,0,'N'")
+		
+		--bbs
+		EXEC("insert into ordbs"+@accy+"(datea,noa,no3,productno,productno1,product,unit,mount,c1,notv,omount,stdmount,price
+		,total,tggno,enda,cancel,kind,memo,spec,ordeno,no2,apv,weight,c2,notv2,dime,width,lengthb,theory,radius,isnotdeal)
+		select '"+@ordbdate+"','"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
+		,right('000'+cast(ROW_NUMBER() OVER (ORDER BY b.productno DESC) as nvarchar(10)),3) no3
+		,b.productno,b.productno,b.product,b.unit,a.mount,0,a.mount,a.mount,0,a.price
+		,round(a.mount*a.price,0) total
+		,'"+@tggno+"',0,0, '1' kind,'','',a.noa,a.no2,'N',0,0,0,0,0,0,0,0,0
+		from #tmp a left join view_ordes b on a.noa+'-'+a.no2=b.noa+'-'+b.no2 where isnull(a.tggno,'')='"+@tggno+"'")
+		
+		EXEC("update ordb"+@accy+" set money=round((select sum(total) from view_ordbs where noa='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3)),0)
+		,total=round((select sum(total) from view_ordbs where noa='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3)),0)
+		,ordeno=(select top 1 ordeno from view_ordbs where noa='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3))
+		where noa ='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3)
+		")
+		
+		set @ordbnos=@ordbnos+@ordbno+ REPLACE(@nowdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
+		set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	
+		fetch next from cursor_table 
+		into @tggno
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+	
+	if(len(@ordbnos)>0)
+	begin
+		select @ordbnos ordbnos
+		EXEC("update orde"+@year+" set ordbno='"+@ordbnos+"' where noa in(select noa from #tmp group by noa)")
+	end
+
+;
+-------------------------------------------------------------------------------------------------------------------------------------------------------
 apv:--orde_apv
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
@@ -136,7 +261,7 @@ apv:--orde_apv
 	end
 	
 	select * from @tmp;
-	
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
 conform:--orde_conform
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
