@@ -1,0 +1,85 @@
+sss:--sss
+SET QUOTED_IDENTIFIER OFF
+declare @t_sssno nvarchar(100)= [1] --員工編號
+declare @t_year nvarchar(100)= [2] --年度
+declare @salbkey nvarchar(100)= [3] --salb的KEY sys.key_salb
+declare @typea nvarchar(100)= [4] --所得格式
+declare @typeb nvarchar(100)= [5] --所得註記
+declare @typec nvarchar(100)= [6] --項目代號
+declare @t_money nvarchar(MAX)=[7]
+
+--*********************************************************************************************
+declare @salbnoq nvarchar(100)
+declare @salbno nvarchar(100) --新稅務單號碼
+declare @t_mon int=1
+
+declare @retire int = 0
+declare @money int = 0
+declare @tax int = 0
+declare @tax2 int =0
+declare @x_mon nvarchar(100)=''
+declare @x_datea nvarchar(100)=''
+
+while(@t_mon<=12)
+begin
+
+	set @retire=cast(dbo.split(@t_money,'#',(@t_mon-1)*4+0) as int)
+	set @money=cast(dbo.split(@t_money,'#',(@t_mon-1)*4+1) as int)
+	set @tax=cast(dbo.split(@t_money,'#',(@t_mon-1)*4+2) as int)
+	set @tax2=cast(dbo.split(@t_money,'#',(@t_mon-1)*4+3) as int)
+	set @x_mon=@t_year+'/'+right('00'+cast(@t_mon as nvarchar(50)),2)
+	set @x_datea= @t_year+'/'+right('00'+cast(@t_mon as nvarchar(50)),2)+'/05' --支付日期預設每月的5號
+	
+	--判斷金額是否都大於0
+	if(@retire=0 and @money=0 and @tax=0 and @tax2=0)
+	begin
+		CONTINUE
+	end
+
+	--判斷當月是否存在
+	if((select count(*) from salb where mon=@x_mon)>0)
+	begin
+		--取得noa
+		select  @salbno=MAX(noa) from salb where mon=@x_mon
+		--取得noq
+		select  @salbnoq=MAX(noq) from salbs where noa=@salbno
+		set @salbnoq=cast(cast(@salbnoq as int) +1 as nvarchar(50))
+		--取得datea
+		select  @x_datea=datea from salb where noa=@salbno
+	end
+	else
+	begin
+		--產生新的表頭
+		set @salbno=
+			case when isnull((select MAX(noa) from salb where mon=@x_mon),'') >= isnull((select MAX(noa) from dno where tablea='salb' and noa like @salbkey+REPLACE(@x_mon,'/','')+'%'),'')
+			then isnull((select MAX(noa) from salb where mon=@x_mon),'') else (select MAX(noa) from dno where tablea='salb' and noa like @salbkey+REPLACE(@x_mon,'/','')+'%') end
+		
+		set @salbno=@salbkey+REPLACE(@x_mon,'/','')+right('000'+cast(cast(right(@salbno,3) as int) +1 as nvarchar(50)),3)
+		set @salbnoq='001'
+		
+		--插入表頭
+		insert salb (noa,mon,datea,money,tax)
+		select @salbno,@x_mon,@x_datea,0,0
+	end
+		
+	--寫入資料
+	insert salbs(noa,noq,sssno,namea,id,sex,cno,isclerk,addr,typea,typeb,typec,retire,money,tax,tax2,mount,ad_money,ch_meal,mon,datea)
+	select @salbno,@salbnoq,noa,namea,id,sex,cno,isclerk,(case when addr_conn='' or addr_conn='同上' then addr_home else addr_conn end)
+	,@typea,@typeb,@typec
+	,@retire	,@money,@tax,@tax2,isnull(raise_num,0),isnull(addmoney,0),isnull(meals,0),@x_mon,@x_datea
+	from sss a 
+	outer apply (select top 1 raise_num,addmoney,meals from salarys where sno=@t_sssno and mon=@x_mon) b
+	where noa=@t_sssno
+	
+	--重新計算表身
+	update a
+	set money=(select sum(money) from salbs where noa=a.noa)
+	,tax=(select sum(tax) from salbs where noa=a.noa)
+	from salb a where noa=@salbno
+	
+	set @t_mon=@t_mon+1
+end
+
+
+;
+------------------------------------------------------------------------------------------------------------------------------------------------
