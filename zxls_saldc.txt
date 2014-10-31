@@ -1,5 +1,5 @@
 ﻿zxls_saldc:--指紋打卡上傳
---1030924
+--1031031
 declare @workerno nvarchar(MAX)=[1] --上傳人編號
 declare @worker nvarchar(MAX)=[2]--上傳人姓名
 declare @datea nvarchar(MAX)
@@ -25,15 +25,6 @@ declare @tmp table(
 		nos nvarchar(100),
 		works nvarchar(100)
 )
-
---insert into @tmp
---select left(a,CHARINDEX(CHAR(9),a)-1) 
---,LEFT(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))-1) 
---,LEFT(SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)))-1) 
---,LEFT(SUBSTRING(SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)))+1,len(a)))-1) 
---,SUBSTRING(SUBSTRING(SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)),CHARINDEX(CHAR(9),SUBSTRING(a,CHARINDEX(CHAR(9),a)+1,len(a)))+1,len(a)))+1,len(a)))+1,len(a)) 
---from ztmpxls 
---where a!=''
 
 insert into @tmp
 select left(a,CHARINDEX(' ',a)-1) 
@@ -103,29 +94,36 @@ begin
 	--更新noq
 	update @bbs set noq=right('000'+cast((select cast(isnull(MAX(noq),0)as int) from salpresents where noa=@t_date)+noq as nvarchar(10)),3)
 
-	update @bbs
-	set memo=''
+	update @bbs set memo=''
 	
-	update @bbs
+	update a
 	set memo='外勤-晚 進'
+	from @bbs a
 	where clockin> @t_gowork
-	and (select top 1 works from @tmp where sssno=sssno and clockins=timea)='3'
+	and (select top 1 works from @tmp where sssno=a.sssno and a.clockins=timea)='3'
 	
-	update @bbs
+	update a
 	set memo=case when len(memo)>0 then memo+',外勤-早 退'else '外勤-早 退' end
+	from @bbs a
 	where round(cast(datediff(MINUTE,clockins,clockouts)-@t_rest as float)/60,1)<8
-	and (select top 1 works from @tmp where sssno=sssno and clockouts=timea)='2'
+	and (select top 1 works from @tmp where sssno=a.sssno and a.clockouts=timea)='2'
 	
 	--遲到
-	update @bbs
-	set memo=case when len(memo)>0 then memo+',遲到' else '遲到' end
+	update a
+	set memo=memo+(case when len(memo)>0 then ',' else '' end)+(
+	case when (select COUNT(*) from salvacause where sssno=a.sssno and bdate=a.noa and btime='08:00')>0
+	then '請假' else '遲到' end)
+	from @bbs a
 	where clockin>@t_gowork
 	and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
 	and CHARINDEX('外勤-晚 進',memo)=0
 	
 	--早退
-	update @bbs
-	set memo=case when len(memo)>0 then memo+',早退' else '早退' end
+	update a
+	set memo=(case when len(memo)>0 then memo+',' else '' end)+
+	case when (select COUNT(*) from salvacause where sssno=a.sssno and bdate=a.noa and etime='17:30')>0
+	then (case when  CHARINDEX('請假',memo)>0 then '' else '請假' end) else '早退' end
+	from @bbs a
 	where clockout<@t_offwork
 	and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
 	and CHARINDEX('外勤-早 退',memo)=0
@@ -265,34 +263,41 @@ begin
 		from @bbs a left join salpresents b on a.noa=b.noa and a.sssno=b.sssno
 		where b.noa!='' and b.sssno!='' and a.clockout!='' and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
 		
-		--更新備註1030924
+		--更新備註1030924 --1031031調整 如果有請假 早退和遲到 換成請假
 		update a
 		set memo=
 		--遲到 
-		(case when clockin>@t_gowork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')=0 then '遲到' 
-		when clockin>@t_gowork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
-		else '' end)+
+		(case when clockin>@t_gowork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
+		then
+			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:00')>0 then '請假'
+			 when (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
+			 else '遲到' end)
+		else ''	end
+		)+
 		--逗號
-		(case when len((case when clockin>@t_gowork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')=0 then '遲到' 
-		when clockin>@t_gowork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
-		else '' end))>0 and len((case when clockout<@t_offwork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and etime>='17:30')=0 then '早退'
-		when clockout<@t_offwork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and etime>='17:30')>0 then '外勤-早 退'
-		else '' end))>0
+		(case when len((case when clockin>@t_gowork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
+		then
+			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:00')>0 then '請假'
+			 when (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
+			 else '遲到' end)
+		else ''	end
+		))>0
 		then ',' else '' end)+
 		--早退 
 		(case when clockout<@t_offwork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and etime>='17:30')=0 then '早退'
-		when clockout<@t_offwork and not(@t_date in(select noa from holiday) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0) 
-		and (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and etime>='17:30')>0 then '外勤-早 退'
+		then
+			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and etime='17:30')>0 then '請假'
+			 when (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and etime>='17:30')>0 then '外勤-早 退' 
+			 else '早退' end)
 		else '' end)
 		from salpresents a
-		where noa=@t_date and (len(clockin)>0 or len(clockout)>0)
+		where noa=@t_date and (len(isnull(clockin,''))>0 or len(isnull(clockout,''))>0)
+		
+		update a
+		set memo=(case when (select COUNT(*) from salvacause where a.noa between bdate and edate and sssno=a.sssno and btime='08:00' and etime='17:30')>0
+		then '請假' else memo end )
+		from salpresents a
+		where noa=@t_date and (len(isnull(clockin,''))=0 and len(isnull(clockout,''))=0)
 		
 		--新增bbs(不存在的)
 		insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,memo)
@@ -383,132 +388,4 @@ end
 close cursor_table
 deallocate cursor_table
 
-
---新增外勤--暫不寫入
---declare @tbbm table(
---		noa nvarchar(20),
---		datea nvarchar(50),
---		sssno nvarchar(50),
---		namea nvarchar(50),
---		partno nvarchar(50),
---		part nvarchar(50),
---		worker nvarchar(50)
---)
---declare @tbbs table(
---		noa nvarchar(20),
---		noq nvarchar(50),
---		datea nvarchar(50),
---		sssno nvarchar(50),
---		btime nvarchar(50),
---		etime nvarchar(50)
---)
-
---declare @sssno nvarchar(MAX)
---declare @noano int
---declare @timea nvarchar(MAX)
---declare @works nvarchar(MAX)
---declare @t_works nvarchar(MAX)
---declare @tnoq int
-
---declare cursor_table cursor for
---select left(timea,10) datea from @tmp where works='2' or works='3' group by left(timea,10) --匯入日期
---open cursor_table
---fetch next from cursor_table
---into @datea
---while(@@FETCH_STATUS <> -1)
---begin
---	set @t_date=right('00'+cast((CAST(LEFT(@datea,4) as int)-1911) as nvarchar(10)),3)
---				+REPLACE(right(@datea,6),'-','/')
-				
---	set @noano=isnull((select top 1 right(noa,3) from trip where left(noa,7)=REPLACE(@t_date,'/','') order by noa desc),0) --取當天最後一筆noa
---	------------------------------------
---	declare cursor_tables cursor for
---	select sssno from @tmp where (works='2' or works='3') and left(timea,10)=@datea group by sssno order by sssno
---	open cursor_tables
---	fetch next from cursor_tables
---	into @sssno
---	while(@@FETCH_STATUS <> -1)
---	begin
---		set @noano=@noano+1
---		insert @tbbm
---		select REPLACE(@t_date,'/','')+right('000'+cast(@noano as nvarchar(10)),3) noa,@t_date datea,@sssno sssno
---		,(select namea from sss where noa=@sssno)namea,(select partno from sss where noa=@sssno),(select part from sss where noa=@sssno) part,@worker
---		set @t_works='0'
---		set @tnoq=1
---		----------------------------------------------------------------------
---		declare cursor_tabless cursor for
---		select timea,works from @tmp where (works='2' or works='3') and left(timea,10)=@datea and sssno=@sssno order by timea
---		open cursor_tabless
---		fetch next from cursor_tabless
---		into @timea,@works
---		while(@@FETCH_STATUS <> -1)
---		begin
---			if(@t_works='0')--第一筆
---			begin
---				if(@works='2')
---				begin
---					insert @tbbs
---					select REPLACE(@t_date,'/','')+right('000'+cast(@noano as nvarchar(10)),3) noa
---					,right('000'+CAST(@tnoq as nvarchar(10)),3)noq,@t_date,@sssno,left(RIGHT(@timea,8),5),''
---				end
---				else
---				begin --出勤晚到
---					insert @tbbs
---					select REPLACE(@t_date,'/','')+right('000'+cast(@noano as nvarchar(10)),3) noa
---					,right('000'+CAST(@tnoq as nvarchar(10)),3)noq,@t_date,@sssno,'',left(RIGHT(@timea,8),5)
---				end
---			end
---			else
---			begin
---				if(@t_works='2' and @works='3') --正常出勤
---				begin
---					set @tnoq=@tnoq-1
---					update @tbbs
---					set etime=left(RIGHT(@timea,8),5)
---					where noq=right('000'+CAST(@tnoq as nvarchar(10)),3)
---				end
---				else
---				begin
---					if(@works='2')
---					begin
---						insert @tbbs
---						select REPLACE(@t_date,'/','')+right('000'+cast(@noano as nvarchar(10)),3) noa
---						,right('000'+CAST(@tnoq as nvarchar(10)),3)noq,@t_date,@sssno,left(RIGHT(@timea,8),5),''
---					end
---					else
---					begin
---						insert @tbbs
---						select REPLACE(@t_date,'/','')+right('000'+cast(@noano as nvarchar(10)),3) noa
---						,right('000'+CAST(@tnoq as nvarchar(10)),3)noq,@t_date,@sssno,'',left(RIGHT(@timea,8),5)
---					end
---				end
---			end
---			set @tnoq=@tnoq+1
---			set @t_works=@works
---			fetch next from cursor_tabless
---			into @timea,@works
---		end
---		close cursor_tabless
---		deallocate cursor_tabless
-		
---		------------------------------------------------------------------------
---		insert into trip(noa,datea,sssno,namea,partno,part,worker,memo)
---		select *,'指紋機匯入' from @tbbm
---		insert into trips(noa,noq,datea,sssno,btime,etime)
---		select * from @tbbs
---		delete @tbbm
---		delete @tbbs
-		
---		fetch next from cursor_tables
---		into @sssno
---	end
---	close cursor_tables
---	deallocate cursor_tables
---	------------------------------------------------------
-
---	fetch next from cursor_table
---	into @datea
---end
---close cursor_table
---deallocate cursor_table
 ;
