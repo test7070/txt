@@ -64,7 +64,7 @@ declare @bbs table(
 		w133 float,
 		w166 float,
 		w100 float,
-		memo nvarchar(50),
+		memo nvarchar(MAX),
 		work nvarchar(1),--1早班 2中班 3 晚班(目前沒有) 4責任 5責任(8小時)
 		cno nvarchar(50)--公司
 )
@@ -116,7 +116,7 @@ begin
 	--select @nextdatea,@datea,@t_weekday
 	
 	insert @bbm(noa,holiday)
-	select @datea,(select COUNT(*) from holiday where noa=@datea)
+	select @datea,(select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)
 	
 	--插入早班
 	insert @bbs
@@ -196,7 +196,7 @@ begin
 	
 	update @bbs	set noq=right('000'+noq,3)
 	
-	if((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)--正常日
+	if((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)--正常日
 	begin
 		--判斷遲到早退 曠職
 		--早班
@@ -329,7 +329,7 @@ begin
 			insert st.dbo.salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,memo)
 			select noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,memo
 			+(case when (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where sssno=bbs.sssno and (@datea between bdate and edate) and ((btime='09:00' and etime='18:00') or (btime='16:00' and etime='00:00')))=0 
-			and ( (work='4' and((clockin!='' and clockout='') or (clockin='' and clockout!=''))) or (work!='4' and (clockin='' or clockout=''))) and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and  @t_weekday!=6) then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			and ( (work='4' and((clockin!='' and clockout='') or (clockin='' and clockout!=''))) or (work!='4' and (clockin='' or clockout=''))) and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and  @t_weekday!=6) then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
 			from @bbs bbs where cno='RAA000' and noa=@datea
 			
 			--出勤只要有缺少就要出現打卡資料錯誤
@@ -343,7 +343,7 @@ begin
 			,w166=isnull((select sum(w166) from st.dbo.salpresents where noa=a.noa),0)
 			,w100=isnull((select sum(w100) from st.dbo.salpresents where noa=a.noa),0)
 			,mount=isnull((select COUNT(*) from st.dbo.salpresents where noa=a.noa),0)
-			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
+			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
 			from st.dbo.salpresent a where noa=@datea
 		end
 		else
@@ -452,13 +452,13 @@ begin
 			update st.dbo.salpresents
 			set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
 			where noa=@datea and clockout!='' and isnull(addwork,'')='1'
-			and clockout>='19:00:00' and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and clockout>='19:00:00' and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			
 			--中班(***沒有加班通在是假日加班***)
 			--update st.dbo.salpresents
 			--set w133=round((cast(datediff(MINUTE,cast(cast(left(@nextdatea,3)as int)+1911 as nvarchar(10))+right(@nextdatea,6)+' 01:00:00',cast(cast(left(@nextdatea,3)as int)+1911 as nvarchar(10))+right(@nextdatea,6)+' '+clockout) as float)/60),1)
 			--where noa=@datea and clockout!='' and isnull(addwork,'')='2'
-			--and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			--and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			--and clockout between '01:00:00' and '06:00:00'--隔天
 			
 			--晚班(目前沒有)
@@ -472,18 +472,18 @@ begin
 			and isnull((select SUM(round((cast(datediff(MINUTE,cast(cast(left(@datea,3)as int)+1911 as nvarchar(10))+right(@datea,6)+' '+btime,cast(cast(left((case when etime='24:00:00' then @nextdatea else @datea end),3)as int)+1911 as nvarchar(10))+right((case when etime='24:00:00' then @nextdatea else @datea end),6)+' '+(case when etime='24:00:00' then '00:00:00' else etime end)) as float)/60),1)) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where sssno=a.sssno and (@datea between bdate and edate)),0) --請假時數
 			+isnull(round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+(case when a.clockin between '12:00:00' and '13:00:00' then '13:00:00' else clockin end),cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1),0) --上班時數
 			>=(case when clockin < '12:00:00' then 10 else 9 end)
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			---------------------------------------------------------------------------------------------
 			--更新加班超過兩小時
 			update st.dbo.salpresents
 			set w133=0
 			where noa=@datea and w133<0 and noa=@datea
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 					
 			update st.dbo.salpresents
 			set w166=round(w133-2,1),w133=2
 			where noa=@datea and w133>2 and noa=@datea
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			
 			-----------------------------------------------------------------------------------------------
 			--假日早,中,晚,責任8小時
@@ -491,7 +491,7 @@ begin
 			set w100=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1)
 			where noa=@datea and (isnull(addwork,'')='1' or isnull(addwork,'')='2' or isnull(addwork,'')='5')
 			and clockin!='' and clockout!=''
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)>0 or @t_weekday=0 or @t_weekday=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6)
 			
 			--*********************************************************************************
 			--新增bbs(不存在的)
@@ -505,7 +505,7 @@ begin
 			,w133=isnull((select sum(w133) from st.dbo.salpresents where noa=a.noa),0)
 			,w166=isnull((select sum(w166) from st.dbo.salpresents where noa=a.noa),0)
 			,mount=isnull((select count(*) from st.dbo.salpresents where noa=a.noa),0)
-			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
+			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
 			from st.dbo.salpresent a
 			where a.noa=@datea
 			
@@ -518,7 +518,7 @@ begin
 			set noq='XX'+noq,addwork='',memo=memo+(case when 
 			(select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where sssno=st.dbo.salpresents.sssno and (@datea between bdate and edate) and ((btime='09:00' and etime='18:00') or (btime='16:00' and etime='00:00')))=0 
 			and (((select top 1 work from @bbs where noa=@datea and cno='RAA000' and st.dbo.salpresents.sssno=sssno)='4' and((clockin!='' and clockout='') or (clockin='' and clockout!=''))) or ((select top 1 work from @bbs where noa=@datea and cno='RAA000' and st.dbo.salpresents.sssno=sssno)!='4' and (clockin='' or clockout='')))
-			and (clockin='' or clockout='') and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and  @t_weekday!=6) and CHARINDEX('打卡資料錯誤',memo)=0 then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			and (clockin='' or clockout='') and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and  @t_weekday!=6) and CHARINDEX('打卡資料錯誤',memo)=0 then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
 			where noa=@datea
 			
 			--出勤只要有缺少就要出現打卡資料錯誤
@@ -550,7 +550,7 @@ begin
 			insert st2.dbo.salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,memo)
 			select noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,memo
 			+(case when 	(select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where sssno=bbs.sssno and (@datea between bdate and edate) and ((btime='09:00' and etime='18:00') or (btime='16:00' and etime='00:00')))=0 
-			and ( (work='4' and((clockin!='' and clockout='') or (clockin='' and clockout!=''))) or (work!='4' and (clockin='' or clockout=''))) and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and  @t_weekday!=6) then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			and ( (work='4' and((clockin!='' and clockout='') or (clockin='' and clockout!=''))) or (work!='4' and (clockin='' or clockout=''))) and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and  @t_weekday!=6) then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
 			from @bbs bbs where cno='AMED000' and noa=@datea
 			
 			--出勤只要有缺少就要出現打卡資料錯誤
@@ -564,7 +564,7 @@ begin
 			,w166=isnull((select sum(w166) from st2.dbo.salpresents where noa=a.noa),0)
 			,w100=isnull((select sum(w100) from st2.dbo.salpresents where noa=a.noa),0)
 			,mount=isnull((select COUNT(*) from st2.dbo.salpresents where noa=a.noa),0)
-			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
+			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
 			from st2.dbo.salpresent a where noa=@datea
 		end
 		else
@@ -667,18 +667,18 @@ begin
 			--重新計算加班時數
 			--非假日
 			--早班(超過1小時才算加班)
-			--(select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+			--(select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 			
 			update st2.dbo.salpresents
 			set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
 			where noa=@datea and clockout!='' and isnull(addwork,'')='1'
-			and clockout>='19:00:00' and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and clockout>='19:00:00' and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			
 			--中班(***沒有加班通在是假日加班***)
 			--update st2.dbo.salpresents
 			--set w133=round((cast(datediff(MINUTE,cast(cast(left(@nextdatea,3)as int)+1911 as nvarchar(10))+right(@nextdatea,6)+' 01:00:00',cast(cast(left(@nextdatea,3)as int)+1911 as nvarchar(10))+right(@nextdatea,6)+' '+clockout) as float)/60),1)
 			--where noa=@datea and clockout!='' and isnull(addwork,'')='2'
-			--and ((select COUNT(*) from st2.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			--and ((select COUNT(*) from st2.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			--and clockout between '01:00:00' and '06:00:00'--隔天
 			
 			--晚班(目前沒有)
@@ -692,19 +692,19 @@ begin
 			and isnull((select SUM(round((cast(datediff(MINUTE,cast(cast(left(@datea,3)as int)+1911 as nvarchar(10))+right(@datea,6)+' '+btime,cast(cast(left((case when etime='24:00:00' then @nextdatea else @datea end),3)as int)+1911 as nvarchar(10))+right((case when etime='24:00:00' then @nextdatea else @datea end),6)+' '+(case when etime='24:00:00' then '00:00:00' else etime end)) as float)/60),1)) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where sssno=a.sssno and (@datea between bdate and edate)),0) --請假時數
 			+isnull(round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+(case when a.clockin between '12:00:00' and '13:00:00' then '13:00:00' else clockin end),cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1),0) --上班時數
 			>=(case when clockin < '12:00:00' then 10 else 9 end)
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			
 			---------------------------------------------------------------------------------------------
 			--更新加班超過兩小時
 			update st2.dbo.salpresents
 			set w133=0
 			where noa=@datea and w133<0 and noa=@datea
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			
 			update st2.dbo.salpresents
 			set w166=round(w133-2,1),w133=2
 			where noa=@datea and w133>2 and noa=@datea
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6)
 			
 			-----------------------------------------------------------------------------------------------
 			--假日早,中,晚,責任8小時
@@ -712,7 +712,7 @@ begin
 			set w100=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1)
 			where noa=@datea and (isnull(addwork,'')='1' or isnull(addwork,'')='2' or isnull(addwork,'')='5')
 			and clockin!='' and clockout!=''
-			and ((select COUNT(*) from st.dbo.holiday where noa=@datea)>0 or @t_weekday=0 or @t_weekday=6)
+			and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6)
 			
 			--*********************************************************************************
 			--新增bbs(不存在的)
@@ -726,7 +726,7 @@ begin
 			,w133=isnull((select sum(w133) from st2.dbo.salpresents where noa=a.noa),0)
 			,w166=isnull((select sum(w166) from st2.dbo.salpresents where noa=a.noa),0)
 			,mount=isnull((select count(*) from st2.dbo.salpresents where noa=a.noa),0)
-			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
+			,holiday=case when ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6) then 0 else 1 end
 			from st2.dbo.salpresent a
 			where a.noa=@datea
 			
@@ -739,7 +739,7 @@ begin
 			set noq='XX'+noq,addwork='',memo=memo+(case when 
 			(select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where sssno=st2.dbo.salpresents.sssno and (@datea between bdate and edate) and ((btime='09:00' and etime='18:00') or (btime='16:00' and etime='00:00')))=0
 			and (((select top 1 work from @bbs where noa=@datea and cno='AMED000' and st2.dbo.salpresents.sssno=sssno )='4' and((clockin!='' and clockout='') or (clockin='' and clockout!=''))) or ((select top 1 work from @bbs where noa=@datea and cno='AMED000' and st2.dbo.salpresents.sssno=sssno)!='4' and (clockin='' or clockout='')))
-			and (clockin='' or clockout='') and ((select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and  @t_weekday!=6) and CHARINDEX('打卡資料錯誤',memo)=0 then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			and (clockin='' or clockout='') and ((select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and  @t_weekday!=6) and CHARINDEX('打卡資料錯誤',memo)=0 then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
 			where noa=@datea
 			
 			--出勤只要有缺少就要出現打卡資料錯誤
@@ -771,8 +771,21 @@ begin
 	begin
 		delete st.dbo.salvacause where datea=@datea and rank='1'
 		delete st2.dbo.salvacause where datea=@datea and rank='1'
+		update st.dbo.salpresents set memo=REPLACE(REPLACE(memo,',曠工',''),'曠工','')
+		where CHARINDEX('曠工',memo)>0 and noa=@datea
+		update st2.dbo.salpresents set memo=REPLACE(REPLACE(memo,',曠工',''),'曠工','')
+		where CHARINDEX('曠工',memo)>0 and noa=@datea
 		--早班***********--寫入英特瑞 資料
 		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('早',isnull(b.typea,''))>0 
+		and clockin>='09:11:00' and clockin!=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -781,11 +794,20 @@ begin
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
 		and clockin>='09:11:00' and clockin!=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('早',isnull(b.typea,''))>0 
+		and clockout<='17:44:59' and clockout!=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -794,11 +816,20 @@ begin
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
 		and clockout<='17:44:59' and clockout!=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('早',isnull(b.typea,''))>0 
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='09:00' and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -806,12 +837,21 @@ begin
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
 		and isnull(clockin,'')='' and isnull(clockout,'')=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='09:00' and etime='18:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='09:00' and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--早班***********--寫入安美得 資料
 		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('早',isnull(b.typea,''))>0 
+		and clockin>='09:11:00' and clockin!=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -820,11 +860,20 @@ begin
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
 		and clockin>='09:11:00' and clockin!=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('早',isnull(b.typea,''))>0 
+		and clockout<='17:44:59' and clockout!=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -833,11 +882,20 @@ begin
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
 		and clockout<='17:44:59' and clockout!=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('早',isnull(b.typea,''))>0 
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='09:00' and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -845,12 +903,21 @@ begin
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
 		and isnull(clockin,'')='' and isnull(clockout,'')=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='09:00' and etime='18:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='09:00' and etime='18:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--中班********--寫入英特瑞 資料
 		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('中',isnull(b.typea,''))>0 
+		and clockin>='16:11:00' and clockin!=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='16:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -859,11 +926,20 @@ begin
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('中',isnull(b.typea,''))>0 
 		and clockin>='16:11:00' and clockin!=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='16:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='16:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+				
+		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('中',isnull(b.typea,''))>0 
+		and clockout<='23:44:59' and clockout!='' and clockout>='16:00:00'
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
-		--下班曠職
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -872,11 +948,20 @@ begin
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('中',isnull(b.typea,''))>0 
 		and clockout<='23:44:59' and clockout!='' and clockout>='16:00:00'
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='24:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('中',isnull(b.typea,''))>0 
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='16:00' and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -884,12 +969,21 @@ begin
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('中',isnull(b.typea,''))>0 
 		and isnull(clockin,'')='' and isnull(clockout,'')=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='16:00' and etime='24:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='16:00' and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--中班********--寫入安美得 資料
 		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('中',isnull(b.typea,''))>0 
+		and clockin>='16:11:00' and clockin!=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='16:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -898,11 +992,20 @@ begin
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('中',isnull(b.typea,''))>0 
 		and clockin>='16:11:00' and clockin!=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='16:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='16:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('中',isnull(b.typea,''))>0 
+		and clockout<='23:44:59' and clockout!='' and clockout>='16:00:00'
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -911,11 +1014,20 @@ begin
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('中',isnull(b.typea,''))>0 
 		and clockout<='23:44:59' and clockout!='' and clockout>='16:00:00'
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='24:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('中',isnull(b.typea,''))>0 
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='16:00' and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -923,13 +1035,23 @@ begin
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('中',isnull(b.typea,''))>0 
 		and isnull(clockin,'')='' and isnull(clockout,'')=''
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='16:00' and etime='24:00')=0
-		and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where (a.noa between bdate and edate) and btime='16:00' and etime='24:00' and sssno=a.sssno)=0
+		and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--責任8小時(只有早退曠職)
 		--寫入英特瑞 資料
 		--正常 上午
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('足',isnull(b.typea,''))>0 
+		and clockout!='' and clockin!='' and clockin<'12:00:00'
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 8.45
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -939,11 +1061,21 @@ begin
 		where charindex('足',isnull(b.typea,''))>0 
 		and clockout!='' and clockin!='' and clockin<'12:00:00'
 		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 8.45
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate )=0
-		--and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate  and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--遲到下午進公司排除午休時間
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
+		where charindex('足',isnull(b.typea,''))>0 
+		and clockout!='' and clockin!='' and clockin>='12:00:00'
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 7.45
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -953,12 +1085,22 @@ begin
 		where charindex('足',isnull(b.typea,''))>0 
 		and clockout!='' and clockin!='' and clockin>='12:00:00'
 		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 7.45
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate )=0
-		--and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--寫入安美得 資料
 		--正常 上午
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('足',b.typea)>0 
+		and clockout!='' and clockin!='' and clockin<'12:00:00'
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 8.45
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -968,11 +1110,21 @@ begin
 		where charindex('足',b.typea)>0 
 		and clockout!='' and clockin!='' and clockin<'12:00:00'
 		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 8.45
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate )=0
-		--and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 		--遲到下午進公司排除午休時間
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
+		where charindex('足',b.typea)>0 
+		and clockout!='' and clockin!='' and clockin>='12:00:00'
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 7.45
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
+		and a.noa=@datea
+		
 		insert st2.dbo.salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
 		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from st2.dbo.salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
 		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
@@ -982,8 +1134,8 @@ begin
 		where charindex('足',b.typea)>0 
 		and clockout!='' and clockin!='' and clockin>='12:00:00'
 		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+clockout) as float)/60),2)< 7.45
-		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate )=0
-		--and (select COUNT(*) from st.dbo.holiday where noa=@datea)=0 and @t_weekday!=0 and @t_weekday!=6
+		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and sssno=a.sssno)=0
+		--and (select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 		and a.noa=@datea
 		
 	end
