@@ -1,0 +1,155 @@
+ucc_pos_fast:--ucc_pos_fast
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(MAX)=[1]--物品編號
+declare @product nvarchar(MAX)=[2]--物品名稱
+declare @engpro nvarchar(MAX)=[3]--英文名稱
+declare @tggno nvarchar(MAX)=[4]--供應商編號
+declare @tgg nvarchar(MAX)=[5]--供應商名稱
+declare @spec nvarchar(MAX)=[6]--規格
+declare @unit nvarchar(MAX)=[7]--單位
+declare @typea nvarchar(MAX)=[8]--類別
+declare @uweight nvarchar(MAX)=[9]--單位重
+declare @stdmount nvarchar(MAX)=[10]--標準包裝量
+declare @style nvarchar(MAX)=[11]--機型
+declare @days nvarchar(MAX)=[12]--需求日數
+declare @safemount nvarchar(MAX)=[13]--安全存量
+declare @coin nvarchar(MAX)=[14]--幣別
+declare @inprice nvarchar(MAX)=[15]--進貨單價
+declare @saleprice nvarchar(MAX)=[16]--銷售單價
+declare @area nvarchar(MAX)=[17]--採購區域
+declare @trantype nvarchar(MAX)=[18]--交運方式
+declare @groupano nvarchar(MAX)=[19]--大類群組
+declare @groupbno nvarchar(MAX)=[20]--中類群組
+declare @groupcno nvarchar(MAX)=[21]--小類群組
+declare @rc2acc nvarchar(MAX)=[22]--進貨會計科目
+declare @vccacc nvarchar(MAX)=[23]--收入會計科目
+declare @memo nvarchar(MAX)=[24]--備註
+declare @stk nvarchar(MAX)=[25]--期初資料//noa-color-size,storeno,colorno,sizeno,mount
+declare @worker nvarchar(MAX)=[26]--建檔人員
+declare @datea nvarchar(MAX)=[27]--建檔日期
+--------------------------------------------------------------------------------------------------------------------------------
+--期初資料
+declare @tmp table(
+	noa nvarchar(MAX),
+	storeno nvarchar(MAX),
+	colorno nvarchar(MAX),
+	sizeno nvarchar(MAX),
+	mount nvarchar(MAX)
+)
+
+declare @t_stk nvarchar(MAX)=@stk
+declare @string nvarchar(MAX)=''
+
+while(CHARINDEX('^^',@t_stk)>0)
+begin
+	set @string=LEFT(@t_stk,CHARINDEX('^^',@t_stk)-1)
+
+	insert @tmp
+	select dbo.split(@string,'##',0),dbo.split(@string,'##',1),dbo.split(@string,'##',2),dbo.split(@string,'##',3),dbo.split(@string,'##',4)
+	
+	set @t_stk=SUBSTRING(@t_stk,len(@string)+3,LEN(@t_stk))
+end
+
+insert @tmp
+select dbo.split(@t_stk,'##',0),dbo.split(@t_stk,'##',1),dbo.split(@t_stk,'##',2),dbo.split(@t_stk,'##',3),dbo.split(@t_stk,'##',4)
+
+----------------------------------------------------------------------------------------------------------
+--建立ucc
+declare @ucc table(
+	noa nvarchar(30),
+	product nvarchar(100),
+	engpro nvarchar(250),
+	tggno nvarchar(30),
+	tgg nvarchar(100),
+	spec nvarchar(40),
+	unit nvarchar(50),
+	typea nvarchar(10),
+	uweight float,
+	stdmount float,
+	style nvarchar(16),
+	days float,
+	safemount float,
+	coin nvarchar(10),
+	inprice float,
+	saleprice float,
+	area nvarchar(20),
+	trantype nvarchar(50),
+	groupano nvarchar(30),
+	groupbno nvarchar(30),
+	groupcno nvarchar(30),
+	rc2acc nvarchar(15),
+	vccacc nvarchar(15),
+	memo nvarchar(MAX),
+	worker nvarchar(30),
+	datea2 nvarchar(10),
+	color nvarchar(20),
+	size nvarchar(100)
+)
+
+insert @ucc
+select noa,@product,@engpro,@tggno,@tgg,@spec,@unit,@typea,cast(@uweight as float),cast(@stdmount as float),
+	@style,cast(@days as float),cast(@safemount as float),@coin,cast(@inprice as float),cast(@saleprice as float),
+	@area,@trantype,@groupano,@groupbno,@groupcno,@rc2acc,@vccacc,@memo,@worker,@datea,colorno,sizeno
+from @tmp group by noa,colorno,sizeno
+
+insert ucc (noa,product,engpro,tggno,tgg,spec,unit,typea,uweight,stdmount,style,days,safemount,coin,
+				inprice,saleprice,area,trantype,groupano,groupbno,groupcno,rc2acc,vccacc,memo,worker,date2,color,size)
+select * from @ucc
+
+----------------------------------------------------------------------------------------------------------
+declare @cmd nvarchar(max) 
+IF OBJECT_ID('tempdb..#ucce')is not null
+BEGIN
+	set @cmd = 'drop table #ucce'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#ucces')is not null
+BEGIN
+	set @cmd = 'drop table #ucces'
+	EXECUTE sp_executesql @cmd
+END
+----------------------------------------------------------------------------------------------------------
+--插入期初庫存
+create table #ucce(
+	noa nvarchar(15),
+	datea nvarchar(10),
+	storeno nvarchar(20),--空白
+	store nvarchar(20),--空白
+	worker nvarchar(20),
+	kind nvarchar(20)--1原料
+)
+
+declare @accy nvarchar(MAX)=left(@datea,3)
+declare @uccenoa nvarchar(MAX)='Y'+REPLACE(@datea,'/','')+right('000'+cast(cast(right(isnull((select MAX(noa) from view_ucce where datea=@datea),'000'),3) as int)+1 as nvarchar(10)),3)
+
+insert #ucce select @uccenoa,@datea,'','',@worker,'1'
+exec("insert ucce"+@accy+" (noa,datea,storeno,store,worker,kind) select * from #ucce")
+
+create table #ucces(
+	noa nvarchar(15),
+	noq nvarchar(10),
+	productno nvarchar(30),
+	product nvarchar(40),
+	unit nvarchar(10),
+	mount float,
+	memo nvarchar(max),
+	storeno nvarchar(20),
+	store nvarchar(20),
+	datea nvarchar(10),
+	price float,
+	total float
+)
+
+insert #ucces
+select @uccenoa,right('000'+cast(ROW_NUMBER() over (order by noa)as nvarchar(10)),3)
+,noa,@product,@unit,mount,'期初庫存',storeno,isnull((select top 1 store from store where noa=a.storeno),'')
+,@datea,@inprice,round(mount*cast(@inprice as float),0)
+from @tmp a
+
+exec("insert ucces"+@accy+" (noa,noq,productno,product,unit,mount,memo,storeno,store,datea,price,total) select * from #ucces")
+
+
+
+
+;
