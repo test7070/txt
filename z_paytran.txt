@@ -29,173 +29,74 @@ z_paytran1:--z_paytran1
 	set @t_noa = case when '#non'=[11] then '' else [11] end
 	set @t_carteamno = case when '#non'=[12] then '' else [12] end
 	----------------------------------------------------------------------------------------------------------------------------
-	declare @treno nvarchar(20)
-	declare @tranno nvarchar(20)
-	declare @carchgno nvarchar(max)
-	declare @carteamno nvarchar(20)
-	declare @driverno nvarchar(20)
-	declare @driver nvarchar(20)
-	declare @money float
-	declare @tax float
-	declare @plusmoney float
-	declare @minusmoney float
-	declare @tolls float
-	declare @total float
-	declare @t_total float
-	declare @string nvarchar(max)
-	declare @n int
-	declare @carno nvarchar(20)
-	----------------------------------------------------------------------------------------------------------------------------
-	IF OBJECT_ID('tempdb..#carteam')is not null
-	BEGIN
-		set @cmd = 'drop table #carteam'
-		EXECUTE sp_executesql @cmd
-	END
-	create table #carteam(
-		noa nvarchar(10)
-	)
-	set @string = @t_carteamno
-	while(1=1 and LEN(@string)>0)
-	begin
-		set @n = PATINDEX('%,%',@string)
-		if @n=0
-		begin
-			if LEN(@string)>0
-			begin
-				insert into #carteam select @string
-			end
-			break
-		end
-		insert into #carteam select LEFT(@string,@n-1)	
-		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
-	end
-	----------------------------------------------------------------------------------------------------------------------------
-	IF OBJECT_ID('tempdb..#z_paytran1')is not null
-	BEGIN
-		set @cmd = 'drop table #z_paytran1'
-		EXECUTE sp_executesql @cmd
-	END
-	create table #z_paytran1(
-		gno nvarchar(1),
-		driverno nvarchar(20),
-		driver nvarchar(50),
-		carno nvarchar(20),
-		money_trans float,
-		tolls_trans float,
-		plus_carchg float,
-		minus_carchg float,
-		total1 float,
-		
-		money_tre float,
-		tolls_tre float,
-		plus_tre float,
-		minus_tre float,
-		total2 float,
-		
-		unpay float -- total1-total2
-	)
-	set @cmd=
-	" select '0',a.driverno,d.namea,a.carno,sum(isnull(a.total2,0)),SUM(ISNULL(a.tolls,0)),0,0,0,0,0,0,0,0,0"+
-	" from view_trans"+@t_accy+" a"+
-	" left join calctypes b  on a.calctype=b.noa+b.noq"+
-	" left join #carteam c on a.carteamno=c.noa"+
-	" left join driver d on a.driverno=d.noa"+
-	" where (b.isoutside='1' )and (c.noa is not null)"+
-	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
-	" and (a.datea between @t_bdate and @t_edate)"+
-	" and (len(@t_carno)=0 or @t_carno=a.carno)"+
-	" group  by  a.driverno,d.namea,a.carno"
-	
-	insert into #z_paytran1
-	execute sp_executesql @cmd,N'@t_carno nvarchar(20),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_bdate nvarchar(10),@t_edate nvarchar(10)'
-	,@t_carno=@t_carno,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_bdate=@t_bdate,@t_edate=@t_edate
-
-	declare cursor_table cursor for
-	select a.driverno,a.carno,SUM(isnull(plusmoney,0)),SUM(isnull(minusmoney,0))
-	from carchg a
-	left join #carteam b on a.carteamno=b.noa
-	left join #z_paytran1 c on a.driverno=c.driverno and a.carno=c.carno
-	left join driver d on a.driverno=d.noa
-	where (b.noa is not null) and (c.driverno is not null)
-	and (a.driverno between @t_bdriverno and @t_edriverno)
-	and (a.datea between @t_bdate and @t_edate) 
-	and (len(@t_carno)=0 or @t_carno=a.carno)
-	group by a.driverno,a.carno order by a.driverno
-	open cursor_table
-	fetch next from cursor_table
-	into @driverno,@carno,@plusmoney,@minusmoney
-	while(@@FETCH_STATUS <> -1)
-	begin
-		update #z_paytran1 set plus_carchg=@plusmoney,minus_carchg=@minusmoney where driverno=@driverno and carno=@carno
-		
-		fetch next from cursor_table
-		into @driverno,@carno,@plusmoney,@minusmoney
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	-------------------------------------------------------
-	IF OBJECT_ID('tempdb..#tmp1')is not null
-	BEGIN
-		set @cmd = 'drop table #tmp1'
-		EXECUTE sp_executesql @cmd
-	END
-	create table #tmp1(
+	declare @tmpa table(
 		driverno nvarchar(20),
 		driver nvarchar(20),
 		carno nvarchar(20),
-		[money] float,
-		tolls float,
-		plusmoney float,
-		minusmoney float,
-		total float
+		tranmoney float,
+		tolls float
 	)
-	set @cmd=
-	" select a.driverno,b.namea,a.carno,sum(a.[money]),sum(a.tolls),sum(a.plusmoney),sum(a.minusmoney),sum(isnull(a.total,0)+isnull(a.unopay,0))"+
-	" from view_tre"+@t_accy+" a"+
-	" left join driver b on a.driverno=b.noa"+
-	" left join #carteam c on a.carteamno=c.noa"+
-	" where (c.noa is not null) and (a.driverno between @t_bdriverno and @t_edriverno)"+
-	" and ((a.bdate between @t_bdate and @t_edate) or (a.edate between @t_bdate and @t_edate))"+
-	" and (len(@t_carno)=0 or @t_carno=a.carno)"+
-	" group by a.driverno,b.namea,a.carno"
-	insert into #tmp1
-	execute sp_executesql @cmd,N'@t_carno nvarchar(20),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_bdate  nvarchar(10),@t_edate nvarchar(10)'
-	,@t_carno=@t_carno,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_bdate=@t_bdate,@t_edate=@t_edate
+	insert into @tmpa(driverno,driver,carno,tranmoney,tolls)
+	select driverno,driver,carno,total2,tolls
+	from view_trans 
+	where isnull(datea,'') between @t_bdate and @t_edate
+	and isnull(driverno,'') between @t_bdriverno and @t_edriverno
+	and (len(@t_carteamno)=0 or CHARINDEX(','+carteamno+',',','+@t_carteamno+',')>0)
+	and not exists(select noa from view_tres where tranno=view_trans.noa)
 	
+	declare @tmpb table(
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carno nvarchar(20),
+		plus float,
+		minus float
+	)
+	insert into @tmpb(driverno,driver,carno,plus,minus)
+	select driverno,driver,carno,plusmoney,minusmoney
+	from carchg
+	where isnull(datea,'') between @t_bdate and @t_edate
+	and isnull(driverno,'') between @t_bdriverno and @t_edriverno
+	and (len(@t_carteamno)=0 or CHARINDEX(','+carteamno+',',','+@t_carteamno+',')>0)
+	and not exists(select noa from view_tre where CHARINDEX(carchg.noa,','+carchgno+',')>0)
 	
-	declare cursor_table cursor for
-	select driverno,carno,[money],tolls,plusmoney,minusmoney,total from #tmp1
-	open cursor_table
-	fetch next from cursor_table
-	into @driverno,@carno,@money,@tolls,@plusmoney,@minusmoney,@total
-	while(@@FETCH_STATUS <> -1)
-	begin
-		update #z_paytran1 set money_tre=@money,tolls_tre=@tolls,plus_tre=@plusmoney,minus_tre=@minusmoney,total2=@total where driverno=@driverno and carno=@carno
-		
-		fetch next from cursor_table
-		into @driverno,@carno,@money,@tolls,@plusmoney,@minusmoney,@total
-	end
-	close cursor_table
-	deallocate cursor_table
-
-	update #z_paytran1 set total1= isnull(money_trans,0)+ISNULL(tolls_trans,0)+ISNULL(plus_carchg,0)-isnull(minus_carchg,0)
-	update #z_paytran1 set unpay= total1-total2
-
-	insert into #z_paytran1
-	select '1','','','',SUM(money_trans),SUM(tolls_trans),SUM(plus_carchg),SUM(minus_carchg),SUM(total1)
-	,SUM(money_tre),SUM(tolls_tre),SUM(plus_tre),SUM(minus_tre),SUM(total2),SUM(unpay)
-	from #z_paytran1 where gno='0'
+	declare @tmp table(
+		gno nvarchar(10),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carno nvarchar(20),
+		tranmoney float,
+		tolls float,
+		plus float,
+		minus float,
+		unpay float
+	)
+	insert into @tmp(gno,driverno,driver,carno,tranmoney,tolls,plus,minus)
+	select '1',driverno,driver,carno,sum(isnull(tranmoney,0)) tranmoney,sum(isnull(tolls,0)) tolls,sum(isnull(plus,0)) plus,sum(isnull(minus,0)) minus
+	from(
+		select isnull(driverno,'') driverno, isnull(driver,'') driver,isnull(carno,'') carno,sum(isnull(tranmoney,0)) tranmoney,sum(isnull(tolls,0)) tolls,0 plus,0 minus
+		from @tmpa group by isnull(driverno,''), isnull(driver,''),isnull(carno,'')
+		union all
+		select isnull(driverno,'') driverno, isnull(driver,'') driver,isnull(carno,'') carno,0 tranmoney,0 tolls,sum(isnull(plus,0)) plus,sum(isnull(minus,0)) minus
+		from @tmpb group by isnull(driverno,''), isnull(driver,''),isnull(carno,'')) a
+	group by driverno,driver,carno
 	
-	select gno,driverno aa,driver bb, carno cc
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money_trans-money_tre),1)),4,12)) mm
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tolls_trans-tolls_tre),1)),4,12)) tm
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plus_carchg-plus_tre),1)),4,12)) plus
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minus_carchg-minus_tre),1)),4,12)) minus
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total1-total2),1)),4,12)) tt
-	from #z_paytran1 order by gno,driverno
-	drop table #z_paytran1
-	drop table #tmp1;
+	update @tmp set unpay = tranmoney+tolls+plus-minus
+	
+	insert into @tmp(gno,driverno,tranmoney,tolls,plus,minus,unpay)
+	select '2',CHAR(255),sum(isnull(tranmoney,0)) ,sum(isnull(tolls,0)) ,sum(isnull(plus,0)) ,sum(isnull(minus,0)) ,sum(isnull(unpay,0))
+	from @tmp
+	
+	select driverno a01
+		,driver a02
+		,carno a03
+		, dbo.getComma(tranmoney,0) a04
+		, dbo.getComma(tolls,0) a05
+		, dbo.getComma(plus,0) a06
+		, dbo.getComma(minus,0)a07
+		, dbo.getComma(unpay,0) a08
+		,*
+	from @tmp
+	order by gno,driverno;
 	
 z_paytran2:--ref:z_tre1
 	SET QUOTED_IDENTIFIER OFF
