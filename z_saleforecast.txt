@@ -916,3 +916,78 @@ order by productno
 
 ;
 --*******************************************************************************************
+z_saleforecast7:--z_saleforecast7
+	declare @t_bcustno nvarchar(50)
+	declare @t_ecustno nvarchar(50)
+	declare @t_bpno nvarchar(50)
+	declare @t_epno nvarchar(50)
+	declare @t_mon nvarchar(10)
+	declare @t_year nvarchar(10)
+
+	set @t_bcustno = case when '#non'=[2] then '' else [2] end
+	set @t_ecustno = case when '#non'=[3] then char(255) else [3] end
+	set @t_bpno = case when '#non'=[4] then '' else [4] end
+	set @t_epno = case when '#non'=[5] then char(255) else [5] end
+	set @t_mon = case when '#non'=[6] then '' else [6] end
+	set @t_year = case when '#non'=[7] then '' else [7] end
+
+--*****************************************************************************************	
+declare @t_oldmon nvarchar(10)--上期月份 
+
+set @t_oldmon='' 
+
+declare @tmpmon table( 
+	productno nvarchar(50),
+	omount float, 
+	fmount float
+)
+
+declare @result table(
+	gno nvarchar(1),
+	pno nvarchar(50),
+	product nvarchar(90),
+	unit nvarchar(50),
+	smount float, 
+	cmount float,
+	rmount float
+)
+
+set @t_oldmon=right('000'+cast ((cast(left(@t_mon,3) as int) -1) as nvarchar(10)),3)+'/'+right(@t_mon,2) 
+	
+	insert into @tmpmon
+	select u.productno
+	,(select isnull(sum(o.mount),0)mount from view_ordes o where left(o.odate,6)=@t_oldmon and o.productno=u.productno )--實際
+	,(select isnull(sum(f.mount),0)mount from saleforecasts f where mon=@t_oldmon and f.productno=u.productno ) --預測
+	from (select noa productno from ucc union select noa productno from uca)u
+	where (u.productno between @t_bpno and @t_epno)
+	
+	delete @tmpmon where omount=0 and fmount=0 
+	
+	insert @tmpmon
+	select productno,0,0 from saleforecasts where mon=@t_mon and productno not in (select productno from @tmpmon)
+	group by productno
+	
+	insert @tmpmon
+	select b.productno,0,0 from view_orde a left join view_ordes b on a.noa=b.noa where (case when a.mon!='' then a.mon else left(a.odate,6) end)=@t_mon and b.productno not in (select productno from @tmpmon)
+	group by b.productno
+	
+	insert into @result
+	select '9',m.productno,u.product,u.unit
+	,isnull((select SUM(mount)mount from saleforecasts f where mon=@t_mon and f.productno=m.productno  ),0)
+	,m.omount+(case when m.omount=0 or (m.omount-m.fmount)<0 then 0 else(m.omount-m.fmount)/m.omount end)cmount
+	,(select isnull(sum(o.mount),0)mount from view_ordes o where left(o.odate,6)=@t_mon and o.productno=m.productno )
+	from @tmpmon m 
+	left join (select noa productno,product,unit from ucc union select noa productno,product,unit from uca where noa not in (select noa from ucc))u on m.productno=u.productno
+	
+	delete @result where isnull(smount,0)=0 and isnull(cmount,0)=0 and isnull(rmount,0)=0 	
+	
+	insert into @result (gno,pno,product,smount,cmount,rmount)
+	select '0',pno,MAX(product),sum(smount),sum(cmount),sum(rmount) from @result group by pno 
+
+	select gno,pno,product,unit
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),0,30)) smount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cmount),1)),0,30)) cmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,rmount),1)),0,30)) rmount
+	from @result order by pno,gno
+
+;
