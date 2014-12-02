@@ -46,9 +46,9 @@ noa!='Z001' and typea!='經銷商'
 --bbm
 declare @bbm table(
 		noa nvarchar(20),
-		w133 float,
-		w166 float,
-		w100 float,
+		w133 decimal(10,1),
+		w166 decimal(10,1),
+		w100 decimal(10,1),
 		mount float,
 		holiday bit
 )
@@ -61,9 +61,9 @@ declare @bbs table(
 		namea nvarchar(50),
 		clockin nvarchar(50),
 		clockout nvarchar(50),
-		w133 float,
-		w166 float,
-		w100 float,
+		w133 decimal(10,1),
+		w166 decimal(10,1),
+		w100 decimal(10,1),
 		memo nvarchar(MAX),
 		work nvarchar(1),--1早班 2中班 3 晚班(目前沒有) 4責任 5責任(8小時)
 		cno nvarchar(50)--公司
@@ -122,11 +122,11 @@ begin
 	or @datea in(select noa from holiday where isnull(iswork,0)=1)
 	then 0 else 1 end)
 	
-	--插入早班
+	--插入早班 --103/12/02 早班可能加班到凌晨
 	insert @bbs
 	select @datea,(Rank() OVER (ORDER BY a.noa)),a.noa,a.namea
 	,isnull((select top 1 timea from @tmp where sssno=a.noa and datea=@datea and timea between '06:00:00' and '23:59:59' order by timea),'')
-	,isnull((select top 1 timea from @tmp where sssno=a.noa and datea=@datea and timea between '06:00:00' and '23:59:59' order by timea desc),'')
+	,isnull((select top 1 timea from @tmp where sssno=a.noa and ((datea=@datea and timea between '14:00:00' and '23:59:59') or (datea=@nextdatea and timea between '00:00:00' and '06:00:00')) order by datea+timea desc),'')
 	,0,0,0,'','1',cno
 	from @sss a	where charindex('早',typea)>0 
 	and (case when isnull(outdate,'')='' then '999/99/99' else outdate end)>=@datea
@@ -213,7 +213,7 @@ begin
 		-----------------------------------------------------------------------------
 		update @bbs
 		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'早退'
-		where clockout!='' and clockout<'18:00:00' and clockout>='17:45:00' and work='1' --不分安美得或英特瑞		
+		where clockout!='' and clockout<'18:00:00' and clockout>='17:45:00' and clockout>'06:00:00' and work='1' --不分安美得或英特瑞	--103/12/02 早班可能加班到凌晨
 		------------------------------------------------------------------------------
 		--移除有請假的早退和遲到 --不分安美得或英特瑞
 		update a
@@ -272,10 +272,15 @@ begin
 		
 		--更新加班時數**********************************************************************
 		--早班(超過1小時才算加班)
+		--update @bbs
+		--set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+		--where clockout!='' and work='1'
+		--and clockout>='19:00:00' 
+		--103/12/02 早班可能會上到凌晨
 		update @bbs
-		set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+		set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1)
 		where clockout!='' and work='1'
-		and clockout>='19:00:00'
+		and clockout>='19:00:00' or clockout<='06:00:00'
 		
 		--中班(***沒有加班通在是假日加班***)
 		--update @bbs
@@ -320,7 +325,6 @@ begin
 	--,w100=isnull((select sum(w100) from @bbs),0)
 	--,mount=isnull((select COUNT(*) from @bbs),0)
 	
-		
 	--寫入到資料庫中
 	--判斷當天有沒有寫入(公司資料分開寫入)
 	BEGIN TRY
@@ -370,8 +374,9 @@ begin
 			set b.clockout=a.clockout,b.addwork=a.work
 			from @bbs a left join st.dbo.salpresents b on a.noa=b.noa and a.sssno=b.sssno
 			where b.noa!='' and b.sssno!='' and a.clockout!='' and a.work='1' and a.cno='RAA000'
-			and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
-			
+			--and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
+			and (case when a.clockout between '00:00:00' and '06:00:00' then cast(cast(LEFT(a.clockout,2) as int)+24 as nvarchar(10))+right(a.clockout,6) else a.clockout end)
+			>(case when b.clockout between '00:00:00' and '06:00:00' then cast(cast(LEFT(b.clockout,2) as int)+24 as nvarchar(10))+right(b.clockout,6) else b.clockout end)
 			--------------------------------------------------------------------------------
 			--中班,晚班(目前沒有),責任,責任8小時
 			--下班沒有資料直接寫入
@@ -396,7 +401,7 @@ begin
 			-----------------------------------------------------------------------------
 			update st.dbo.salpresents
 			set memo=memo+(case when CHARINDEX('早退',memo)>0 then '' else (case when len(memo)>0 then ',' else '' end+'早退') end)
-			where noa=@datea and clockout!='' and clockout<'18:00:00' and clockout>='17:45:00' and isnull(addwork,'')='1'
+			where noa=@datea and clockout!='' and clockout<'18:00:00' and clockout>='17:45:00' and clockout>'06:00:00' and isnull(addwork,'')='1'
 			------------------------------------------------------------------------------
 			--移除有請假的早退和遲到 --不分安美得或英特瑞
 			update a
@@ -458,10 +463,17 @@ begin
 			--非假日
 			--早班(超過1小時才算加班)
 			
+			--update st.dbo.salpresents
+			--set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+			--where noa=@datea and clockout!='' and isnull(addwork,'')='1'
+			--and clockout>='19:00:00' 
+			--and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+			
+			--103/12/02 早班可能會上到凌晨
 			update st.dbo.salpresents
-			set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+			set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1)
 			where noa=@datea and clockout!='' and isnull(addwork,'')='1'
-			and clockout>='19:00:00' 
+			and (clockout>='19:00:00' or clockout<='06:00:00')
 			and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 			
 			--中班(***沒有加班通在是假日加班***)
@@ -594,7 +606,9 @@ begin
 			set b.clockout=a.clockout,b.addwork=a.work
 			from @bbs a left join st2.dbo.salpresents b on a.noa=b.noa and a.sssno=b.sssno
 			where b.noa!='' and b.sssno!='' and a.clockout!='' and a.work='1' and a.cno='AMED000'
-			and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
+			--and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
+			and (case when a.clockout between '00:00:00' and '06:00:00' then cast(cast(LEFT(a.clockout,2) as int)+24 as nvarchar(10))+right(a.clockout,6) else a.clockout end)
+			>(case when b.clockout between '00:00:00' and '06:00:00' then cast(cast(LEFT(b.clockout,2) as int)+24 as nvarchar(10))+right(b.clockout,6) else b.clockout end)
 			--------------------------------------------------------------------------------
 			--中班,晚班(目前沒有),責任,責任8小時
 			--下班沒有資料直接寫入
@@ -681,10 +695,17 @@ begin
 			--早班(超過1小時才算加班)
 			--(select COUNT(*) from st.dbo.holiday where noa=@datea and isnull(iswork,0)=0)=0 and @t_weekday!=0 and @t_weekday!=6
 			
+			--update st2.dbo.salpresents
+			--set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+			--where noa=@datea and clockout!='' and isnull(addwork,'')='1'
+			--and clockout>='19:00:00' 
+			--and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+						
+			--103/12/02 早班可能會上到凌晨
 			update st2.dbo.salpresents
-			set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+			set w133=round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' 18:00:00',cast(cast(left((case when clockout<'06:00:00' then @nextdatea else noa end),3)as int)+1911 as nvarchar(10))+right((case when clockout<'06:00:00' then @nextdatea else noa end),6)+' '+clockout) as float)/60),1)
 			where noa=@datea and clockout!='' and isnull(addwork,'')='1'
-			and clockout>='19:00:00' 
+			and (clockout>='19:00:00' or clockout<='06:00:00')
 			and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 			
 			--中班(***沒有加班通在是假日加班***)
@@ -817,7 +838,7 @@ begin
 		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
-		and clockout<='17:44:59' and clockout!=''
+		and clockout<='17:44:59' and clockout!='' and clockout>'09:00:00'
 		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
 		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 		and a.noa=@datea
@@ -829,7 +850,7 @@ begin
 		,left(clockout,5) btime ,'18:00' etime,b.partno,b.part,b.jobno,b.job,'1' rank
 		from st.dbo.salpresents a left join st.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
-		and clockout<='17:44:59' and clockout!=''
+		and clockout<='17:44:59' and clockout!='' and clockout>'09:00:00'
 		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
 		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 		and a.noa=@datea
@@ -873,7 +894,7 @@ begin
 		,'09:00' btime ,left(clockin,5) etime,b.partno,b.part,b.jobno,b.job,'1' rank
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
-		and clockin>='09:11:00' and clockin!=''
+		and clockin>='09:11:00' and clockin!=''  
 		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and btime='09:00' and sssno=a.sssno)=0
 		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 		and a.noa=@datea
@@ -883,7 +904,7 @@ begin
 		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
-		and clockout<='17:44:59' and clockout!=''
+		and clockout<='17:44:59' and clockout!='' and clockout>'09:00:00'
 		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
 		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 		and a.noa=@datea
@@ -895,7 +916,7 @@ begin
 		,left(clockout,5) btime ,'18:00' etime,b.partno,b.part,b.jobno,b.job,'1' rank
 		from st2.dbo.salpresents a left join st2.dbo.sss b on a.sssno=b.noa
 		where charindex('早',isnull(b.typea,''))>0 
-		and clockout<='17:44:59' and clockout!=''
+		and clockout<='17:44:59' and clockout!='' and clockout>'09:00:00'
 		and (select COUNT(*) from (select * from st.dbo.salvacause union all select * from st2.dbo.salvacause)s where a.noa between bdate and edate and etime='18:00' and sssno=a.sssno)=0
 		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
 		and a.noa=@datea
