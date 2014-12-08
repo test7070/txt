@@ -839,6 +839,8 @@ begin
 end
 
 create table #tmpa(
+	cuano nvarchar(100),
+	cuanoq nvarchar(100),
 	datea nvarchar(10),
 	tggno nvarchar(100),
 	pno nvarchar(100), 
@@ -850,7 +852,7 @@ create table #tmpa(
 
 --預測製令
 insert #tmpa
-select a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,b.mount/a.mount
+select a.cuano,a.cuanoq,a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,b.mount/a.mount
 from view_workh a left join view_workhs b on a.noa=b.noa 
 left join ucc c on b.productno=c.noa
 where (left(a.uindate,6) between @t_bmon and @t_emon)
@@ -864,7 +866,7 @@ and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
 
 --目前製令(含模擬)
 insert #tmpa
-select a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,b.mount/a.mount
+select a.cuano,a.cuanoq,a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,b.mount/a.mount
 from view_work a left join view_works b on a.noa=b.noa 
 left join ucc c on b.productno=c.noa
 where (left(a.uindate,6) between @t_bmon and @t_emon)
@@ -878,7 +880,7 @@ and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
 
 --訂單
 --insert #tmpa
---select b.datea,c.tggno,b.productno,isnull(b.style,''),b.mount-b.c1,b.mount-b.c1,1
+--select '','',b.datea,c.tggno,b.productno,isnull(b.style,''),b.mount-b.c1,b.mount-b.c1,1
 --from view_orde a left join view_ordes b on a.noa=b.noa 
 --left join ucc c on b.productno=c.noa
 --where (left(b.datea,6) between @t_bmon and @t_emon)
@@ -889,6 +891,20 @@ and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
 --and (len(@t_uccgano)=0 or isnull(c.groupano,'')=@t_uccgano)
 --and (len(@t_uccgbno)=0 or isnull(c.groupbno,'')=@t_uccgbno)
 --and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
+
+--不更新ucasmount 為 製令最小用量
+
+--依製令的用量
+--update a
+--set ucasmount=(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,6)=left(a.datea,6) and cuano=a.cuano and cuanoq=a.cuanoq)
+--,mount=mount/(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,6)=left(a.datea,6) and cuano=a.cuano  and cuanoq=a.cuanoq)
+--from #tmpa a
+
+--依機型的總用量
+update a
+set ucasmount=round(isnull((select sum(mount)/sum(amount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style),0),2)
+,amount=mount/round((select sum(mount)/sum(amount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style ),2)
+from #tmpa a
 
 create table #tmpb(
 	gno nvarchar(1),
@@ -938,7 +954,7 @@ select '0',tggno,pno,style,ucasmount from #tmpa group by tggno,pno,style,ucasmou
 declare	@tggno nvarchar(100)
 declare @pno nvarchar(100)
 declare @style nvarchar(100)
-declare @ucasmount float
+declare @ucasmount nvarchar(50)
 
 set @moncount=1
 set @tmp_mon =@t_bmon
@@ -947,7 +963,7 @@ begin
 	set @tmp_moncol=right('00'+cast(@moncount as nvarchar(10)),2)
 	
 	declare cursor_table cursor for
-	select tggno,pno,style,ucasmount from #tmpa group by tggno,pno,style,ucasmount
+	select tggno,pno,style,cast(ucasmount as nvarchar(50)) from #tmpa group by tggno,pno,style,ucasmount
 	open cursor_table
 	fetch next from cursor_table
 	into @tggno,@pno,@style,@ucasmount
@@ -955,8 +971,8 @@ begin
 	begin
 	
 		EXEC("update #tmpb 
-		set mount"+@tmp_moncol+"=(select sum(amount) from #tmpa where left(datea,6)='"+@tmp_mon+"' and tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and ucasmount='"+@ucasmount+"')
-		where tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and ucasmount='"+@ucasmount+"'")
+		set mount"+@tmp_moncol+"=(select sum(amount) from #tmpa where left(datea,6)='"+@tmp_mon+"' and tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"')
+		where tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"'")
 		
 		fetch next from cursor_table
 		into @tggno,@pno,@style,@ucasmount
@@ -1025,33 +1041,33 @@ set rmount=isnull(rmount01,0)+isnull(rmount02,0)+isnull(rmount03,0)+isnull(rmoun
 ,tmount=tmount06
 
 select DENSE_RANK() over(order by tggno,pno) recno,
-dbo.getComma(stdmount,case when stdmount != cast(stdmount as int) then 2 else 0 end)stdmount,
-dbo.getComma(smount,case when smount != cast(smount as int) then 2 else 0 end)smount,
-dbo.getComma(hmount,case when hmount != cast(hmount as int) then 2 else 0 end)hmount,
-dbo.getComma(minmount,case when minmount != cast(minmount as int) then 2 else 0 end)minmount,
-dbo.getComma(bmount,case when bmount != cast(bmount as int) then 2 else 0 end)bmount,
-dbo.getComma(ucasmount,case when ucasmount != cast(ucasmount as int) then 2 else 0 end)ucasmount,
-dbo.getComma(mount01,case when mount01 != cast(mount01 as int) then 2 else 0 end)mount01,
-dbo.getComma(mount02,case when mount02 != cast(mount02 as int) then 2 else 0 end)mount02,
-dbo.getComma(mount03,case when mount03 != cast(mount03 as int) then 2 else 0 end)mount03,
-dbo.getComma(mount04,case when mount04 != cast(mount04 as int) then 2 else 0 end)mount04,
-dbo.getComma(mount05,case when mount05 != cast(mount05 as int) then 2 else 0 end)mount05,
-dbo.getComma(mount06,case when mount06 != cast(mount06 as int) then 2 else 0 end)mount06,
-dbo.getComma(mount,case when mount != cast(mount as int) then 2 else 0 end)mount,
-dbo.getComma(rmount01,case when rmount01 != cast(rmount01 as int) then 2 else 0 end)rmount01,
-dbo.getComma(rmount02,case when rmount02 != cast(rmount02 as int) then 2 else 0 end)rmount02,
-dbo.getComma(rmount03,case when rmount03 != cast(rmount03 as int) then 2 else 0 end)rmount03,
-dbo.getComma(rmount04,case when rmount04 != cast(rmount04 as int) then 2 else 0 end)rmount04,
-dbo.getComma(rmount05,case when rmount05 != cast(rmount05 as int) then 2 else 0 end)rmount05,
-dbo.getComma(rmount06,case when rmount06 != cast(rmount06 as int) then 2 else 0 end)rmount06,
-dbo.getComma(rmount,case when rmount != cast(rmount as int) then 2 else 0 end)rmount,
-dbo.getComma(tmount01,case when tmount01 != cast(tmount01 as int) then 2 else 0 end)tmount01,
-dbo.getComma(tmount02,case when tmount02 != cast(tmount02 as int) then 2 else 0 end)tmount02,
-dbo.getComma(tmount03,case when tmount03 != cast(tmount03 as int) then 2 else 0 end)tmount03,
-dbo.getComma(tmount04,case when tmount04 != cast(tmount04 as int) then 2 else 0 end)tmount04,
-dbo.getComma(tmount05,case when tmount05 != cast(tmount05 as int) then 2 else 0 end)tmount05,
-dbo.getComma(tmount06,case when tmount06 != cast(tmount06 as int) then 2 else 0 end)tmount06,
-dbo.getComma(tmount,case when tmount != cast(tmount as int) then 2 else 0 end)tmount,
+dbo.getComma(stdmount,case when round(stdmount,4) != cast(stdmount as decimal(18, 0)) then 2 else 0 end)stdmount,
+dbo.getComma(smount,case when round(smount,4) != cast(smount as decimal(18, 0)) then 2 else 0 end)smount,
+dbo.getComma(hmount,case when round(hmount,4) != cast(hmount as decimal(18, 0)) then 2 else 0 end)hmount,
+dbo.getComma(minmount,case when round(minmount,4) != cast(minmount as decimal(18, 0)) then 2 else 0 end)minmount,
+dbo.getComma(bmount,case when round(bmount,4) != cast(bmount as decimal(18, 0)) then 2 else 0 end)bmount,
+dbo.getComma(ucasmount,case when round(ucasmount,4) != cast(ucasmount as decimal(18, 0)) then 2 else 0 end)ucasmount,
+dbo.getComma(mount01,case when round(mount01,4) != cast(mount01 as decimal(18, 0)) then 2 else 0 end)mount01,
+dbo.getComma(mount02,case when round(mount02,4) != cast(mount02 as decimal(18, 0)) then 2 else 0 end)mount02,
+dbo.getComma(mount03,case when round(mount03,4) != cast(mount03 as decimal(18, 0)) then 2 else 0 end)mount03,
+dbo.getComma(mount04,case when round(mount04,4) != cast(mount04 as decimal(18, 0)) then 2 else 0 end)mount04,
+dbo.getComma(mount05,case when round(mount05,4) != cast(mount05 as decimal(18, 0)) then 2 else 0 end)mount05,
+dbo.getComma(mount06,case when round(mount06,4) != cast(mount06 as decimal(18, 0)) then 2 else 0 end)mount06,
+dbo.getComma(mount,case when round(mount,4) != cast(mount as decimal(18, 0)) then 2 else 0 end)mount,
+dbo.getComma(rmount01,case when round(rmount01,4) != cast(rmount01 as decimal(18, 0)) then 2 else 0 end)rmount01,
+dbo.getComma(rmount02,case when round(rmount02,4) != cast(rmount02 as decimal(18, 0)) then 2 else 0 end)rmount02,
+dbo.getComma(rmount03,case when round(rmount03,4) != cast(rmount03 as decimal(18, 0)) then 2 else 0 end)rmount03,
+dbo.getComma(rmount04,case when round(rmount04,4) != cast(rmount04 as decimal(18, 0)) then 2 else 0 end)rmount04,
+dbo.getComma(rmount05,case when round(rmount05,4) != cast(rmount05 as decimal(18, 0)) then 2 else 0 end)rmount05,
+dbo.getComma(rmount06,case when round(rmount06,4) != cast(rmount06 as decimal(18, 0)) then 2 else 0 end)rmount06,
+dbo.getComma(rmount,case when round(rmount,4) != cast(rmount as decimal(18, 0)) then 2 else 0 end)rmount,
+dbo.getComma(tmount01,case when round(tmount01,4) != cast(tmount01 as decimal(18, 0)) then 2 else 0 end)tmount01,
+dbo.getComma(tmount02,case when round(tmount02,4) != cast(tmount02 as decimal(18, 0)) then 2 else 0 end)tmount02,
+dbo.getComma(tmount03,case when round(tmount03,4) != cast(tmount03 as decimal(18, 0)) then 2 else 0 end)tmount03,
+dbo.getComma(tmount04,case when round(tmount04,4) != cast(tmount04 as decimal(18, 0)) then 2 else 0 end)tmount04,
+dbo.getComma(tmount05,case when round(tmount05,4) != cast(tmount05 as decimal(18, 0)) then 2 else 0 end)tmount05,
+dbo.getComma(tmount06,case when round(tmount06,4) != cast(tmount06 as decimal(18, 0)) then 2 else 0 end)tmount06,
+dbo.getComma(tmount,case when round(tmount,4) != cast(tmount as decimal(18, 0)) then 2 else 0 end)tmount,
 * from #tmpb,#tmp order by tggno,pno,gno,style
 
 IF OBJECT_ID('tempdb..#tmp')is not null
