@@ -1,3 +1,357 @@
+z_uca05:--z_uca05
+	declare @t_bdate nvarchar(10)= case when '#non'=[2] then '' else [2] end
+	declare @t_edate nvarchar(10)= case when '#non'=[3] then char(255) else [3] end
+	declare @t_bproductno nvarchar(20)= case when '#non'=[4] then '' else [4] end
+	declare @t_eproductno nvarchar(20)= case when '#non'=[5] then char(255) else [5] end
+	declare @t_bstoreno nvarchar(20)= case when '#non' = [6] then '' else [6] end
+	declare @t_estoreno nvarchar(20)= case when '#non' = [7] then CHAR(255) else [7] end
+	
+	declare @t_enddate nvarchar(10) = ''
+	if LEN(@t_bdate)>0
+	begin
+		set @t_enddate = dbo.AD2ChineseEraName( DATEADD(DD,-1, dbo.ChineseEraName2AD(@t_bdate)))
+	end
+	-------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_uca05')is not null
+	BEGIN
+		drop table #z_uca05
+	END
+	create table #z_uca05(
+		gno nvarchar(10),
+		pno int IDENTITY(1,1),
+		recno int,
+		productno nvarchar(20),
+		product nvarchar(50),
+		storeno nvarchar(20),
+		store nvarchar(20),
+		
+		bmount float,
+		bweight float,
+		emount float,
+		eweight float,
+		
+		rc2mount float,
+		rc2weight float,
+		
+		inamount float,
+		inaweight float,
+		
+		cnginmount float,
+		cnginweight float,
+		
+		cngoutmount float,
+		cngoutweight float,
+		
+		vccmount float,
+		vccweight float,
+		
+		getmount float,
+		getweight float
+	)
+	create index noa on #z_uca05(productno,storeno)
+	
+	insert into #z_uca05(productno,storeno,bmount,bweight)
+	execute dbo.stkucc2 @t_enddate,@t_bstoreno,@t_estoreno,@t_bproductno,@t_eproductno 
+	
+	declare @tmpa table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		[weight] float
+	)
+	insert into @tmpa
+	execute dbo.stkucc2 @t_edate,@t_bstoreno,@t_estoreno,@t_bproductno,@t_eproductno 
+	
+	update #z_uca05 set emount=b.mount,eweight=b.[weight]
+	from #z_uca05 a
+	left join @tmpa b on a.productno=b.productno and a.storeno=b.storeno
+	where b.productno is not null
+	
+	insert into #z_uca05(productno,storeno,emount,bmount)
+	select a.productno,a.storeno,a.mount,a.[weight]
+	from @tmpa a
+	where not exists(select * from #z_uca05 where productno=a.productno and storeno=a.storeno)
+	--------------------------------------------------------------------------------------------------
+	declare @tmprc2 table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		weight float
+	)
+	insert into @tmprc2 (productno,storeno,mount,weight)
+	select ISNULL(b.productno,''),ISNULL(b.storeno,''),SUM(ISNULL(b.mount,0)),SUM(ISNULL(b.[weight],0))
+	from view_rc2 a
+	left join view_rc2s b on a.accy=b.accy and a.noa=b.noa
+	where b.noa is not null
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(b.storeno,'') between @t_bstoreno and @t_estoreno
+	group by ISNULL(b.productno,''),ISNULL(b.storeno,'')
+	
+	declare @tmpina table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		weight float
+	)
+	insert into @tmpina (productno,storeno,mount,weight)
+	select ISNULL(b.productno,''),ISNULL(a.storeno,''),SUM(ISNULL(b.mount,0)),SUM(ISNULL(b.[weight],0))
+	from view_ina a
+	left join view_inas b on a.accy=b.accy and a.noa=b.noa
+	where b.noa is not null
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.storeno,'') between @t_bstoreno and @t_estoreno
+	group by ISNULL(b.productno,''),ISNULL(a.storeno,'')
+	
+	declare @tmpcngin table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		weight float
+	)
+	insert into @tmpcngin (productno,storeno,mount,weight)
+	select ISNULL(b.productno,''),ISNULL(a.storeinno,''),SUM(ISNULL(b.mount,0)),SUM(ISNULL(b.[weight],0))
+	from view_cng a
+	left join view_cngs b on a.accy=b.accy and a.noa=b.noa
+	where b.noa is not null
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.storeinno,'') between @t_bstoreno and @t_estoreno
+	group by ISNULL(b.productno,''),ISNULL(a.storeinno,'')
+	-----------------------------------------------------------------------------------------------------
+	declare @tmpcngout table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		weight float
+	)
+	insert into @tmpcngout (productno,storeno,mount,weight)
+	select ISNULL(b.productno,''),ISNULL(a.storeno,''),SUM(ISNULL(b.mount,0)),SUM(ISNULL(b.[weight],0))
+	from view_cng a
+	left join view_cngs b on a.accy=b.accy and a.noa=b.noa
+	where b.noa is not null
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.storeno,'') between @t_bstoreno and @t_estoreno
+	group by ISNULL(b.productno,''),ISNULL(a.storeno,'')
+	
+	declare @tmpget table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		weight float
+	)
+	insert into @tmpget (productno,storeno,mount,weight)
+	select ISNULL(b.productno,''),ISNULL(a.storeno,''),SUM(ISNULL(b.mount,0)),SUM(ISNULL(b.[weight],0))
+	from view_get a
+	left join view_gets b on a.accy=b.accy and a.noa=b.noa
+	where b.noa is not null
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.storeno,'') between @t_bstoreno and @t_estoreno
+	group by ISNULL(b.productno,''),ISNULL(a.storeno,'')
+	
+	declare @tmpvcc table(
+		productno nvarchar(20),
+		storeno nvarchar(20),
+		mount float,
+		weight float
+	)
+	insert into @tmpvcc (productno,storeno,mount,weight)
+	select ISNULL(b.productno,''),ISNULL(b.storeno,''),SUM(ISNULL(b.mount,0)),SUM(ISNULL(b.[weight],0))
+	from view_vcc a
+	left join view_vccs b on a.accy=b.accy and a.noa=b.noa
+	where b.noa is not null
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and ISNULL(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(b.storeno,'') between @t_bstoreno and @t_estoreno
+	group by ISNULL(b.productno,''),ISNULL(b.storeno,'')
+	-----------------------------------------------------------------------------------------------------
+	declare @productno nvarchar(20)
+	declare @storeno nvarchar(20)
+	declare @mount float
+	declare @weight float
+	
+	declare cursor_table cursor for
+	select productno,storeno,mount,[weight] from @tmprc2
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@storeno,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if exists(select * from #z_uca05 where productno=@productno and storeno=@storeno)
+		begin
+			update #z_uca05 set rc2mount = @mount, rc2weight=@weight 
+			where productno=@productno and storeno=@storeno
+		end
+		else
+		begin
+			insert into #z_uca05(productno,storeno,rc2mount,rc2weight)
+			select @productno,@storeno,@mount,@weight
+		end
+		fetch next from cursor_table
+		into @productno,@storeno,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	declare cursor_table cursor for
+	select productno,storeno,mount,[weight] from @tmpina
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@storeno,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if exists(select * from #z_uca05 where productno=@productno and storeno=@storeno)
+		begin
+			update #z_uca05 set inamount = @mount, inaweight=@weight 
+			where productno=@productno and storeno=@storeno
+		end
+		else
+		begin
+			insert into #z_uca05(productno,storeno,inamount,inaweight)
+			select @productno,@storeno,@mount,@weight
+		end
+		fetch next from cursor_table
+		into @productno,@storeno,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	declare cursor_table cursor for
+	select productno,storeno,mount,[weight] from @tmpcngin
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@storeno,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if exists(select * from #z_uca05 where productno=@productno and storeno=@storeno)
+		begin
+			update #z_uca05 set cnginmount = @mount, cnginweight=@weight 
+			where productno=@productno and storeno=@storeno
+		end
+		else
+		begin
+			insert into #z_uca05(productno,storeno,cnginmount,cnginweight)
+			select @productno,@storeno,@mount,@weight
+		end
+		fetch next from cursor_table
+		into @productno,@storeno,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table	
+	-----------------------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select productno,storeno,mount,[weight] from @tmpcngout
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@storeno,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if exists(select * from #z_uca05 where productno=@productno and storeno=@storeno)
+		begin
+			update #z_uca05 set cngoutmount = @mount, cngoutweight=@weight 
+			where productno=@productno and storeno=@storeno
+		end
+		else
+		begin
+			insert into #z_uca05(productno,storeno,cngoutmount,cngoutweight)
+			select @productno,@storeno,@mount,@weight
+		end
+		fetch next from cursor_table
+		into @productno,@storeno,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	declare cursor_table cursor for
+	select productno,storeno,mount,[weight] from @tmpget
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@storeno,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if exists(select * from #z_uca05 where productno=@productno and storeno=@storeno)
+		begin
+			update #z_uca05 set getmount = @mount, getweight=@weight 
+			where productno=@productno and storeno=@storeno
+		end
+		else
+		begin
+			insert into #z_uca05(productno,storeno,getmount,getweight)
+			select @productno,@storeno,@mount,@weight
+		end
+		fetch next from cursor_table
+		into @productno,@storeno,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	declare cursor_table cursor for
+	select productno,storeno,mount,[weight] from @tmpvcc
+	open cursor_table
+	fetch next from cursor_table
+	into @productno,@storeno,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		if exists(select * from #z_uca05 where productno=@productno and storeno=@storeno)
+		begin
+			update #z_uca05 set vccmount = @mount, vccweight=@weight 
+			where productno=@productno and storeno=@storeno
+		end
+		else
+		begin
+			insert into #z_uca05(productno,storeno,vccmount,vccweight)
+			select @productno,@storeno,@mount,@weight
+		end
+		fetch next from cursor_table
+		into @productno,@storeno,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table	
+	--------------------------------------------------------------------------------------------------
+	update #z_uca05 set product=ISNULL(b.product,a.productno),store=ISNULL(c.store,a.storeno)
+	from #z_uca05 a
+	left join ucc b on a.productno=b.noa
+	left join store c on a.storeno=c.noa
+	
+	update #z_uca05 set recno=b.recno
+	from #z_uca05 a
+	left join (select pno,ROW_NUMBER()over(order by productno,storeno) recno from #z_uca05) b on a.pno=b.pno
+	
+	update #z_uca05 set gno='1'
+	
+	insert into #z_uca05(gno,bmount,bweight,emount,eweight,rc2mount,rc2weight,inamount,inaweight
+		,cnginmount,cnginweight,cngoutmount,cngoutweight,getmount,getweight,vccmount,vccweight)
+	select '2',sum(isnull(bmount,0)),sum(isnull(bweight,0)),sum(isnull(emount,0)),sum(isnull(eweight,0))
+		,sum(isnull(rc2mount,0)),sum(isnull(rc2weight,0)),sum(isnull(inamount,0)),sum(isnull(inaweight,0))
+		,sum(isnull(cnginmount,0)),sum(isnull(cnginweight,0)),sum(isnull(cngoutmount,0)),sum(isnull(cngoutweight,0))
+		,sum(isnull(getmount,0)),sum(isnull(getweight,0)),sum(isnull(vccmount,0)),sum(isnull(vccweight,0))
+	from #z_uca05
+	
+	select recno rr
+		,'<a title="'+productno+'">'+product+'</a>' a00
+		,dbo.getComma(bmount,0) a01
+		,dbo.getComma(bweight,0) a02
+		,dbo.getComma(rc2mount,0) a03
+		,dbo.getComma(rc2weight,0) a04
+		,dbo.getComma(inamount,0) a05
+		,dbo.getComma(inaweight,0) a06
+		,dbo.getComma(cnginmount,0) a07
+		,dbo.getComma(cnginweight,0) a08
+		,dbo.getComma(vccmount,0) a09
+		,dbo.getComma(vccweight,0) a10
+		,dbo.getComma(getmount,0) a11
+		,dbo.getComma(getweight,0) a12
+		,dbo.getComma(cngoutmount,0) a13
+		,dbo.getComma(cngoutweight,0) a14
+		,dbo.getComma(emount,0) a15
+		,dbo.getComma(eweight,0) a16
+		,* 
+	from #z_uca05 order by gno,recno
+	drop table #z_uca05;
+
 z_ucatb:--z_ucatb
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
