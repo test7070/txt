@@ -1,9 +1,10 @@
 orde_vcce: -- orde_vcce 
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
-	declare @t_worker nvarchar(20) = [1]
+	declare @checkEnda nvarchar(20) = [1]
 	declare @t_custno nvarchar(20) = [2]
 	declare @t_stype nvarchar(20) = [3]
+	declare @t_ordeno nvarchar(20) = [4]
 	
 	declare @tmp table(
 		accy nvarchar(10),
@@ -22,19 +23,44 @@ orde_vcce: -- orde_vcce
 		straddr nvarchar(max),
 		caseno nvarchar(max),
 		mount float,
-		vccecount float
+		vccecount float,
+		strdate nvarchar(10),
+		dldate nvarchar(10),
+		casetype nvarchar(50),
+		casetype2 nvarchar(50),
+		memo nvarchar(max)
 	)
 	
-	insert into @tmp(accy,noa,stype,custno,comp,nick,tel,fax,port2,empdock2
-		,productno,product,straddrno,straddr,caseno,mount,vccecount)
-	select a.accy,a.noa,a.stype,a.custno,a.comp,a.nick,a.tel,a.fax,a.port2,a.empdock2
-		,a.productno,a.product,'','','',isnull(a.mount,0),isnull(b.mount,0)
-	from view_tranorde a
-	left join (select ordeno,SUM(mount) mount from view_transvcce group by ordeno) b on a.noa=b.ordeno
-	where ISNULL(a.enda,0)=0
-	and (len(@t_stype)=0 or a.stype=@t_stype)
-	and (len(@t_custno)=0 or a.custno=@t_custno)
-	and isnull(a.mount,0)-isnull(b.mount,0)>0
+	if @checkEnda = "true"
+	begin
+		insert into @tmp(accy,noa,stype,custno,comp,nick,tel,fax,port2,empdock2
+			,productno,product,straddrno,straddr,caseno,mount,vccecount
+			,strdate,dldate,casetype,casetype2,memo)
+		select a.accy,a.noa,a.stype,a.custno,a.comp,a.nick,a.tel,a.fax,a.port2,a.empdock2
+			,a.productno,a.product,'','','',isnull(a.mount,0),isnull(b.mount,0)
+			,a.strdate,a.dldate,a.casetype,a.casetype2,a.memo
+		from view_tranorde a
+		left join (select ordeno,SUM(mount) mount from view_transvcce group by ordeno) b on a.noa=b.ordeno
+		where ISNULL(a.enda,0)=0
+		and (len(@t_ordeno)=0 or a.noa=@t_ordeno)
+		and (len(@t_stype)=0 or a.stype=@t_stype)
+		and (len(@t_custno)=0 or a.custno=@t_custno)
+		and isnull(a.mount,0)-isnull(b.mount,0)>0
+	end
+	else
+	begin
+		insert into @tmp(accy,noa,stype,custno,comp,nick,tel,fax,port2,empdock2
+			,productno,product,straddrno,straddr,caseno,mount,vccecount
+			,strdate,dldate,casetype,casetype2,memo)
+		select a.accy,a.noa,a.stype,a.custno,a.comp,a.nick,a.tel,a.fax,a.port2,a.empdock2
+			,a.productno,a.product,'','','',isnull(a.mount,0),isnull(b.mount,0)
+			,a.strdate,a.dldate,a.casetype,a.casetype2,a.memo
+		from view_tranorde a
+		left join (select ordeno,SUM(mount) mount from view_transvcce group by ordeno) b on a.noa=b.ordeno
+		where (len(@t_ordeno)=0 or a.noa=@t_ordeno)
+		and (len(@t_stype)=0 or a.stype=@t_stype)
+		and (len(@t_custno)=0 or a.custno=@t_custno)
+	end
 	-------------------------------------------------------------------------------------------------
 	declare @accy nvarchar(10)
 	declare @noa nvarchar(20)
@@ -61,8 +87,20 @@ orde_vcce: -- orde_vcce
 		into @caseno
 		while(@@FETCH_STATUS <> -1)
 		begin	
-			set @t_caseno = @t_caseno +case when len(@t_caseno)=0 then '' else ',' end 
-				+ '{"caseno":"'+REPLACE(@caseno,'"','\\"')+'"}'	
+			if @checkEnda = "true"
+			begin
+				set @t_caseno = @t_caseno +case when len(@t_caseno)=0 then '' else ',' end 
+					+ '{"caseno":"'+REPLACE(@caseno,'"','\"')+'"}'
+			end
+			else
+			begin
+				--btnIns 用
+				if not exists(select * from view_transvcces a left join view_transvcce b on a.accy=b.accy and a.noa=b.noa where b.ordeno=@t_ordeno and a.caseno=@caseno)
+				begin
+					set @t_caseno = @t_caseno +case when len(@t_caseno)=0 then '' else ',' end 
+						+ '{"caseno":"'+REPLACE(@caseno,'"','\"')+'"}'
+				end
+			end	
 			fetch next from cursor_table2
 			into @caseno
 		end
@@ -77,18 +115,18 @@ orde_vcce: -- orde_vcce
 		while(@@FETCH_STATUS <> -1)
 		begin	
 			set @t_straddrno = @t_straddrno +case when len(@t_straddrno)=0 then '' else ',' end 
-				+ '{"straddrno":"'+REPLACE(@straddrno,'"','\\"')+'"}'	
+				+ '{"straddrno":"'+REPLACE(@straddrno,'"','\"')+'"}'	
 			set @t_straddr = @t_straddr +case when len(@t_straddr)=0 then '' else ',' end 
-				+ '{"straddr":"'+REPLACE(@straddr,'"','\\"')+'"}'	
+				+ '{"straddr":"'+REPLACE(@straddr,'"','\"')+'"}'	
 			fetch next from cursor_table2
 			into @straddrno,@straddr
 		end
 		close cursor_table2
 		deallocate cursor_table2	
 		
-		select @t_caseno='['+@t_caseno+']'
-			,@t_straddrno='['+@t_straddrno+']'
-			,@t_straddr='['+@t_straddr+']'
+		select @t_caseno='['+isnull(@t_caseno,'')+']'
+			,@t_straddrno='['+isnull(@t_straddrno,'')+']'
+			,@t_straddr='['+isnull(@t_straddr,'')+']'
 		
 		update @tmp set caseno=@t_caseno,straddrno=@t_straddrno,straddr=@t_straddr where accy=@accy and noa=@noa
 		fetch next from cursor_table
