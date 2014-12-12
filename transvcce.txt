@@ -1,3 +1,154 @@
+transvcce_trans:--transvcce_trans
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_key nvarchar(10)='BA'
+	declare @t_transvcceno nvarchar(20) = 'BP1031119001'
+	
+	declare @accy nvarchar(10)
+	declare @noa nvarchar(20)
+	
+	declare cursor_table cursor for
+	select accy,noa from view_trans where ordeno = @t_transvcceno
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@noa
+	while(@@FETCH_STATUS <> -1)
+	begin
+			set @cmd = "delete trans"+@accy+" where noa=@noa"
+			execute sp_executesql @cmd,N'@noa nvarchar(20)',@noa=@noa
+			
+		fetch next from cursor_table
+		into @accy,@noa
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+
+	declare @tmp table(
+		pno int IDENTITY(1,1),
+		accy nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		datea nvarchar(10),
+		trandate nvarchar(10),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		nick nvarchar(20),
+		
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		
+		straddrno nvarchar(20),
+		straddr nvarchar(20),
+		productno nvarchar(20),
+		product nvarchar(20),
+		
+		inmount float,
+		pton float,
+		mount float,
+		price float,
+		total float,
+		
+		outmount float,
+		pton2 float,
+		mount2 float,
+		price2 float,
+		price3 float,
+		total2 float,
+		
+		ordeno nvarchar(20),
+		memo nvarchar(max)
+	)
+	
+	insert into @tmp(accy,tranno,trannoq,datea,trandate
+		,custno,comp,nick,carno,driverno,driver
+		,straddrno,straddr,productno,product
+		,inmount,pton,mount,outmount,pton2,mount2,ordeno,memo)
+	select a.tranaccy,a.tranno,'001',b.datea,case when len(ISNULL(b.trandate,''))=0 then b.datea else b.trandate end
+	,b.custno,b.comp,b.nick,a.carno,a.driverno,a.driver
+		,a.addrno,a.addr,c.productno,c.product
+		,a.mount,0,a.mount,a.mount,0,a.mount,a.noa,a.memo2
+	from view_transvcces a
+	left join view_transvcce b on a.accy=b.accy and a.noa=b.noa 
+	left join view_tranorde c on b.ordeno=c.noa
+	where b.noa is not null and a.noa=@t_transvcceno
+	----------------------------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select accy,noa from view_trans where ordeno = @t_transvcceno
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@noa
+	while(@@FETCH_STATUS <> -1)
+	begin
+			set @cmd = "delete trans"+@accy+" where noa=@noa"
+			execute sp_executesql @cmd,N'@noa nvarchar(20)',@noa=@noa
+			
+		fetch next from cursor_table
+		into @accy,@noa
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------------
+	declare @maxnoa1 nvarchar(20)
+	declare @maxnoa2 nvarchar(20)
+	declare @maxnoa nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @pno int
+	declare @string nvarchar(max)="0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	declare @n int
+	
+	declare @t_tranno nvarchar(20)
+	declare @t_noa nvarchar(20)
+	
+	declare cursor_table cursor for
+	select pno,accy,tranno,datea from @tmp where len(isnull(tranno,''))=0
+	open cursor_table
+	fetch next from cursor_table
+	into @pno,@accy,@noa,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		
+		set @t_tranno = ''
+		set @t_noa = @t_key + replace(@datea,'/','')
+		
+		set @maxnoa = ''
+		select top 1 @maxnoa1 = noa from view_trans where noa like @t_key + REPLACE(@datea,'/','') +'[0-9,A-Z][0-9][0-9]' order by noa desc
+		select top 1 @maxnoa2 = tranno from @tmp where tranno	like @t_key + REPLACE(@datea,'/','') +'[0-9,A-Z][0-9][0-9]' order by tranno desc
+		
+		set @maxnoa = case when ISNULL(@maxnoa1,'')>ISNULL(@maxnoa2,'') then ISNULL(@maxnoa1,'') else ISNULL(@maxnoa2,'') end  
+		
+		
+		if len(ISNULL(@maxnoa,''))=0
+		begin
+			set @t_tranno = @t_noa + '001'
+		end
+		else
+		begin
+			set @n = (charindex(@string,left(right(@maxnoa,3),1))+0)*100 + cast(right(@maxnoa,2) as int) + 1
+			set @t_tranno = @t_noa+SUBSTRING(@string,floor(@n/100)+1,1)+RIGHT('000'+CAST(@n%100 as nvarchar),2)
+		end
+	
+		update @tmp set accy=LEFT(@datea,3) ,tranno =@t_tranno where pno=@pno
+		
+		fetch next from cursor_table
+		into @pno,@accy,@noa,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update @tmp set price = isnull(b.custprice,0)
+		,price2 = case when ISNULL(c.cartype,'')='公司車' then isnull(b.driverprice,0) else 0 end
+		,price3 = case when ISNULL(c.cartype,'')!='公司車' then isnull(b.driverprice2,0) else 0 end
+	from @tmp a
+	outer apply(select top 1 * from addrs 
+		where noa = a.straddrno and datea<=a.trandate
+		order by datea desc) b
+	left join driver c on a.driverno = c.noa
+	
+	select * from @tmp;
+
+
 orde_vcce: -- orde_vcce 
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
