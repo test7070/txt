@@ -1,8 +1,9 @@
 transvcce_trans:--transvcce_trans
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
-	declare @t_key nvarchar(10)='BA'
-	declare @t_transvcceno nvarchar(20) = 'BP1031119001'
+	declare @t_worker nvarchar(20) = [1]
+	declare @t_key nvarchar(10)=[2]
+	declare @t_transvcceno nvarchar(20) = [3]
 	
 	declare @accy nvarchar(10)
 	declare @noa nvarchar(20)
@@ -23,8 +24,11 @@ transvcce_trans:--transvcce_trans
 	close cursor_table
 	deallocate cursor_table
 	--------------------------------------------------------------------------------------------------
-
-	declare @tmp table(
+	IF OBJECT_ID('tempdb..#transvcce_trans')is not null
+	BEGIN
+		drop table #transvcce_trans
+	END
+	create  table #transvcce_trans(
 		pno int IDENTITY(1,1),
 		accy nvarchar(10),
 		tranno nvarchar(20),
@@ -38,15 +42,17 @@ transvcce_trans:--transvcce_trans
 		carno nvarchar(20),
 		driverno nvarchar(20),
 		driver nvarchar(20),
+		cardno nvarchar(20),
 		
 		straddrno nvarchar(20),
 		straddr nvarchar(20),
-		productno nvarchar(20),
+		uccno nvarchar(20),
 		product nvarchar(20),
 		
 		inmount float,
 		pton float,
 		mount float,
+		custdiscount float,
 		price float,
 		total float,
 		
@@ -55,20 +61,25 @@ transvcce_trans:--transvcce_trans
 		mount2 float,
 		price2 float,
 		price3 float,
+		overw float,
+		overh float,
+		discount float,
 		total2 float,
 		
+		caseno nvarchar(20),
+		casetype nvarchar(50),
 		ordeno nvarchar(20),
 		memo nvarchar(max)
 	)
 	
-	insert into @tmp(accy,tranno,trannoq,datea,trandate
+	insert into #transvcce_trans(accy,tranno,trannoq,datea,trandate
 		,custno,comp,nick,carno,driverno,driver
-		,straddrno,straddr,productno,product
-		,inmount,pton,mount,outmount,pton2,mount2,ordeno,memo)
+		,straddrno,straddr,uccno,product
+		,inmount,pton,mount,outmount,pton2,mount2,caseno,casetype,ordeno,memo)
 	select a.tranaccy,a.tranno,'001',b.datea,case when len(ISNULL(b.trandate,''))=0 then b.datea else b.trandate end
 	,b.custno,b.comp,b.nick,a.carno,a.driverno,a.driver
 		,a.addrno,a.addr,c.productno,c.product
-		,a.mount,0,a.mount,a.mount,0,a.mount,a.noa,a.memo2
+		,a.mount,0,a.mount,a.mount,0,a.mount,a.caseno,c.casetype,a.noa,a.memo2
 	from view_transvcces a
 	left join view_transvcce b on a.accy=b.accy and a.noa=b.noa 
 	left join view_tranorde c on b.ordeno=c.noa
@@ -89,6 +100,7 @@ transvcce_trans:--transvcce_trans
 	end
 	close cursor_table
 	deallocate cursor_table
+
 	----------------------------------------------------------------------------------------------------
 	declare @maxnoa1 nvarchar(20)
 	declare @maxnoa2 nvarchar(20)
@@ -102,7 +114,7 @@ transvcce_trans:--transvcce_trans
 	declare @t_noa nvarchar(20)
 	
 	declare cursor_table cursor for
-	select pno,accy,tranno,datea from @tmp where len(isnull(tranno,''))=0
+	select pno,accy,tranno,datea from #transvcce_trans where len(isnull(tranno,''))=0
 	open cursor_table
 	fetch next from cursor_table
 	into @pno,@accy,@noa,@datea
@@ -114,7 +126,7 @@ transvcce_trans:--transvcce_trans
 		
 		set @maxnoa = ''
 		select top 1 @maxnoa1 = noa from view_trans where noa like @t_key + REPLACE(@datea,'/','') +'[0-9,A-Z][0-9][0-9]' order by noa desc
-		select top 1 @maxnoa2 = tranno from @tmp where tranno	like @t_key + REPLACE(@datea,'/','') +'[0-9,A-Z][0-9][0-9]' order by tranno desc
+		select top 1 @maxnoa2 = tranno from #transvcce_trans where tranno	like @t_key + REPLACE(@datea,'/','') +'[0-9,A-Z][0-9][0-9]' order by tranno desc
 		
 		set @maxnoa = case when ISNULL(@maxnoa1,'')>ISNULL(@maxnoa2,'') then ISNULL(@maxnoa1,'') else ISNULL(@maxnoa2,'') end  
 		
@@ -129,25 +141,64 @@ transvcce_trans:--transvcce_trans
 			set @t_tranno = @t_noa+SUBSTRING(@string,floor(@n/100)+1,1)+RIGHT('000'+CAST(@n%100 as nvarchar),2)
 		end
 	
-		update @tmp set accy=LEFT(@datea,3) ,tranno =@t_tranno where pno=@pno
+		update #transvcce_trans set accy=LEFT(@datea,3) ,tranno =@t_tranno where pno=@pno
 		
 		fetch next from cursor_table
 		into @pno,@accy,@noa,@datea
 	end
 	close cursor_table
 	deallocate cursor_table
-	
-	update @tmp set price = isnull(b.custprice,0)
+	-----------------------------------------------------------------------------------------------
+	--由DRIVER判斷是不是公司車
+	update #transvcce_trans set price = isnull(b.custprice,0)
 		,price2 = case when ISNULL(c.cartype,'')='公司車' then isnull(b.driverprice,0) else 0 end
 		,price3 = case when ISNULL(c.cartype,'')!='公司車' then isnull(b.driverprice2,0) else 0 end
-	from @tmp a
+	from #transvcce_trans a
 	outer apply(select top 1 * from addrs 
 		where noa = a.straddrno and datea<=a.trandate
 		order by datea desc) b
 	left join driver c on a.driverno = c.noa
 	
-	select * from @tmp;
+	update #transvcce_trans set custdiscount=100,total=ROUND(price*mount,0)
+		,discount=1,total2=ROUND((isnull(price2,0)+isnull(price3,0))*mount2,0)
+	-----------------------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select accy from #transvcce_trans where len(isnull(accy,''))!=0 group by accy
+	open cursor_table
+	fetch next from cursor_table
+	into @accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd =
+		"insert into trans"+@accy+"(noa,noq,datea,trandate
+		,custno,comp,nick
+		,driverno,driver,carno,cardno
+		,straddrno,straddr
+		,price,inmount,custdiscount,total
+		,price2,price3,outmount,pton2,mount2,overw,overh,discount,total2
+		,uccno,product,caseno,casetype
+		,ordeno,worker)
+		
+		select tranno,trannoq,datea,trandate
+		,custno,comp,nick
+		,driverno,driver,carno,cardno
+		,straddrno,straddr
+		,price,inmount,custdiscount,total
+		,price2,price3,outmount,pton2,mount2,overw,overh,discount,total2 
+		,uccno,product,caseno,casetype
+		,@t_transvcceno,@t_worker
+		from #transvcce_trans where accy = @accy"
+		
+		execute sp_executesql @cmd,N'@accy nvarchar(20),@t_transvcceno nvarchar(20),@t_worker nvarchar(20)'
+			,@accy=@accy,@t_transvcceno=@t_transvcceno,@t_worker=@t_worker
+		
+		fetch next from cursor_table
+		into @accy
+	end
+	close cursor_table
+	deallocate cursor_table
 
+	drop table #transvcce_trans;
 
 orde_vcce: -- orde_vcce 
 	SET QUOTED_IDENTIFIER OFF
