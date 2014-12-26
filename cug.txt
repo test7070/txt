@@ -217,7 +217,8 @@ select a.noa from view_work a left join station b on a.stationno=b.noa
 where (a.cuadate between @bdate and @edate) and (a.cuano between @bcuano and @ecuano) and (a.noa between @bworkno and @eworkno)
 and (isnull(a.stationno,'') between @bstationno and @estationno) and (isnull(b.stationgno,'') between @bstationgno and @estationgno)
 and (isnull(a.tggno,'') between @btggno and @etggno)
-and len(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(SUBSTRING(a.noa,2,1),'0',''),'1',''),'2',''),'3',''),'4',''),'5',''),'6',''),'7',''),'8',''),'9',''))!=0
+and a.noa not like 'W[0-9]%'
+--and len(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(SUBSTRING(a.noa,2,1),'0',''),'1',''),'2',''),'3',''),'4',''),'5',''),'6',''),'7',''),'8',''),'9',''))!=0
 group by a.noa
 
 select * from @tmp
@@ -458,10 +459,170 @@ declare @estationno nvarchar(MAX)=case when '#non'=[4] then CHAR(255) else [4] e
 declare @bprocessno nvarchar(MAX)=case when '#non'=[5] then '' else [5] end
 declare @eprocessno nvarchar(MAX)=case when '#non'=[6] then CHAR(255) else [6] end
 
---找出未完工
+--找出未完工(製令)--可能含拆分的製令
+declare @tmp table(
+	cuadate nvarchar(MAX),
+	workno nvarchar(MAX),
+	mount float,
+	inmount float,
+	unmount float
+)
 
+insert @tmp
+select cuadate,workno
+,SUM(a.mount) mount
+,isnull((select SUM(mount) mount from view_workb where a.workno=a.workno and datea=a.cuadate),0) inmount
+,SUM(a.mount)-isnull((select SUM(mount) mount from view_workb where a.workno=a.workno and datea=a.cuadate),0) unmount
+from view_cugs a 
+where workno like 'W[0-9]%' --left(workno,2)!='WJ' 
+and cuadate <=@edate and (a.stationno between @bstationno and @estationno) and (a.processno between @bprocessno and @eprocessno)
+group by cuadate,workno
+having SUM(a.mount)>isnull((select SUM(mount) mount from view_workb where a.workno=a.workno and datea=a.cuadate),0)
 
---
+--依據排產 找出未完工製令的排程 並 拆分
+declare @cuadate nvarchar(MAX)
+declare @workno nvarchar(MAX)
+declare @mount float
+declare @inmount float
+declare @unmount float
+declare @accy nvarchar(90)
+declare @cugunoq nvarchar(MAX)
+declare @hours float
+declare @hourss float
+declare @cugnoa nvarchar(MAX)
+declare @t_hours float
+declare @t_mount float
+declare @t_inmount float
+declare @t_unmount float
+declare @tt_hours nvarchar(MAX)
+declare @tt_mount nvarchar(MAX)
+declare @maxnoq nvarchar(MAX)
+declare @nnoq nvarchar(MAX)
+set @nnoq='000'
 
+declare cursor_table cursor for 
+select * from @tmp order by cuadate
+open cursor_table 
+fetch next from cursor_table 
+into @cuadate,@workno,@mount,@inmount,@unmount
+while(@@FETCH_STATUS <> -1) 
+begin 
+	
+	if((select COUNT(*) from view_cugs where cuadate=@cuadate and workno=@workno)=1)
+	begin
+	--只有一個製令
+		select @accy=accy,@cugunoq=cugunoq,@cugnoa=noa,@hours=hours from view_cugs where cuadate=@cuadate and workno=@workno
+		select @maxnoq=MAX(noq) from view_cugs where (cuadate<@bdate or (cuadate<=@bdate and len(noq)=6)) and noa=@cugnoa
+		set @nnoq=case when len(@maxnoq)=6 then LEFT(@maxnoq,3)+right('000'+cast(CAST(@maxnoq as int)+1 as nvarchar(10)),3)	else @maxnoq+'001' end
+			
+		if(@inmount=0)--入庫數量=0 直接變更開工日
+		begin
+			EXEC("update cugs"+@accy+" set cuadate='"+@bdate+"',noq='"+@nnoq+"' where cugunoq='"+@cugunoq+"'")
+			select @accy=accy from view_cugu where noq=@cugunoq
+			EXEC("update cugu"+@accy+" set datea='"+@bdate+"' where noq='"+@cugunoq+"'")
+		end
+		else--分拆
+		begin
+			set @t_hours=round(@inmount/@mount*@hours,3) --已入庫機時
+			set @tt_hours=cast(@t_hours as nvarchar(50))
+			set @tt_mount=cast(@unmount as nvarchar(50))
+			
+			--插入分拆
+			EXEC("insert cugs"+@accy+"(noa,noq,stationno,station,processno,process,productno,product,mount,hours,days,cuadate,uindate,workno,memo,orgcuadate,orguindate,issel,ordeno,workgno,spec,style,nos,thours,dhours,pretime,wbdate,wedate,wadate,cugunoq,nosold,tggno,comp)
+			select noa,noq+'"+@nnoq+"',stationno,station,processno,process,productno,product
+			,"+@tt_mount+",round(hours-"+@tt_hours+",3),days,'"+@bdate+"',uindate,workno,memo,orgcuadate,orguindate,issel
+			,ordeno,workgno,spec,style,nos,0,dhours,pretime,wbdate,wedate,wadate,cugunoq+'B',nosold,tggno,comp 
+			from cugs"+@accy+" where cugunoq='"+@cugunoq+"'")
+			
+			EXEC("insert cugu"+@accy+"(stationno,workno,datea,nom,noq,nos,process,hours,mount,preday,pretime,rank,tggno)
+			select stationno,workno,'"+@bdate+"',nom,noq+'B',nos,process,round(hours-"+@tt_hours+",3),"+@tt_mount+",preday,pretime,rank,tggno
+			from cugu"+@accy+" where noq='"+@cugunoq+"'")
+			
+			--更新原製令
+			set @tt_hours=cast(@t_hours as nvarchar(50))
+			set @tt_mount=cast(@inmount as nvarchar(50))
+			
+			EXEC("update cugs"+@accy+"
+			set cugunoq='"+@cugunoq+'A'+"',mount="+@tt_mount+",hours="+@tt_hours+"
+			where cugunoq='"+@cugunoq+"'")
+			
+			EXEC("update cugu"+@accy+"
+			set noq='"+@cugunoq+'A'+"',mount="+@tt_mount+",hours="+@tt_hours+"
+			where noq='"+@cugunoq+"'")
+		end
+	end
+	else
+	begin
+	--含兩個以上分拆的製令
+	--依據排程順序與入庫數決定製令是否不變、分拆、或變更開工日期
+		set @t_inmount=@inmount
+		
+		declare cursor_table2 cursor for 
+		select accy,cugunoq,noa,noq,mount,hours from view_cugs where cuadate=@cuadate and workno=@workno
+		open cursor_table2 
+		fetch next from cursor_table2
+		into @accy,@cugunoq,@cugnoa,@t_mount,@hourss
+		while(@@FETCH_STATUS <> -1) 
+		begin 
+			if(@t_mount<=@t_inmount) --表示已完工
+			begin
+				set @t_inmount=@t_inmount-@t_mount
+			end
+			else
+			begin
+				select @maxnoq=MAX(noq) from view_cugs where (cuadate<@bdate or (cuadate<=@bdate and len(noq)=6)) and noa=@cugnoa
+				set @nnoq=case when len(@maxnoq)=6 then LEFT(@maxnoq,3)+right('000'+cast(CAST(@maxnoq as int)+1 as nvarchar(10)),3)	else @maxnoq+'001' end
+				--表示要未完工
+				if(@t_inmount=0)--直接變更開工日
+				begin
+					EXEC("update cugs"+@accy+" set cuadate='"+@bdate+"',noq='"+@nnoq+"' where cugunoq='"+@cugunoq+"'")
+					select @accy=accy from view_cugu where noq=@cugunoq
+					EXEC("update cugu"+@accy+" set datea='"+@bdate+"' where noq='"+@cugunoq+"'")
+				end
+				else --分拆
+				begin
+					set @t_hours=round(@t_inmount/@t_mount*@hourss,3) --已入庫機時
+					set @t_unmount=@t_mount-@t_inmount
+					set @tt_hours=cast(@t_hours as nvarchar(50))
+					set @tt_mount=cast(@t_unmount as nvarchar(50))
+					
+					--插入分拆
+					EXEC("insert cugs"+@accy+"(noa,noq,stationno,station,processno,process,productno,product,mount,hours,days,cuadate,uindate,workno,memo,orgcuadate,orguindate,issel,ordeno,workgno,spec,style,nos,thours,dhours,pretime,wbdate,wedate,wadate,cugunoq,nosold,tggno,comp)
+					select noa,noq+'"+@nnoq+"',stationno,station,processno,process,productno,product
+					,"+@tt_mount+",round(hours-"+@tt_hours+",3),days,'"+@bdate+"',uindate,workno,memo,orgcuadate,orguindate,issel
+					,ordeno,workgno,spec,style,nos,0,dhours,pretime,wbdate,wedate,wadate,cugunoq+'B',nosold,tggno,comp 
+					from cugs"+@accy+" where cugunoq='"+@cugunoq+"'")
+					
+					EXEC("insert cugu"+@accy+"(stationno,workno,datea,nom,noq,nos,process,hours,mount,preday,pretime,rank,tggno)
+					select stationno,workno,'"+@bdate+"',nom,noq+'B',nos,process,round(hours-"+@tt_hours+",3),"+@tt_mount+",preday,pretime,rank,tggno
+					from cugu"+@accy+" where noq='"+@cugunoq+"'")
+					
+					--更新原製令
+					set @tt_hours=cast(@t_hours as nvarchar(50))
+					set @tt_mount=cast(@inmount as nvarchar(50))
+					
+					EXEC("update cugs"+@accy+"
+					set cugunoq='"+@cugunoq+'A'+"',mount="+@tt_mount+",hours="+@tt_hours+"
+					where cugunoq='"+@cugunoq+"'")
+					
+					EXEC("update cugu"+@accy+"
+					set noq='"+@cugunoq+'A'+"',mount="+@tt_mount+",hours="+@tt_hours+"
+					where noq='"+@cugunoq+"'")
+					
+					set @t_inmount=0
+				end
+			end	
+			
+			fetch next from cursor_table2 
+			into @accy,@cugunoq,@cugnoa,@t_mount,@hourss
+		end 
+		close cursor_table2 
+		deallocate cursor_table2
+	end
 
-
+	fetch next from cursor_table 
+	into @cuadate,@workno,@mount,@inmount,@unmount
+end 
+close cursor_table 
+deallocate cursor_table
+;
