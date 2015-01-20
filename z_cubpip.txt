@@ -1,0 +1,303 @@
+z_cubpip03:--z_cubpip03
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	declare @t_bdate nvarchar(20)
+	declare @t_edate nvarchar(20)
+	
+	set @t_bdate = case when '#non' = [4] then '' else [4] end
+	set @t_edate = case when '#non' = [5] then char(255) else [5] end
+	-------------------------------------------------------------------------------
+	-------------------------------------------------------------------------------
+	declare @listcub table(
+		tablea nvarchar(20),
+		tableas nvarchar(20),
+		tableat nvarchar(20),
+		tableau nvarchar(20)
+	)
+	insert into @listcub(tablea,tableas,tableat,tableau)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'cub','cubs')
+	,replace(TABLE_NAME,'cub','cubt')
+	,replace(TABLE_NAME,'cub','cubu')
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'cub[0-9][0-9][0-9]'
+	
+	-------------------------------------------------------------------------------
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @tableat nvarchar(20)
+	declare @tableau nvarchar(20)
+	--在製品
+	declare @tmpa table(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		datea nvarchar(10),
+		uno nvarchar(30),
+		mount float,
+		[weight] float,
+		productno nvarchar(20),
+		style nvarchar(20),
+		dime float,
+		width float,
+		lengthb float,
+		radius float,
+		size nvarchar(max)
+	)
+	--製成品
+	declare @tmpb table(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		datea nvarchar(10),
+		uno nvarchar(30),
+		mount float,
+		[weight] float,
+		productno nvarchar(20),
+		style nvarchar(20),
+		dime float,
+		width float,
+		lengthb float,
+		radius float,
+		size nvarchar(max)
+	)
+	declare cursor_table cursor for
+	select tablea,tableas,tableat,tableau from @listcub
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@tableat,@tableau
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd =
+		" select a.noa,a.noq,a.datea,a.uno,a.mount,a.weight,c.productno,c.style,c.dime,c.width,c.lengthb,c.radius,c.size"+
+		" from "+@tableau+" a"+
+		" left join "+@tablea+" b on a.noa=b.noa"+
+		" left join view_uccb c on a.uno=c.uno"+
+		" where b.noa is not null"+
+		" and b.typea='1'"+ --製管
+		" and a.datea between @t_bdate and @t_edate"
+		insert into @tmpa(noa,noq,datea,uno,mount,[weight],productno,style,dime,width,lengthb,radius,size)
+		execute sp_executesql @cmd,N'@t_bdate nvarchar(20),@t_edate nvarchar(20)',@t_bdate=@t_bdate,@t_edate=@t_edate
+		
+		set @cmd =
+		" select a.noa,a.noq,a.datea,a.uno,a.mount,a.weight,c.productno,c.style,c.dime,c.width,c.lengthb,c.radius,c.size"+
+		" from "+@tableau+" a"+
+		" left join "+@tablea+" b on a.noa=b.noa"+
+		" left join view_uccb c on a.uno=c.uno"+
+		" where b.noa is not null"+
+		" and b.typea='4'"+ --包裝
+		" and a.datea between @t_bdate and @t_edate"
+		insert into @tmpb(noa,noq,datea,uno,mount,[weight],productno,style,dime,width,lengthb,radius,size)
+		execute sp_executesql @cmd,N'@t_bdate nvarchar(20),@t_edate nvarchar(20)',@t_bdate=@t_bdate,@t_edate=@t_edate
+		
+		fetch next from cursor_table
+		into @tablea,@tableas,@tableat,@tableau
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	-------------------------------------------------------------------------------
+	declare @tmp table(
+		pno nvarchar(10),
+		gno nvarchar(10),
+		csize nvarchar(max),
+		[weight] float,
+		mount float,
+		
+		recno int,
+		uno nvarchar(30),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		datea nvarchar(20),
+		mounts float,
+		weights float,
+		productno nvarchar(20),
+		style nvarchar(20),
+		dime float,
+		width float,
+		lengthb float,
+		radius float,
+		size nvarchar(max)
+	)
+	
+	--在製品明細
+	insert into @tmp(pno,gno,recno,uno,noa,noq,datea,mounts,weights,productno,style,dime,width,lengthb,radius,size,csize)
+	select '1','1',ROW_NUMBER()over(order by datea,productno,radius,width,dime,lengthb)
+	,uno,noa,noq,datea,mount,[weight],productno,style,dime,width,lengthb,radius,size
+	,case when len(size)>0 then size else dbo.csize('B2',dime,width,lengthb,radius) end
+	from @tmpa
+	order by datea,productno,radius,width,dime,lengthb
+	--
+	
+	--在製品合計
+	insert into @tmp(pno,gno,productno,csize,mount,[weight])
+	select '3','3',productno
+	,case when upper(left(uno,1))='X' or upper(left(uno,1))='Y' or upper(left(uno,1))='Z' then '廢料' 
+		when len(size)>0 then size
+		else dbo.csize('B2',dime,width,lengthb,radius) end
+	,SUM(ISNULL(mount,0)),SUM(ISNULL([weight],0))
+	from @tmpa 
+	group by productno,case when upper(left(uno,1))='X' or upper(left(uno,1))='Y' or upper(left(uno,1))='Z' then '廢料' 
+		when len(size)>0 then size
+		else dbo.csize('B2',dime,width,lengthb,radius) end
+	if exists(select * from @tmpa)
+	begin
+		insert into @tmp(pno,gno)values('2','2')
+		insert into @tmp(pno,gno,csize,mount,[weight])
+		select '4','4','合計：',SUM(ISNULL(mount,0)),SUM(ISNULL([weight],0)) from @tmpa
+	end
+	--製成品明細
+	insert into @tmp(pno,gno,recno,uno,noa,noq,datea,mounts,weights,productno,style,dime,width,lengthb,radius,size,csize)
+	select '5','5',ROW_NUMBER()over(order by datea,productno,radius,width,dime,lengthb)
+	,uno,noa,noq,datea,mount,[weight],productno,style,dime,width,lengthb,radius,size
+	,case when len(size)>0 then size else dbo.csize('B2',dime,width,lengthb,radius) end
+	from @tmpb
+	order by datea,productno,radius,width,dime,lengthb
+	--製成品合計
+	insert into @tmp(pno,gno,productno,csize,mount,[weight])
+	select '7','7',productno
+	,case when upper(left(uno,1))='X' or upper(left(uno,1))='Y' or upper(left(uno,1))='Z' then '廢料' 
+		when len(size)>0 then size
+		else dbo.csize('B2',dime,width,lengthb,radius) end
+	,SUM(ISNULL(mount,0)),SUM(ISNULL([weight],0))
+	from @tmpb
+	group by productno,case when upper(left(uno,1))='X' or upper(left(uno,1))='Y' or upper(left(uno,1))='Z' then '廢料' 
+		when len(size)>0 then size
+		else dbo.csize('B2',dime,width,lengthb,radius) end
+	if exists(select * from @tmpb)
+	begin
+		insert into @tmp(pno,gno)values('6','6')
+		insert into @tmp(pno,gno,csize,mount,[weight])
+		select '8','8','合計：',SUM(ISNULL(mount,0)),SUM(ISNULL([weight],0)) from @tmpb
+	end
+	
+	select * 
+	,recno rr
+	,productno pp
+	,radius a1
+	,width a2
+	,dime a3
+	,lengthb a4
+	,mounts a5
+	,weights a6
+	,mount mm
+	,cast([weight] as decimal(15,3)) ww
+	from @tmp order by pno,recno,productno,csize;
+
+
+z_cubpip1:--z_cubpip1
+declare @t_bnoa nvarchar(35)
+declare @t_enoa nvarchar(35)
+set @t_bnoa = case when '#non' = [2] then '' else [2] end
+set @t_enoa = case when '#non' = [3] then CHAR(255) else [3] end
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(35),
+	ordeno nvarchar(35),
+	no2 nvarchar(10),
+	custno nvarchar(35),
+	custs nvarchar(90),
+	pno nvarchar(35),
+	products nvarchar(90),
+	csize nvarchar(max),
+	amount float,
+	aweight float,
+	gmount float,
+	gweight float,
+	memo nvarchar(max)
+)
+insert into @tmp
+	select
+		'2',a.noa,a.ordeno,a.no2,a.custno,b.nick,a.productno,a.product,
+		dbo.csize('B2',a.dime,a.width,a.lengthb,a.radius),a.mount,a.weight,0,0,a.memo
+	from view_cubs[1] a
+	left join cust b on a.custno = b.noa
+	where (a.noa between @t_bnoa and @t_enoa)
+insert into @tmp(gno,noa)
+	select '1',noa from @tmp where gno = '2' group by noa
+insert into @tmp(gno,noa)
+	select '3',noa from @tmp where gno = '2' group by noa
+
+insert into @tmp
+	select
+		'5',a.noa,a.uno,'','','',a.productno,a.product,
+		dbo.csize((case c.typea when '1' then 'A1' else 'B2' end),a.dime,a.width,a.lengthb,a.radius),
+		a.mount,a.weight,a.gmount,a.gweight,a.memo
+	from view_cubt[1] a
+	left join cust b on a.custno = b.noa
+	left join view_cub[1] c on a.noa = c.noa
+	where (a.noa between @t_bnoa and @t_enoa)
+insert into @tmp(gno,noa)
+	select '4',noa from @tmp where gno = '5' group by noa
+insert into @tmp(gno,noa)
+	select '6',noa from @tmp where gno = '5' group by noa
+select
+	gno,noa,ordeno,no2,custno,custs,pno,products,csize,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,amount),1)),4,12)) amount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(aweight)),1)),4,12))+'.'+LEFT(CAST((cast(floor((aweight*10)-(floor(aweight)*10)) as nvarchar)) as NVARCHAR) + REPLICATE('0', 1), 1) aweight,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gmount),1)),4,12)) gmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(gweight)),1)),4,12))+'.'+LEFT(CAST((cast(floor((gweight*10)-(floor(gweight)*10)) as nvarchar)) as NVARCHAR) + REPLICATE('0', 1), 1) gweight,
+	memo
+from @tmp order by noa,gno;
+----------**************************************************----------
+z_cubpip2:--z_cubpip2
+declare @t_bnoa nvarchar(35)
+declare @t_enoa nvarchar(35)
+declare @t_bindate nvarchar(10)
+declare @t_eindate nvarchar(10)
+declare @t_bstype nvarchar(max)
+declare @t_bradius float
+declare @t_eradius float
+declare @t_bwidth float
+declare @t_ewidth float
+declare @t_bdime float
+declare @t_edime float
+declare @t_blengthb float
+declare @t_elengthb float
+set @t_bnoa = case when '#non' = [2] then '' else [2] end
+set @t_enoa = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bindate = case when '#non' = [4] then '' else [4] end
+set @t_eindate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bstype = case when '#non' = [6] then '' else [6] end
+set @t_bstype = upper(@t_bstype)
+set @t_bradius = case when '#non'=[7] then 0.00 else cast([7] as float) end
+set @t_eradius = case when '#non'=[8] then 9999.99 else cast([8] as float) end
+set @t_bwidth = case when '#non'=[9] then 0.00 else cast([9] as float)end
+set @t_ewidth = case when '#non'=[10] then 9999.99 else cast([10] as float) end
+set @t_bdime = case when '#non'=[11] then 0.000 else cast([11] as float) end
+set @t_edime = case when '#non'=[12] then 999.990 else cast([12] as float) end
+set @t_blengthb = case when '#non'=[13] then 0.0 else cast([13] as float) end
+set @t_elengthb = case when '#non'=[14] then 99999.9 else cast([14] as float) end
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	noa nvarchar(35),
+	ordeno nvarchar(35),
+	no2 nvarchar(10),
+	uno nvarchar(90),
+	class nvarchar(50),
+	csize nvarchar(max),
+	w1 nvarchar(5),
+	w2 nvarchar(5),
+	w3 nvarchar(5),
+	w4 nvarchar(5),
+	mount float,
+	weightb float,
+	inweight float
+)
+insert into @tmp
+	select
+		'0',a.datea,a.noa,a.ordeno,a.no2,a.uno,a.class,
+		dbo.csize('B2',a.dime,a.width,a.lengthb,a.radius),
+		(case when b.cut = '1' then 'v' else '' end),
+		(case when b.slit = '1' then 'v' else '' end),
+		(case when b.sale = '1' then 'v' else '' end),
+		(case when b.ordc = '1' then 'v' else '' end),
+		a.mount,a.weight,a.inweight
+	from view_cubu[1] a
+	left join view_cubs[1] b on (a.noa = b.noa) and (a.ordeno = b.ordeno) and (a.no2 = b.no2)
+	where (a.noa between @t_bnoa and @t_enoa) and (a.datea between @t_bindate and @t_eindate) and
+	((b.cut='0' and b.slit='0' and b.sale='0' and b.ordc='0') or ((patindex('%CUT%',@t_bstype) >0 and b.cut='1') or (patindex('%SLIT%',@t_bstype) >0 and b.slit='1') or (patindex('%SALE%',@t_bstype) >0 and b.sale='1') or (patindex('%ORDC%',@t_bstype) >0) and b.ordc='1'))
+	and (a.radius between @t_bradius and @t_eradius) and (a.width between @t_bwidth and @t_ewidth) and (a.dime between @t_bdime and @t_edime) and (a.lengthb between @t_blengthb and @t_elengthb)
+insert into @tmp(gno,mount,weightb,inweight)
+	select '1',sum(mount),sum(weightb),sum(inweight) from @tmp
+select * from @tmp order by gno,datea,ordeno,no2;

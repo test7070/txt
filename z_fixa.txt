@@ -1,0 +1,2044 @@
+z_fixa01:--z_fixa01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bfixadate nvarchar(10)
+	declare @t_efixadate nvarchar(10)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @limit float
+	declare @option01 nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_name = '[2]'
+	set @t_bdate = case when '#non'=[17] then '' else [17] end
+	set @t_edate = case when '#non'=[18] then CHAR(255) else [18] end
+	set @t_bfixadate = case when '#non'=[19] then '' else [19] end
+	set @t_efixadate = case when '#non'=[20] then CHAR(255) else [20] end
+	set @t_btggno = case when '#non'=[21] then '' else [21] end
+	set @t_etggno = case when '#non'=[22] then CHAR(255) else [22] end
+	set @t_carno = case when '#non'=[23] then '' else [23] end
+	set @t_carplateno = case when '#non'=[24] then '' else [24] end
+	BEGIN TRY
+		set @limit = cast(case when '#non'=[25] then '' else [25] end as float)
+	END TRY
+	BEGIN CATCH
+		set @limit = 0
+	END CATCH
+	set @option01 = case when '#non'=[26] then '' else [26] end
+	------------------------------------------------------------------------
+	------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	
+	------------------------------------------------------------------------
+	declare @fixa table(
+		recno int,
+		noa nvarchar(20),
+		datea nvarchar(10),
+		fixadate nvarchar(10),
+		tggno nvarchar(20),
+		tgg	nvarchar(50),
+		nick nvarchar(20),
+		carno nvarchar(20),
+		carplateno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(50),
+		wmoney float,
+		cmoney float,
+		dmoney float,
+		tax float,
+		discount float,
+		total float,
+		miles float
+	)
+	declare @tmp table(
+		gno nvarchar(20),
+		page int,
+		nn int,
+		recno int,
+		noa nvarchar(20),
+		datea nvarchar(10),
+		fixadate nvarchar(10),
+		tggno nvarchar(20),
+		tgg	nvarchar(50),
+		nick nvarchar(20),
+		carno nvarchar(20),
+		carplateno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(50),
+		wmoney float,
+		cmoney float,
+		dmoney float,
+		tax float,
+		discount float,
+		total float,
+		miles float,
+		
+		productno nvarchar(20),
+		product nvarchar(50),
+		mount decimal(15,1),
+		price decimal(15,1),
+		moneys float,
+		memos nvarchar(max),
+		
+		wmoney1 float,
+		cmoney1 float,
+		dmoney1 float,
+		wmoney2 float,
+		cmoney2 float,
+		dmoney2 float,
+		wmoney3 float,
+		cmoney3 float,
+		dmoney3 float,
+		tax3 float,
+		discount3 float,
+		total3 float
+	)
+	insert into @fixa(recno,noa,datea,fixadate,tggno,tgg,nick
+		,carno,carplateno,driverno,driver
+		,wmoney,cmoney,dmoney,tax,discount,total,miles)
+	select ROW_NUMBER()over(order by isnull(a.fixadate,''),a.noa) 
+		,a.noa,a.datea,isnull(a.fixadate,''),a.tggno,a.tgg,case when len(ISNULL(d.nick,''))=0 then a.tggno else d.nick end
+		,a.carno,a.carplateno,a.driverno,a.driver
+		,a.wmoney,a.cmoney,a.dmoney,a.tax,a.discount,a.total,a.miles
+	from fixa a 
+	left join tgg d on a.tggno=d.noa
+	where a.datea between @t_bdate and @t_edate
+		and isnull(a.fixadate,'') between @t_bfixadate and @t_efixadate
+		and (a.tggno between @t_btggno and @t_etggno)
+		and ((len(@t_carno)=0 and len(@t_carplateno)=0) or CHARINDEX(','+a.carno+',',','+@t_carno+',')>0)
+		and ((len(@t_carno)=0 and len(@t_carplateno)=0) or CHARINDEX(','+a.carplateno+',',','+@t_carplateno+',')>0)
+	order by isnull(a.fixadate,''),a.noa
+	------------------------------------------------------------------------------------------
+	declare @noa nvarchar(20)
+
+	declare @productno nvarchar(20)
+	declare @product nvarchar(50)
+	declare @mount decimal(15,1)
+	declare @price decimal(15,1)
+	declare @moneys float
+	declare @memos nvarchar(max)
+	
+	declare @wmoney1 float
+	declare @cmoney1 float
+	declare @dmoney1 float
+	declare @wmoney2 float
+	declare @cmoney2 float
+	declare @dmoney2 float
+	declare @wmoney3 float
+	declare @cmoney3 float
+	declare @dmoney3 float
+	declare @tax3 float
+	declare @discount3 float
+	declare @total3 float
+	------------------------------------------------------------------------------------------
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	set @rowline = 41
+	set @endline = 3
+	set @page=0
+	set @curline = 0
+
+	declare @tot int
+	
+	declare cursor_table cursor for
+	select recno,noa from @fixa order by recno
+	open cursor_table
+	fetch next from cursor_table
+	into @n,@noa
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(charindex('detail',@option01)>0)
+		begin
+			--若要印明細,至少留2行,比較美觀
+			if(@curline%@rowline=@rowline-1)
+			begin	
+				insert into @tmp(gno,page,nn)
+				select '0',@page,@curline%@rowline
+				set @curline = @curline + 1
+				set @page = @page + 1
+			end
+		end
+		--header
+		if(@curline%@rowline=0)
+		begin	
+			insert into @tmp(gno,page,nn)
+			select '1',@page,@curline%@rowline
+			set @curline = @curline + 1
+			if(charindex('detail',@option01)>0)
+			begin
+				insert into @tmp(gno,page,nn)
+				select '2',@page,@curline%@rowline
+				set @curline = @curline + 1
+			end
+		end
+		--fixa detail
+		insert into @tmp(gno,page,nn,recno
+			,datea,fixadate,tggno,tgg,nick,carno,carplateno,driverno,driver,wmoney,cmoney,dmoney,tax,discount,total,miles)
+		select case when charindex('detail',@option01)>0 then '6' else '3' end
+			,@page,@curline%@rowline,recno
+			,datea,fixadate,tggno,tgg,nick,carno,carplateno,driverno,driver,wmoney,cmoney,dmoney,tax,discount,total,miles
+		from @fixa where noa=@noa
+		set @curline = @curline + 1
+		--是否換頁
+		if(@curline%@rowline=0)
+		begin
+			set @page = @page + 1
+		end
+	
+		--fixas detail
+		select @tot = 0
+		select @tot = COUNT(1) from fixas where noa=@noa
+		if(charindex('detail',@option01)>0 and @tot>0)
+		begin
+			declare cursor_table2 cursor for
+			select productno,product,mount,price,[money],memo
+			from fixas where noa=@noa and (@limit=0 or [money]>=@limit)
+			open cursor_table2
+			fetch next from cursor_table2
+			into @productno,@product,@mount,@price,@moneys,@memos
+			while(@@FETCH_STATUS <> -1)
+			begin
+				if(@curline%@rowline=0)
+				begin	
+					insert into @tmp(gno,page,nn)
+					select '1',@page,@curline%@rowline
+					set @curline = @curline + 1
+
+					insert into @tmp(gno,page,nn)
+					select '2',@page,@curline%@rowline
+					set @curline = @curline + 1
+				end
+				insert into @tmp(gno,page,nn
+					,productno,product,mount,price,moneys,memos)
+				select '4',@page,@curline%@rowline
+					,@productno,@product,@mount,@price,@moneys,@memos
+				set @curline = @curline + 1
+				--是否換頁
+				if(@curline%@rowline=0)
+				begin
+					set @page = @page + 1
+				end			
+				fetch next from cursor_table2
+				into @productno,@product,@mount,@price,@moneys,@memos
+			end
+			close cursor_table2
+			deallocate cursor_table2
+		end
+
+		fetch next from cursor_table
+		into @n,@noa
+	end
+	close cursor_table
+	deallocate cursor_table
+	--總計
+	if(@curline%@rowline>@rowline-@endline)
+	begin
+		while(@curline%@rowline!=0)
+		begin
+			insert into @tmp(gno,page,nn)
+			select '0',@page,@curline%@rowline
+			set @curline = @curline + 1
+			--是否換頁
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end	
+		end
+	end
+	select @wmoney1=0,@cmoney1=0,@dmoney1=0,@wmoney2=0,@cmoney2=0,@dmoney2=0
+		,@wmoney3=0,@cmoney3=0,@dmoney3=0,@tax3=0,@discount3=0,@total3=0
+	select @wmoney1=SUM(ISNULL(wmoney,0)),@cmoney1=SUM(ISNULL(cmoney,0)),@dmoney1=SUM(ISNULL(dmoney,0))
+	from @fixa where len(ISNULL(carplateno,''))=0
+	select @wmoney2=SUM(ISNULL(wmoney,0)),@cmoney2=SUM(ISNULL(cmoney,0)),@dmoney2=SUM(ISNULL(dmoney,0))
+	from @fixa where len(ISNULL(carplateno,''))>0
+	select @wmoney3=SUM(ISNULL(wmoney,0)),@cmoney3=SUM(ISNULL(cmoney,0)),@dmoney3=SUM(ISNULL(dmoney,0))
+		,@tax3=SUM(ISNULL(tax,0)),@discount3=SUM(ISNULL(discount,0)),@total3=SUM(ISNULL(total,0))
+	from @fixa
+	
+	insert into @tmp(gno,page,nn
+		,wmoney1,cmoney1,dmoney1,wmoney2,cmoney2,dmoney2
+		,wmoney3,cmoney3,dmoney3,tax3,discount3,total3)
+	select '5',@page,@curline%@rowline
+		,@wmoney1,@cmoney1,@dmoney1,@wmoney2,@cmoney2,@dmoney2
+		,@wmoney3,@cmoney3,@dmoney3,@tax3,@discount3,@total3
+	set @curline = @curline + 1
+	
+	select * 
+	, datea g31
+	, fixadate g32
+	, nick g33
+	, case when len(ISNULL(carplateno,''))>0 then carplateno else carno end g34
+	,driver g3b
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) g35
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) g36
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) g37
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) g38
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) g39
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,miles),1)),4,12)) g3a
+	
+	,product g41
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(price)),1)),4,12))+'.'+RIGHT(CAST(price as nvarchar),1) g42
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(mount)),1)),4,12))+'.'+RIGHT(CAST(mount as nvarchar),1) g43
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) g44
+	,memos g45
+	
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney1),1)),4,12)) g51
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney1),1)),4,12)) g52
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney2),1)),4,12)) g53
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney2),1)),4,12)) g54
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney3),1)),4,12)) g55
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney3),1)),4,12)) g56
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax3),1)),4,12)) g57
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount3),1)),4,12)) g58
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total3),1)),4,12)) g59
+	from @tmp order by page,nn;
+
+z_fixa7:--z_fixa7
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	----------------------------------------------------------------------------------------------------------
+	declare @tggno nvarchar(20)
+	declare @nick nvarchar(20)
+	declare @mon nvarchar(10)
+	declare @n int
+	declare @cn nvarchar(5)
+	declare @n_car int
+	declare @n_carplate int
+	declare @money float
+	---------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_fixa7')is not null
+	BEGIN
+		set @cmd = 'drop table #z_fixa7'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_fixa7( 
+		gno nvarchar(3), 
+		tggno nvarchar(20), 
+		nick nvarchar(20), 
+		mon01 nvarchar(20), 
+		money01 float, 
+		mon02 nvarchar(20), 
+		money02 float, 
+		mon03 nvarchar(20), 
+		money03 float, 
+		mon04 nvarchar(20), 
+		money04 float, 
+		mon05 nvarchar(20), 
+		money05 float, 
+		mon06 nvarchar(20), 
+		money06 float ,
+		mon07 nvarchar(20), 
+		money07 float, 
+		mon08 nvarchar(20), 
+		money08 float, 
+		mon09 nvarchar(20), 
+		money09 float, 
+		mon10 nvarchar(20), 
+		money10 float, 
+		mon11 nvarchar(20), 
+		money11 float, 
+		mon12 nvarchar(20), 
+		money12 float,
+		mont nvarchar(20),
+		tmoney float 
+	)
+
+	declare @tmp table(
+		tggno nvarchar(20),
+		mon nvarchar(10),
+		[money] float
+	)
+
+	insert  into  @tmp
+	select a.tggno,a.mon,SUM(ISNULL(a.[total],0))  
+	from fixa a
+	left join tgg b on a.tggno=b.noa
+	where (a.mon between @t_bmon and @t_emon)
+	and (a.tggno between @t_btggno and @t_etggno)
+	group  by a.tggno,a.mon
+	
+	declare cursor_table cursor for
+	select tggno,mon,sum(isnull(total,0))
+	from  fixin
+	where (mon between @t_bmon and @t_emon)
+	and (tggno between @t_btggno and @t_etggno)
+	group by  tggno,mon
+	open cursor_table
+	fetch next from cursor_table
+	into @tggno,@mon,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select *  from @tmp where tggno=@tggno and mon=@mon)
+		begin
+			insert  into  @tmp (tggno,mon,[money])values(@tggno,@mon,@money)
+		end
+		else
+			update @tmp set [money]=[money]+@money where tggno=@tggno and mon=@mon
+		
+		fetch next from cursor_table
+		into @tggno,@mon,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare @tmp_mon table(
+		mon nvarchar(10)
+	)
+	insert into @tmp_mon
+	select top(12) mon from @tmp group by mon
+
+	declare @moneys float
+
+	declare cursor_table cursor for
+	select a.tggno,b.nick,sum(money) from @tmp a
+	left join tgg b on a.tggno=b.noa
+	group by a.tggno,b.nick
+	open cursor_table
+	fetch next from cursor_table
+	into @tggno,@nick,@moneys
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from #z_fixa7 where tggno=@tggno)
+			insert into #z_fixa7(gno,tggno,nick)values('0',@tggno,@nick)
+		set @n = 0		
+		declare cursor_table2 cursor for
+		select mon from @tmp_mon 
+		open cursor_table2
+		fetch next from cursor_table2
+		into @mon
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @n = @n + 1
+			if(@n < 10) set @cn = '0' + cast(@n as nvarchar)
+			else set @cn = @n
+
+			select @money=SUM([money]) from @tmp where tggno=@tggno and mon=@mon
+			
+			set @cmd = 'update #z_fixa7 set'+
+				' mon'+cast(@cn as nvarchar)+'=@mon'+
+				' ,money'+cast(@cn as nvarchar)+'=@money'+
+				' where tggno=@tggno'		
+			execute sp_executesql @cmd,N'@tggno nvarchar(20),@mon nvarchar(10),@money float'
+			,@mon=@mon,@tggno=@tggno,@money=@money
+			
+			fetch next from cursor_table2
+			into @mon
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		update #z_fixa7 set mont='合計',tmoney = @moneys where tggno = @tggno
+		
+		fetch next from cursor_table
+		into @tggno,@nick,@moneys
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into #z_fixa7
+	select '1',null,null
+	,mon01,SUM(money01) 
+	,mon02,SUM(money02) 
+	,mon03,SUM(money03) 
+	,mon04,SUM(money04) 
+	,mon05,SUM(money05) 
+	,mon06,SUM(money06) 
+	,mon07,SUM(money07) 
+	,mon08,SUM(money08) 
+	,mon09,SUM(money09) 
+	,mon10,SUM(money10) 
+	,mon11,SUM(money11) 
+	,mon12,SUM(money12),'',SUM(tmoney)  
+	from #z_fixa7 where gno='0' group by mon01,mon02,mon03,mon04,mon05,mon06,mon07,mon08,mon09,mon10,mon11,mon12
+
+	select * 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money01),1)),4,12)) m01 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money02),1)),4,12)) m02 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money03),1)),4,12)) m03 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money04),1)),4,12)) m04 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money05),1)),4,12)) m05 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money06),1)),4,12)) m06 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money07),1)),4,12)) m07 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money08),1)),4,12)) m08 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money09),1)),4,12)) m09 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money10),1)),4,12)) m10
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money11),1)),4,12)) m11 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money12),1)),4,12)) m12 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmoney),1)),4,12)) tm 
+	from #z_fixa7 order by gno,tggno
+	drop table #z_fixa7;
+
+z_fixa6:--z_fixa6
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	----------------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(3),
+		tggno nvarchar(20),
+		comp nvarchar(20),
+		nick nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carno nvarchar(20),	
+		[money] float,
+		tax float,
+		discount float,
+		total float
+	)
+	
+	insert  into  @tmp
+	select '0',a.tggno,b.comp,b.nick,a.driverno,c.namea
+	,case when len(isnull(a.carplateno,''))=0 then a.carno else a.carplateno end 
+	,SUM(ISNULL(a.[money],0)),SUM(ISNULL(a.[tax],0)),SUM(ISNULL(a.[discount],0)),SUM(ISNULL(a.[total],0))  
+	from fixa a
+	left join tgg b on a.tggno=b.noa
+	left join driver c on a.driverno = c.noa
+	where (a.mon between @t_bmon and @t_emon)
+	and (a.tggno between @t_btggno and @t_etggno)
+	and (a.driverno between @t_bdriverno and @t_edriverno)
+	and ((len(@t_carno)=0 and len(@t_carplateno)=0)
+	or (len(@t_carno)>0 and len(a.carplateno)=0 and a.carno=@t_carno)
+	or (len(@t_carno)=0 and len(a.carplateno)>0 and a.carplateno=@t_carplateno))
+	group  by a.tggno,b.comp,b.nick,a.driverno,c.namea,(case when len(isnull(a.carplateno,''))=0 then a.carno else a.carplateno end )
+	
+	insert into  @tmp
+	select  '1','','','','','','',SUM(ISNULL([money],0)),SUM(ISNULL([tax],0)),SUM(ISNULL([discount],0)),SUM(ISNULL([total],0)) 
+	from @tmp 
+	where gno='0'  
+
+	if  @t_bmon=@t_emon
+		set @cmd= '月份：'+@t_bmon
+	else
+		set @cmd= '月份：'+@t_bmon+'～'+@t_emon
+	select @cmd titlea,*  
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[tax]),1)),4,12)) m2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[discount]),1)),4,12)) m3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[total]),1)),4,12)) m4
+	from  @tmp  order  by  gno,tggno,carno;
+
+z_fixa5:--z_fixa5
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bfixadate nvarchar(10)
+	declare @t_efixadate nvarchar(10)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	set @t_bdate = case when '#non'=[15] then '' else [15] end
+	set @t_edate = case when '#non'=[16] then char(255) else [16] end
+	set @t_bfixadate = case when '#non'=[19] then '' else [19] end
+	set @t_efixadate = case when '#non'=[20] then CHAR(255) else [20] end
+	----------------------------------------------------------------------------------------------------------
+	declare @tggno nvarchar(20)
+	declare @money float
+	declare @tax float
+	declare @discount float
+	declare @total float
+	declare @mon nvarchar(10)
+	declare @comp nvarchar(40)
+	declare @nick nvarchar(20)
+	----------------------------------------------------------------------------------------------------------
+	
+	declare @tmp table(
+		gno nvarchar(3),
+		tggno nvarchar(20),
+		comp nvarchar(20),
+		nick nvarchar(20),
+		mon nvarchar(10),
+		[money] float,
+		tax float,
+		discount float,
+		total float
+	)
+	
+	insert  into  @tmp
+	select '0',a.tggno,b.comp,b.nick,a.mon,SUM(ISNULL(a.[money],0)),SUM(ISNULL(a.[tax],0)),SUM(ISNULL(a.[discount],0)),SUM(ISNULL(a.[total],0))  
+	from fixa a
+	left join tgg b on a.tggno=b.noa
+	where (a.mon between @t_bmon and @t_emon)
+	and (a.fixadate between @t_bfixadate and @t_efixadate)
+	and (a.tggno between @t_btggno and @t_etggno)
+	group  by a.tggno,b.comp,b.nick,a.mon
+	
+	declare cursor_table cursor for
+	select tggno,mon,sum(isnull([money],0)),sum(isnull(tax,0)),sum(isnull(discount,0)),sum(isnull(total,0))
+	from  fixin
+	where (mon between @t_bmon and @t_emon)
+	and (indate between @t_bfixadate and @t_efixadate)
+	and (tggno between @t_btggno and @t_etggno)
+	group by  tggno,mon
+	open cursor_table
+	fetch next from cursor_table
+	into @tggno,@mon,@money,@tax,@discount,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select *  from @tmp where tggno=@tggno and mon=@mon)
+		begin
+			select @comp=comp,@nick=nick from tgg where noa=@tggno
+			insert  into  @tmp (gno,tggno,comp,nick,mon,[money],tax,discount,total)values('0',@tggno,@comp,@nick,@mon,@money,@tax,@discount,@total)
+		end
+		else
+			update @tmp set [money]=[money]+@money,tax=tax+@tax,discount=discount+@discount,total=total+@total where tggno=@tggno and mon=@mon
+		
+		fetch next from cursor_table
+		into @tggno,@mon,@money,@tax,@discount,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into  @tmp
+	select  '1','','','','',SUM(ISNULL([money],0)),SUM(ISNULL([tax],0)),SUM(ISNULL([discount],0)),SUM(ISNULL([total],0)) 
+	from @tmp 
+	where gno='0'  
+
+	if @t_bmon=@t_emon
+		set @cmd= '帳款月份：'+@t_bmon
+	else
+		set @cmd= '帳款月份：'+@t_bmon+'～'+@t_emon
+		
+	select @cmd titlea, *  
+	,@t_name xname
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[tax]),1)),4,12)) m2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[discount]),1)),4,12)) m3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[total]),1)),4,12)) m4
+	from  @tmp  order  by  gno,tggno,mon;
+	
+z_fixa3:--z_fixa3
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	----------------------------------------------------------------------------------------------------------
+	declare @carplateno nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @money float
+	declare @tax float
+	declare @discount float
+	declare @total float
+	
+	declare @tmp table(
+		gno nvarchar(3),
+		noa nvarchar(20),
+		fixadate  nvarchar(10),
+		tggno nvarchar(20),
+		comp nvarchar(20),
+		nick nvarchar(20),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carplateno nvarchar(20),
+		[money] float,
+		tax float,
+		discount float,
+		total float,
+		fixdate  nvarchar(10),
+		productno  nvarchar(20),
+		product  nvarchar(50),
+		mount  float,
+		price  float,
+		moneys  float
+	)
+	insert  into  @tmp
+	select '0',a.noa,b.fixadate, b.tggno,'','',b.carno,b.driverno,b.driver,b.carplateno
+	,b.[money],b.tax,b.discount,b.total,b.fixadate,a.productno,a.product,a.mount,a.price,a.[money]  from  fixas  a
+	left  join  fixa  b  on  a.noa=b.noa
+	where len(ISNULL(carno,''))>0 and  len(ISNULL(carplateno,''))>0 
+	and (b.mon between  @t_bmon  and  @t_emon)
+	and (len(@t_carplateno)=0 or b.carplateno=@t_carplateno)
+	and (b.driverno between @t_bdriverno and @t_edriverno)
+	order by b.carplateno,a.noa,a.noq
+	
+	declare cursor_table cursor for
+	select carplateno from @tmp where  gno='0' group by carplateno
+	open cursor_table
+	fetch next from cursor_table
+	into @carplateno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @money=0,@tax=0,@discount=0,@total=0 
+
+		declare cursor_table2 cursor for
+		select noa from @tmp where  gno='0' and carplateno=@carplateno group by noa
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select  top(1) @money=@money+[money]
+			,@tax=@tax+[tax]
+			,@discount=@discount+[discount]
+			,@total=@total+[total]
+			from @tmp where noa=@noa
+
+			insert  into  @tmp(gno,noa,carplateno)values('1',@noa,@carplateno)
+			
+			fetch next from cursor_table2
+			into @noa
+		end
+		close cursor_table2
+		deallocate cursor_table2
+
+		insert  into  @tmp(gno,noa,carplateno,[money],tax,discount,total)values('2',CHAR(255),@carplateno,@money,@tax,@discount,@total)
+
+		fetch next from cursor_table
+		into @carplateno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	-----------------------------------------------------------------------------------------------
+	if @t_bmon=@t_emon
+		set @cmd= '帳款月份：'+@t_bmon
+	else
+		set @cmd= '帳款月份：'+@t_bmon+'～'+@t_emon
+	select @cmd titlea,a.*
+	,fixadate  dd
+	,carno a1
+	,driver a2
+	,carplateno a3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) t1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) d1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) t2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) m2
+	from @tmp  a order by carplateno,noa,gno;
+	
+z_fixa2:--z_fixa2
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	declare @t_bproductno nvarchar(20)
+	declare @t_eproductno nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bfixadate nvarchar(10)
+	declare @t_efixadate nvarchar(10)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	set @t_bproductno = case when '#non'=[12] then '' else [12] end
+	set @t_eproductno = case when '#non'=[13] then char(255) else [13] end	
+	set @t_bdate = case when '#non'=[15] then '' else [15] end
+	set @t_edate = case when '#non'=[16] then char(255) else [16] end
+	set @t_bfixadate = case when '#non'=[19] then '' else [19] end
+	set @t_efixadate = case when '#non'=[20] then CHAR(255) else [20] end
+	----------------------------------------------------------------------------------------------------------
+	declare @n  int
+	begin try
+		set  @n  =  cast(@t_money  as  int)
+	end  try
+	begin catch
+		set  @n  =  0
+	end catch
+	
+	declare @driverno nvarchar(20)
+	declare @carno nvarchar(20)
+	declare @carplateno nvarchar(20)
+	declare @money float
+	declare @total float
+	declare @product nvarchar(50)
+	declare @caryear nvarchar(10)
+	----------------------------------------------------------------------------------------------------------
+	declare @tmp1 table(
+		driverno nvarchar(20),
+		carno  nvarchar(20),
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount  float,
+		total  float	
+	)
+	declare @tmps1 table(
+		driverno nvarchar(20),
+		carno  nvarchar(20),
+		product nvarchar(50),
+		wmoney float,
+		cmoney float,
+		[money] float
+	)
+	declare @tmp2 table(
+		driverno nvarchar(20),
+		carplateno  nvarchar(20),
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount  float,
+		total  float	
+	)
+	declare @tmps2 table(
+		driverno nvarchar(20),
+		carplateno  nvarchar(20),
+		product nvarchar(50),
+		wmoney float,
+		cmoney float,
+		[money] float
+	)
+	------------------------------------------------------------------------------------------------------------------
+	--FIXA
+	insert into @tmp1
+	select b.driverno,b.carno,SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL(b.[money],0)),SUM(ISNULL(b.[discount],0)),SUM(ISNULL(b.[money],0)-ISNULL(b.[discount],0))
+	from  fixa b
+	where len(@t_carplateno)=0 and len(isnull(b.carplateno,''))=0
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.fixadate,'') between @t_bfixadate and @t_efixadate)
+	and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carno)=0 or b.carno=@t_carno)
+	group by  b.driverno,b.carno
+	order by  b.driverno,b.carno
+	
+	insert into @tmps1
+	select b.driverno,b.carno,a.product
+	,case when a.wtype='A' then a.[money] else 0 end
+	,case when a.wtype='B' then a.[money] else 0 end
+	,a.[money]
+	from  fixas a  
+	left join  fixa b  on  a.noa=b.noa
+	where len(@t_carplateno)=0 and len(isnull(b.carplateno,''))=0
+	and a.[money]>=@n
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.fixadate,'') between @t_bfixadate and @t_efixadate)
+	and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carno)=0 or b.carno=@t_carno)
+	order by  b.driverno,b.carno,a.productno
+	
+	insert into @tmp2
+	select b.driverno,b.carplateno,SUM(ISNULL(b.wmoney,0)),SUM(ISNULL(b.cmoney,0)),SUM(ISNULL(b.[money],0)),SUM(ISNULL(b.[discount],0)),SUM(ISNULL(b.[money],0)-ISNULL(b.[discount],0))
+	from  fixa b
+	where len(@t_carno)=0 and len(isnull(b.carplateno,''))>0
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.fixadate,'') between @t_bfixadate and @t_efixadate)
+	and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carplateno)=0 or b.carplateno=@t_carplateno)
+	group  by  b.driverno,b.carplateno
+	order  by  b.driverno,b.carplateno
+	
+	insert into @tmps2
+	select b.driverno,b.carplateno,a.product
+	,case when a.wtype='A' then a.[money] else 0 end
+	,case when a.wtype='B' then a.[money] else 0 end
+	,a.[money]
+	from  fixas a  
+	left join  fixa b  on  a.noa=b.noa
+	where len(@t_carno)=0 and len(isnull(b.carplateno,''))>0
+	and a.[money]>=@n
+	and (isnull(b.fixadate,'') between @t_bfixadate and @t_efixadate)
+	and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carplateno)=0 or b.carplateno=@t_carplateno)
+	order by  b.driverno,b.carplateno,a.productno
+	------------------------------------------------------------------------------------------------------------------
+	--fixin
+	insert into @tmp1
+	select '庫存',indate+'進貨',0,ISNULL([money],0),ISNULL([money],0),ISNULL(discount,0),ISNULL([money],0)-ISNULL(discount,0)
+	from  fixin 
+	where (isnull(mon,'') between @t_bmon and @t_emon)
+	and (isnull(indate,'') between @t_bfixadate and @t_efixadate)
+
+	------------------------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno  nvarchar(3),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		typea nvarchar(1),
+		noa nvarchar(20),
+		caryear  nvarchar(10),
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount float,
+		total  float,
+		product nvarchar(50),
+		moneys float
+	)
+	insert into @tmp
+	select '0',a.driverno,'','A',a.carno,b.caryear,a.wmoney,a.cmoney,a.[money],a.discount,a.total,'',''
+	from @tmp1 a
+	left  join  car2  b  on  a.carno=b.carno
+	order by a.driverno,a.carno
+	
+	declare cursor_table cursor for
+	select a.driverno,a.carno,b.caryear  from @tmp1 a
+	left  join  car2  b  on  a.carno=b.carno
+	group  by  a.driverno,a.carno,b.caryear
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno,@caryear
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @n = 0
+		declare cursor_table2 cursor for
+		select product,[money]  from @tmps1 where  driverno=@driverno and carno=@carno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @product,@money
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if @n=0
+				update @tmp set product=@product,moneys=@money where  driverno=@driverno and typea='A' and noa=@carno 
+			else
+				insert into @tmp(gno,driverno,typea,noa,caryear,product,moneys)values('0',@driverno,'A',@carno,@caryear,@product,@money)
+			set @n=@n+1
+			fetch next from cursor_table2
+			into @product,@money
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		fetch next from cursor_table
+		into @driverno,@carno,@caryear
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmp
+	select '0',driverno,'','B',carplateno,'',wmoney,cmoney,[money],discount,total,'',''
+	from @tmp2
+	order by driverno,carplateno
+	
+	declare cursor_table cursor for
+	select driverno,carplateno  from @tmp2 group  by  driverno,carplateno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carplateno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @n = 0
+		declare cursor_table2 cursor for
+		select product,[money]  from @tmps2 where  driverno=@driverno and carplateno=@carplateno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @product,@money
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if @n=0
+				update @tmp set product=@product,moneys=@money where  driverno=@driverno and typea='B' and noa=@carplateno
+			else
+				insert into @tmp(gno,driverno,typea,noa,product,moneys)values('0',@driverno,'B',@carplateno,@product,@money)
+			set @n=@n+1
+			fetch next from cursor_table2
+			into @product,@money
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		fetch next from cursor_table
+		into @driverno,@carplateno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------------------------
+	insert into @tmp
+	select '1',driverno,'','','','',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null
+	from @tmp  where  gno='0'
+	group  by  driverno
+	
+	insert into @tmp
+	select '2',CHAR(255),'','','','',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null
+	from @tmp  where  gno='1'
+	insert into @tmp 
+	select '3',CHAR(255),'','','車輛','',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null 
+	from @tmp where gno='0' and typea='A'
+	insert into @tmp 
+	select '4',CHAR(255),'','','板台','',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null 
+	from @tmp where gno='0' and typea='B'
+	
+	declare cursor_table cursor for
+	select driverno  from @tmp group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @cmd=''
+		select @cmd=namea  from  driver  where  noa=@driverno
+		update @tmp set driver=@cmd where driverno=@driverno
+		
+		fetch next from cursor_table
+		into @driverno
+	end
+	close cursor_table
+	deallocate cursor_table
+	update @tmp set driver='庫存' where driverno='庫存'
+	---------------------------------------------------------------------------------------------------------
+	update @tmp set  moneys=null  where  moneys=0
+	if @t_bmon=@t_emon
+		set @cmd= '帳款月份：'+@t_bmon
+	else
+		set @cmd= '帳款月份：'+@t_bmon+'～'+@t_emon
+		
+	select @cmd titlea, *
+	,noa x
+	,caryear cy
+	,driverno dd
+	,driver d1 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) cwm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) ccm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) cm1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) cm2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) cm3 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) cm4 
+	from  @tmp 
+	order by driverno,gno,typea,noa,total desc;
+	
+z_fixa1:--z_fixa1
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	----------------------------------------------------------------------------------------------------------
+	declare @n  int
+	begin try
+		set  @n  =  cast(@t_money  as  int)
+	end  try
+	begin catch
+		set  @n  =  0
+	end catch
+	
+	declare @driverno nvarchar(20)
+	declare @carno nvarchar(20)
+	declare @carplateno nvarchar(20)
+	declare @money float
+	declare @total float
+	declare @product nvarchar(50)
+	----------------------------------------------------------------------------------------------------------
+	declare @tmp1 table(
+		driverno nvarchar(20),
+		carno  nvarchar(20),
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount  float,
+		total  float	
+	)
+	declare @tmps1 table(
+		driverno nvarchar(20),
+		carno  nvarchar(20),
+		product nvarchar(50),
+		wmoney float,
+		cmoney float,
+		[money] float
+	)
+	declare @tmp2 table(
+		driverno nvarchar(20),
+		carplateno  nvarchar(20),
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount  float,
+		total  float	
+	)
+	declare @tmps2 table(
+		driverno nvarchar(20),
+		carplateno  nvarchar(20),
+		product nvarchar(50),
+		wmoney float,
+		cmoney float,
+		[money] float
+	)
+	------------------------------------------------------------------------------------------------------------------
+	--FIXA
+	insert into @tmp1
+	select b.driverno,b.carno,SUM(ISNULL(b.wmoney,0)),SUM(ISNULL(b.cmoney,0)),SUM(ISNULL(b.[money],0)),SUM(ISNULL(b.[discount],0)),SUM(ISNULL(b.[money],0)-ISNULL(b.[discount],0))
+	from  fixa b
+	where len(@t_carplateno)=0 and len(isnull(b.carplateno,''))=0
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carno)=0 or b.carno=@t_carno)
+	group by  b.driverno,b.carno
+	order by  b.driverno,b.carno
+	
+	insert into @tmps1
+	select b.driverno,b.carno,a.product
+	,case when a.wtype='A' then a.[money] else 0 end
+	,case when a.wtype='B' then a.[money] else 0 end
+	,a.[money]
+	from  fixas a  
+	left join  fixa b  on  a.noa=b.noa
+	where len(@t_carplateno)=0 and len(isnull(b.carplateno,''))=0
+	and a.[money]>=@n
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carno)=0 or b.carno=@t_carno)
+	order by  b.driverno,b.carno,a.productno
+	
+	insert into @tmp2
+	select b.driverno,b.carplateno,SUM(ISNULL(b.wmoney,0)),SUM(ISNULL(b.cmoney,0)),SUM(ISNULL(b.[money],0)),SUM(ISNULL(b.[discount],0)),SUM(ISNULL(b.[money],0)-ISNULL(b.[discount],0))
+	from  fixa b
+	where (len(@t_carno)=0 and len(isnull(b.carplateno,''))>0)
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carplateno)=0 or b.carplateno=@t_carplateno)
+	group  by  b.driverno,b.carplateno
+	order  by  b.driverno,b.carplateno
+
+	insert into @tmps2
+	select b.driverno,b.carplateno,a.product
+	,case when a.wtype='A' then a.[money] else 0 end
+	,case when a.wtype='B' then a.[money] else 0 end
+	,a.[money]
+	from  fixas a  
+	left join  fixa b  on  a.noa=b.noa
+	where (len(@t_carno)=0 and len(isnull(b.carplateno,''))>0)
+	and a.[money]>=@n
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carplateno)=0 or b.carplateno=@t_carplateno)
+	order by  b.driverno,b.carplateno,a.productno
+	------------------------------------------------------------------------------------------------------------------
+	--FIXOUT
+	declare cursor_table cursor for
+	select a.driverno,a.carno,SUM(ISNULL(a.[money],0)),SUM(ISNULL(a.[money],0))
+	from  fixout a  
+	where len(@t_carplateno)=0 and len(isnull(a.carplateno,''))=0
+	and (isnull(a.mon,'') between @t_bmon and @t_emon)
+	and (isnull(a.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carno)=0 or a.carno=@t_carno)
+	group by  a.driverno,a.carno
+	order by  a.driverno,a.carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno,@money,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select *  from @tmp1 where driverno=@driverno and  carno=@carno)
+			insert  into  @tmp1 (driverno,carno,wmoney,cmoney,[money],total)values(@driverno,@carno,0,@money,@money,@total)
+		else
+			update @tmp1  set  cmoney=isnull(cmoney,0)+@money,[money]=isnull([money],0)+@money,total=ISNULL(total,0)+@total  where driverno=@driverno and  carno=@carno
+		
+		fetch next from cursor_table
+		into @driverno,@carno,@money,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmps1
+	select b.driverno,b.carno,(rtrim(a.product)+' '+rtrim(a.tireno)),0,a.[money],a.[money]
+	from  fixouts a  
+	left join  fixout b  on  a.noa=b.noa
+	where len(@t_carplateno)=0 and len(isnull(b.carplateno,''))=0
+	and a.[money]>=@n
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carno)=0 or b.carno=@t_carno)
+	order by  b.driverno,b.carno,a.productno
+	
+	declare cursor_table cursor for
+	select a.driverno,a.carplateno,SUM(ISNULL(a.[money],0)),SUM(ISNULL(a.[money],0))
+	from  fixout a
+	where (len(@t_carno)=0 and len(isnull(a.carplateno,''))>0)
+	and (isnull(a.mon,'') between @t_bmon and @t_emon)
+	and (isnull(a.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carplateno)=0 or a.carplateno=@t_carplateno)
+	group by  a.driverno,a.carplateno
+	order by  a.driverno,a.carplateno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carplateno,@money,@total
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select *  from @tmp2 where driverno=@driverno and carplateno=@carplateno)
+			insert  into  @tmp2 (driverno,carplateno,wmoney,cmoney,[money],total)values(@driverno,@carplateno,0,@money,@money,@total)
+		else
+			update @tmp2  set cmoney=isnull(cmoney,0)+@money,[money]=isnull([money],0)+@money,total=ISNULL(total,0)+@total  where driverno=@driverno and carplateno=@carplateno
+		
+		fetch next from cursor_table
+		into @driverno,@carplateno,@money,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmps2
+	select b.driverno,b.carplateno,(rtrim(a.product)+' '+rtrim(a.tireno)),0,a.[money],a.[money]
+	from  fixouts a  
+	left join  fixout b  on  a.noa=b.noa
+	where (len(@t_carno)=0 and len(isnull(b.carplateno,''))>0)
+	and a.[money]>=@n
+	and (isnull(b.mon,'') between @t_bmon and @t_emon)
+	and (isnull(b.driverno,'') between @t_bdriverno and @t_edriverno)
+	and (len(@t_carplateno)=0 or b.carplateno=@t_carplateno)
+	order by  b.driverno,b.carplateno
+	------------------------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno  nvarchar(3),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		typea nvarchar(1),
+		noa nvarchar(20),
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount float,
+		total  float,
+		product nvarchar(50),
+		moneys float
+	)
+	insert into @tmp
+	select '0',driverno,'','A',carno,wmoney,cmoney,[money],discount,total,'',''
+	from @tmp1
+	order by driverno,carno
+	
+	declare cursor_table cursor for
+	select driverno,carno  from @tmp1 group  by  driverno,carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @n = 0
+		declare cursor_table2 cursor for
+		select product,[money]  from @tmps1 where  driverno=@driverno and carno=@carno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @product,@money
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if @n=0
+				update @tmp set product=@product,moneys=@money where  driverno=@driverno and typea='A' and noa=@carno 
+			else
+				insert into @tmp(gno,driverno,typea,noa,product,moneys)values('0',@driverno,'A',@carno,@product,@money)
+			set @n=@n+1
+			fetch next from cursor_table2
+			into @product,@money
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		fetch next from cursor_table
+		into @driverno,@carno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmp
+	select '0',driverno,'','B',carplateno,wmoney,cmoney,[money],discount,total,'',''
+	from @tmp2
+	order by driverno,carplateno
+	
+	declare cursor_table cursor for
+	select driverno,carplateno  from @tmp2 group  by  driverno,carplateno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carplateno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @n = 0
+		declare cursor_table2 cursor for
+		select product,[money]  from @tmps2 where  driverno=@driverno and carplateno=@carplateno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @product,@money
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if @n=0
+				update @tmp set product=@product,moneys=@money where  driverno=@driverno and typea='B' and noa=@carplateno
+			else
+				insert into @tmp(gno,driverno,typea,noa,product,moneys)values('0',@driverno,'B',@carplateno,@product,@money)
+			set @n=@n+1
+			fetch next from cursor_table2
+			into @product,@money
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		fetch next from cursor_table
+		into @driverno,@carplateno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------------------------
+	insert into @tmp
+	select '1',driverno,'','','',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null
+	from @tmp  where  gno='0'
+	group  by  driverno
+	
+	insert into @tmp
+	select '2',CHAR(255),'','','',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null
+	from @tmp  where  gno='0'
+	insert into @tmp
+	select '3',CHAR(255),'','','車輛',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null
+	from @tmp  where  gno='0' and typea='A'
+	insert into @tmp
+	select '4',CHAR(255),'','','板台',SUM(ISNULL(wmoney,0)),SUM(ISNULL(cmoney,0)),SUM(ISNULL([money],0)),SUM(ISNULL(discount,0)),SUM(ISNULL(total,0)),'',null
+	from @tmp  where  gno='0' and typea='B'
+	declare cursor_table cursor for
+	select driverno  from @tmp group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @cmd=''
+		select @cmd=namea  from  driver  where  noa=@driverno
+		update @tmp set driver=@cmd where driverno=@driverno
+		
+		fetch next from cursor_table
+		into @driverno
+	end
+	close cursor_table
+	deallocate cursor_table
+	---------------------------------------------------------------------------------------------------------
+	update @tmp set  moneys=null  where  moneys=0
+	if @t_bmon=@t_emon
+		set @cmd= '帳款月份：'+@t_bmon
+	else
+		set @cmd= '帳款月份：'+@t_bmon+'～'+@t_emon
+	
+		
+	select @cmd titlea, *
+	,driverno dd
+	,driver d1 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) cwm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) ccm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) cm1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) cm2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) cm3 
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) cm4 
+	from  @tmp 
+	order by driverno,gno,typea,noa,total desc;
+	
+
+z_fixa4:--z_fixa4
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_name nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_carno nvarchar(20)
+	declare @t_carplateno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_money nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	declare @t_bproductno nvarchar(20)
+	declare @t_eproductno nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bfixadate nvarchar(10)
+	declare @t_efixadate nvarchar(10)
+	
+	set @t_accy = [1]
+	set @t_name = '[2]'
+	set @t_bmon = case when '#non'=[3] then '' else [3] end
+	set @t_emon = case when '#non'=[4] then char(255) else [4] end
+	set @t_carno = case when '#non'=[5] then '' else [5] end
+	set @t_carplateno = case when '#non'=[6] then '' else [6] end
+	set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+	set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+	set @t_money = case when '#non'=[9] then '' else [9] end 
+	set @t_btggno = case when '#non'=[10] then '' else [10] end
+	set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+	set @t_bproductno = case when '#non'=[12] then '' else [12] end
+	set @t_eproductno = case when '#non'=[13] then char(255) else [13] end	
+	set @t_bdate = case when '#non'=[15] then '' else [15] end
+	set @t_edate = case when '#non'=[16] then char(255) else [16] end
+	set @t_bfixadate = case when '#non'=[19] then '' else [19] end
+	set @t_efixadate = case when '#non'=[20] then CHAR(255) else [20] end
+	----------------------------------------------------------------------------------------------------------
+	declare @tggno nvarchar(20)
+	declare @comp nvarchar(40)
+	declare @nick nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @wmoney float
+	declare @cmoney float
+	declare @money float
+	declare @discount float
+	declare @total float
+	declare @fixadate nvarchar(10)
+	
+	declare @tmp table(
+		gno nvarchar(3),
+		noa nvarchar(20),
+		fixadate  nvarchar(10),
+		tggno nvarchar(20),
+		comp nvarchar(20),
+		nick nvarchar(20),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carplateno nvarchar(20),
+		productno  nvarchar(20),
+		product  nvarchar(50),
+		mount  float,
+		price  float,
+		wmoney float,
+		cmoney float,
+		[money] float,
+		discount float,
+		total float
+	)
+	insert  into  @tmp
+	select '0',a.noa,b.fixadate, b.tggno,'','',b.carno,b.driverno,b.driver,b.carplateno
+	,a.productno,a.product,a.mount,a.price
+	,case when wtype='A' then a.[money] else 0 end
+	,case when wtype='B' then a.[money] else 0 end
+	,0,0,0
+	from  fixas  a
+	left  join  fixa  b  on  a.noa=b.noa
+	where  (b.mon between  @t_bmon  and  @t_emon)
+	and (b.fixadate between @t_bfixadate and @t_efixadate)
+	and ( (len(@t_carno)>0 and len(@t_carplateno)=0 and @t_carno=b.carno and len(isnull(b.carplateno,''))=0)
+		or (len(@t_carno)=0 and len(@t_carplateno)>0 and @t_carplateno=b.carplateno)
+		or (len(@t_carno)>0 and len(@t_carplateno)>0 and @t_carno=b.carno and @t_carplateno=b.carplateno)
+		or (len(@t_carno)=0 and len(@t_carplateno)=0))
+	and (b.tggno  between  @t_btggno  and  @t_etggno)
+	and (b.driverno  between  @t_bdriverno  and  @t_edriverno)
+	and (isnull(a.productno,'')  between  @t_bproductno  and  @t_eproductno)
+	order by b.tggno,a.noa,a.noq
+ 
+	declare cursor_table cursor for
+	select tggno from @tmp where  gno='0' group by tggno
+	open cursor_table
+	fetch next from cursor_table
+	into @tggno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		declare cursor_table2 cursor for
+		select noa from @tmp where  gno='0' and tggno=@tggno group by tggno,noa
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @discount=0
+			select @discount=discount from fixa where noa=@noa
+			select @money=sum(wmoney+cmoney) from @tmp where noa=@noa 
+			update top(1) @tmp set [money]=@money,discount=@discount,total=@money-@discount where tggno=@tggno and noa=@noa 
+			insert  into  @tmp(gno,noa,tggno)values('1',@noa,@tggno)
+			
+			fetch next from cursor_table2
+			into @noa
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		select @wmoney=SUM(wmoney),@cmoney=SUM(cmoney),@money=SUM([money]),@discount=SUM(discount),@total=SUM(total) 
+		from @tmp where gno='0' and tggno=@tggno
+		insert  into  @tmp(gno,noa,fixadate,tggno,wmoney,cmoney,[money],discount,total)values('2',CHAR(255),CHAR(255),@tggno,@wmoney,@cmoney,@money,@discount,@total)
+		
+		select @comp='',@nick=''
+		select @comp=comp,@nick=nick from tgg where noa=@tggno
+		update @tmp set comp=@comp,nick=@nick where tggno=@tggno
+		fetch next from cursor_table
+		into @tggno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	-----------------------------------------------------------------------------------------------
+	if @t_bmon=@t_emon
+		set @cmd= '帳款月份：'+@t_bmon
+	else
+		set @cmd= '帳款月份：'+@t_bmon+'～'+@t_emon
+	select @cmd titlea,a.*
+	,fixadate  dd
+	,carno a1
+	,driver a2
+	,carplateno a3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) m2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) m3
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) t1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) t2
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) t3
+	from @tmp a order by a.tggno,a.noa,a.gno;
+	
+z_fixa8:--z_fixa8
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @t_carno nvarchar(20)
+declare @t_carplateno nvarchar(20)
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+declare @t_money nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @carno nvarchar(20) 
+declare @driver nvarchar(40) 
+declare @fixdate nvarchar(10) 
+declare @i int 
+declare @countrecord int 
+set @t_bmon = case when '#non'=[3] then '' else [3] end
+set @t_emon = case when '#non'=[4] then char(255) else [4] end
+set @t_carno = case when '#non'=[5] then '' else [5] end
+set @t_carplateno = case when '#non'=[6] then '' else [6] end
+set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+set @t_money = case when '#non'=[9] then '' else [9] end 
+set @t_btggno = case when '#non'=[10] then '' else [10] end
+set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+set @carno = '' 
+set @driver = '' 
+set @fixdate = '' 
+set @i = 0 
+set @countrecord = 0 
+declare @tmp table( 
+	gno nvarchar(1), 
+	idno int identity(0,1), 
+	dbcarno nvarchar(20), 
+	carno nvarchar(20), 
+	driver nvarchar(40), 
+	fixadate nvarchar(10), 
+	wmoney nvarchar(15), 
+	cmoney nvarchar(15), 
+	money nvarchar(15), 
+	tax float, 
+	discount nvarchar(15), 
+	total nvarchar(15) 
+) 
+insert into @tmp 
+	select '0',carno as dbcarno,carno,driver,fixadate,wmoney,cmoney,money,tax,discount,total from fixa 
+	where len(@t_carplateno)=0 and len(isnull(carplateno,''))=0 
+	and (isnull(mon,'') between @t_bmon and @t_emon) 
+	and (isnull(driverno,'') between @t_bdriverno and @t_edriverno) 
+	and (len(@t_carno)=0 or carno=@t_carno) 
+	order by carno,driver,fixadate 
+
+insert into @tmp(gno,dbcarno,carno,driver,wmoney,cmoney,money,tax,discount,total)
+	select '1',dbcarno,carno,driver,
+	sum(cast(wmoney as int)),
+	sum(cast(cmoney as int)),
+	sum(cast(money as int)),
+	sum(cast(tax as int)),
+	sum(cast(discount as int)),
+	sum(cast(total as int))
+	from @tmp
+	group by carno,driver,dbcarno
+select @countrecord = COUNT(*) from @tmp where gno = 0
+while(@i < @countrecord) 
+begin 
+	---處理 carno 
+	if(@carno = '') 
+	begin select @carno = carno from @tmp where (idno = @i) and (gno = 0) end 
+	else if(@carno = (select carno from @tmp where (idno = @i) and (gno = 0))) 
+	begin update @tmp set carno = '' where (idno = @i) and (gno = 0) end 
+	else 
+	begin select @carno = carno from @tmp where (idno = @i) and (gno = 0) end 
+	---處理 driver 
+	if(@driver = '') 
+	begin select @driver = driver from @tmp where (idno = @i) and (gno = 0) end 
+	else if(@driver = (select driver from @tmp where (idno = @i) and (gno = 0))) 
+	begin update @tmp set driver = '' where (idno = @i) and (gno = 0) end 
+	else 
+	begin select @driver = driver from @tmp where (idno = @i) and (gno = 0) end 
+	---處理 fixdate 
+	if(@fixdate = '') 
+	begin select @fixdate = fixadate from @tmp where (idno = @i) and (gno = 0) end 
+	else if(@fixdate = (select fixadate from @tmp where (idno = @i) and (gno = 0))) 
+	begin update @tmp set fixadate = '' where (idno = @i) and (gno = 0) end 
+	else 
+	begin select @fixdate = fixadate from @tmp where (idno = @i) and (gno = 0) end 
+	set @i +=1 
+end 
+select
+	gno,idno,dbcarno,carno,driver,fixadate,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) wmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) cmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) discount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+from @tmp order by dbcarno,gno;
+
+z_fixa9:--z_fixa9
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @t_carno nvarchar(20)
+declare @t_carplateno nvarchar(20)
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+declare @t_money nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @carno nvarchar(20) 
+declare @driver nvarchar(40) 
+declare @fixdate nvarchar(10) 
+set @t_bmon = case when '#non'=[3] then '' else [3] end
+set @t_emon = case when '#non'=[4] then char(255) else [4] end
+set @t_carno = case when '#non'=[5] then '' else [5] end
+set @t_carplateno = case when '#non'=[6] then '' else [6] end
+set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+set @t_money = case when '#non'=[9] then '' else [9] end 
+set @t_btggno = case when '#non'=[10] then '' else [10] end
+set @t_etggno = case when '#non'=[11] then char(255) else [11] end		
+set @carno = '' 
+set @driver = '' 
+set @fixdate = '' 
+declare @tmp table( 
+	gno nvarchar(1), 
+	idno int identity(0,1), 
+	carno nvarchar(20), 
+	driver nvarchar(40), 
+	wmoney nvarchar(15), 
+	cmoney nvarchar(15), 
+	money nvarchar(15), 
+	tax float, 
+	discount nvarchar(15), 
+	total nvarchar(15) 
+) 
+insert into @tmp 
+	select '0',carno,driver,
+	sum(cast(wmoney as int)),
+	sum(cast(cmoney as int)),
+	sum(cast(money as int)),
+	sum(cast(tax as int)),
+	sum(cast(discount as int)),
+	sum(cast(total as int))
+	from fixa 
+	where len(@t_carplateno)=0 and len(isnull(carplateno,''))=0 
+	and (isnull(mon,'') between @t_bmon and @t_emon) 
+	and (isnull(driverno,'') between @t_bdriverno and @t_edriverno) 
+	and (len(@t_carno)=0 or carno=@t_carno) 
+	group by carno,driver
+	order by carno,driver
+insert into @tmp(gno,wmoney,cmoney,money,tax,discount,total)
+	select '1',
+		sum(cast(wmoney as int)),
+		sum(cast(cmoney as int)),
+		sum(cast(money as int)),
+		sum(cast(tax as int)),
+		sum(cast(discount as int)),
+		sum(cast(total as int))
+	from @tmp 
+select
+	gno,idno,carno,driver,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmoney),1)),4,12)) wmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) cmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,discount),1)),4,12)) discount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+from @tmp order by idno;
+
+z_fixa10:--z_fixa10
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @t_carno nvarchar(20)
+declare @t_carplateno nvarchar(20)
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+declare @t_money nvarchar(20)
+--declare @carno nvarchar(20) 
+--declare @driver nvarchar(40) 
+--declare @fixdate nvarchar(10) 
+--declare @i int 
+--declare @countrecord int 
+declare @t_xorder nvarchar(100)
+declare @t_bxproductno nvarchar(50)
+declare @t_exproductno nvarchar(50)
+
+set @t_bmon = case when '#non'=[3] then '' else [3] end
+set @t_emon = case when '#non'=[4] then char(255) else [4] end
+set @t_carno = case when '#non'=[5] then '' else [5] end
+set @t_carplateno = case when '#non'=[6] then '' else [6] end
+set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+set @t_money = case when '#non'=[9] then '' else [9] end 
+set @t_xorder = case when '#non'=[14] then '車號' else [14] end
+set @t_bxproductno = case when '#non' = [12] then '' else [12] end
+set @t_exproductno = case when '#non' = [13] then CHAR(255) else [13] end
+declare @tmp table( 
+		gno nvarchar(1), 
+		idno int identity(0,1), 
+		dbcarno nvarchar(20), 
+		carno nvarchar(20), 
+		driver nvarchar(40), 
+		fixadate nvarchar(10), 
+		productno nvarchar(20), 
+		product nvarchar(50), 
+		unit nvarchar(20), 
+		price nvarchar(15), 
+		mount nvarchar(15), 
+		money nvarchar(15), 
+		memo nvarchar(200), 
+		memo2 nvarchar(max),
+		tggno nvarchar(20),
+		tgg nvarchar(50)  
+	) 
+	declare @tmpa table( 
+		gno nvarchar(1), 
+		idno int identity(0,1), 
+		dbcarno nvarchar(20), 
+		carno nvarchar(20), 
+		driver nvarchar(40), 
+		fixadate nvarchar(10), 
+		productno nvarchar(20), 
+		product nvarchar(50), 
+		unit nvarchar(20), 
+		price nvarchar(15), 
+		mount nvarchar(15), 
+		money nvarchar(15), 
+		memo nvarchar(200), 
+		memo2 nvarchar(max),
+		tggno nvarchar(20),
+		tgg nvarchar(50)  
+	) 
+	declare @result table( 
+		gno nvarchar(1), 
+		idno int identity(0,1), 
+		dbcarno nvarchar(20), 
+		carno nvarchar(20), 
+		driver nvarchar(40), 
+		fixadate nvarchar(10), 
+		productno nvarchar(20), 
+		product nvarchar(50), 
+		unit nvarchar(20), 
+		price nvarchar(15), 
+		mount nvarchar(15), 
+		money nvarchar(15), 
+		memo nvarchar(max), 
+		memo2 nvarchar(max),
+		tggno nvarchar(20),
+		tgg nvarchar(50) 
+	) 
+	insert into @tmp 
+		select '0',case when len(carplateno) > 0 then carplateno else carno end as dbcarno,case when len(carplateno) > 0 then carplateno else carno end,driver,fixadate, 
+		b.productno,b.product,b.unit,b.price,b.mount,b.money,b.memo,b.memo2 
+		,LEFT(b.productno,CHARINDEX('-',b.productno)-1)
+		,c.nick
+		from fixa a 
+		left join fixas b on a.noa = b.noa 
+		left join tgg c on LEFT(b.productno,CHARINDEX('-',b.productno)-1) = c.noa
+		where (len(@t_carplateno)=0 or  @t_carplateno = carplateno)
+		and (isnull(a.mon,'') between @t_bmon and @t_emon) 
+		and (isnull(a.driverno,'') between @t_bdriverno and @t_edriverno) 
+		and (len(@t_carno)=0 or carno=@t_carno) 
+		and (ISNULL(b.productno,'') between @t_bxproductno and @t_exproductno)
+	
+	if(@t_xorder = '維修日期')
+	begin
+		insert into @tmpa
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmp order by fixadate ---***
+			insert into @tmpa(gno,fixadate,price,mount,money) 
+			select '1',fixadate,SUM(CAST(price as float)),SUM(CAST(mount as float)),SUM(CAST(money as float)) 
+			from @tmp group by fixadate
+		insert into @result
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmpa order by fixadate,gno
+	end
+	else if(@t_xorder = '車號')
+	begin
+		insert into @tmpa
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmp order by carno ---***
+			insert into @tmpa(gno,carno,price,mount,money) 
+			select '1',carno,SUM(CAST(price as float)),SUM(CAST(mount as float)),SUM(CAST(money as float)) 
+			from @tmp group by carno
+		insert into @result
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmpa order by carno,gno
+	end
+	else if(@t_xorder = '司機')
+	begin
+		insert into @tmpa
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmp order by driver ---***
+			insert into @tmpa(gno,driver,price,mount,money) 
+			select '1',driver,SUM(CAST(price as float)),SUM(CAST(mount as float)),SUM(CAST(money as float)) 
+			from @tmp group by driver
+		insert into @result
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmpa order by driver,gno
+	end
+	else if(@t_xorder = '料名編號')
+	begin
+		insert into @tmpa
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmp order by productno ---***
+			insert into @tmpa(gno,productno,price,mount,money) 
+			select '1',productno,SUM(CAST(price as float)),SUM(CAST(mount as float)),SUM(CAST(money as float)) 
+			from @tmp group by productno
+		insert into @result
+			select gno,dbcarno,carno,driver,fixadate,
+					productno,product,unit,price,mount,money,memo,memo2,tggno,tgg
+			from @tmpa order by productno,gno
+	end
+	select
+			gno,idno,dbcarno,carno,driver,fixadate,productno,product,unit, 
+			reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price),1)),4,12)) price, 
+			reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),2)),4,12)) mount, 
+			reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money, 
+			memo,memo2,tgg 
+	from @result order by idno;
+
+z_fixa11:--z_fixa11
+
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @t_carno nvarchar(20)
+declare @t_carplateno nvarchar(20)
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+declare @t_money nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+--declare @carno nvarchar(20) 
+--declare @driver nvarchar(40) 
+--declare @i int 
+--declare @countrecord int 
+declare @t_bxproductno nvarchar(50)
+declare @t_exproductno nvarchar(50)
+set @t_bmon = case when '#non'=[3] then '' else [3] end
+set @t_emon = case when '#non'=[4] then char(255) else [4] end
+set @t_carno = case when '#non'=[5] then '' else [5] end
+set @t_carplateno = case when '#non'=[6] then '' else [6] end
+set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+set @t_money = case when '#non'=[9] then '' else [9] end 
+set @t_btggno = case when '#non'=[10] then '' else [10] end
+set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+set @t_bxproductno = case when '#non' = [12] then '' else [12] end
+set @t_exproductno = case when '#non' = [13] then CHAR(255) else [13] end
+--set @carno = '' 
+--set @driver = '' 
+--set @i = 0 
+--set @countrecord = 0 	
+declare @tmp table( 
+	gno nvarchar(1), 
+	idno int identity(0,1), 
+	dbcarno nvarchar(20),
+	carno nvarchar(20), 
+	driver nvarchar(40), 
+	productno nvarchar(20), 
+	product nvarchar(50),
+	mount float,
+	money float
+) 
+insert into @tmp 
+	select '0',case when len(a.carplateno) > 0 then a.carplateno else carno end as dbcarno,case when len(a.carplateno) > 0 then a.carplateno else carno end,driver,
+	b.productno,c.namea,SUM(CAST(b.mount as float)),SUM(CAST(b.money as int))
+	from fixa a
+	left join fixas b on a.noa = b.noa
+	left join fixucc c on b.productno = c.noa
+	where (len(@t_carplateno)=0 or @t_carplateno = carplateno)
+	and (isnull(mon,'') between @t_bmon and @t_emon) 
+	and (isnull(driverno,'') between @t_bdriverno and @t_edriverno) 
+	and (len(@t_carno)=0 or carno=@t_carno) 
+	and (ISNULL(b.productno,'') between @t_bxproductno and @t_exproductno)
+	group by case when len(a.carplateno) > 0 then a.carplateno else carno end,case when len(a.carplateno) > 0 then a.carplateno else carno end,driver,b.productno,c.namea
+	order by case when len(a.carplateno) > 0 then a.carplateno else carno end,driver
+insert into @tmp(gno,dbcarno,mount,money)
+	select '1',dbcarno,SUM(mount),SUM(money)
+	from @tmp group by dbcarno
+	insert into @tmp(gno,dbcarno,mount,money) 
+select '2',CHAR(255),SUM(mount),SUM(money) 
+from @tmp where gno = 0
+--select @countrecord = COUNT(*) from @tmp where gno = 0
+--while(@i < @countrecord) 
+--begin 
+--	---處理 carno 
+--	if(@carno = '') 
+--	begin select @carno = carno from @tmp where (idno = @i) and (gno = 0) end 
+--	else if(@carno = (select carno from @tmp where (idno = @i) and (gno = 0))) 
+--	begin update @tmp set carno = '' where (idno = @i) and (gno = 0) end 
+--	else 
+--	begin select @carno = carno from @tmp where (idno = @i) and (gno = 0) end 
+--	---處理 driver 
+--	if(@driver = '') 
+--	begin select @driver = driver from @tmp where (idno = @i) and (gno = 0) end 
+--	else if(@driver = (select driver from @tmp where (idno = @i) and (gno = 0))) 
+--	begin update @tmp set driver = '' where (idno = @i) and (gno = 0) end 
+--	else 
+--	begin select @driver = driver from @tmp where (idno = @i) and (gno = 0) end 
+--	set @i +=1 
+--end 
+select
+	gno,idno,dbcarno,carno,driver,productno,product,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),2)),4,12)) mount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money
+from @tmp order by dbcarno,gno,productno;
+
+z_fixa12:--z_fixa12
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+declare @t_carno nvarchar(20)
+declare @t_carplateno nvarchar(20)
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+declare @t_money nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+set @t_bmon = case when '#non'=[3] then '' else [3] end
+set @t_emon = case when '#non'=[4] then char(255) else [4] end
+set @t_carno = case when '#non'=[5] then '' else [5] end
+set @t_carplateno = case when '#non'=[6] then '' else [6] end
+set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+set @t_edriverno = case when '#non'=[8] then char(255) else [8] end
+set @t_money = case when '#non'=[9] then '' else [9] end 
+set @t_btggno = case when '#non'=[10] then '' else [10] end
+set @t_etggno = case when '#non'=[11] then char(255) else [11] end	
+declare @tmp table( 
+	gno nvarchar(1), 
+	idno int identity(0,1), 
+	productno nvarchar(20), 
+	product nvarchar(50),
+	mount nvarchar(15),
+	money nvarchar(15)
+) 
+insert into @tmp 
+	select '0',b.productno,c.namea,
+	SUM(CAST(b.mount as int)),SUM(CAST(b.money as int))
+	from fixa a
+	left join fixas b on a.noa = b.noa
+	left join fixucc c on b.productno = c.noa
+	where len(@t_carplateno)=0 and len(isnull(carplateno,''))=0 
+	and (isnull(mon,'') between @t_bmon and @t_emon) 
+	and (isnull(driverno,'') between @t_bdriverno and @t_edriverno) 
+	and (len(@t_carno)=0 or carno=@t_carno) 
+	group by b.productno,c.namea
+	order by productno
+insert into @tmp(gno,mount,money)
+	select '1',SUM(CAST(mount as int)),SUM(CAST(money as int))
+	from @tmp
+select
+	gno,idno,productno,product,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money
+from @tmp order by gno,productno;

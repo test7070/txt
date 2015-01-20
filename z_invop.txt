@@ -1,0 +1,153 @@
+z_invop1:--z_invop1
+declare @t_invo nvarchar(30) = [2]
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(90),
+	noq nvarchar(30),
+	datea nvarchar(10),
+	title nvarchar(max),
+	custno nvarchar(90),
+	comp nvarchar(90),
+	addr nvarchar(MAX),
+	shipped nvarchar(90),
+	per nvarchar(90),
+	sailing nvarchar(90),
+	froma nvarchar(90),
+	toa nvarchar(90),
+	lcno nvarchar(90),
+	contract nvarchar(90),
+	coin nvarchar(90),
+	productno nvarchar(90),
+	marks nvarchar(90),
+	description nvarchar(90),
+	quantity float,
+	price float,
+	amount float
+)
+insert into @tmp
+select '0',a.noa,b.noq,a.datea,a.title,a.custno,a.comp,a.addr,a.shipped,a.per,a.sailing,a.froma,a.toa,a.lcno,a.contract,a.coin,
+b.productno,b.marks,b.description,b.quantity,b.price,b.amount
+from invo a left join invos b on a.noa=b.noa
+where (len(@t_invo)=0 or a.noa = @t_invo)
+
+--空白欄
+declare @page int=15
+declare @noa nvarchar(50)
+declare @count int
+declare @t_count int
+declare cursor_table cursor for
+select noa,count(*) from @tmp group by noa
+open cursor_table
+fetch next from cursor_table
+into @noa,@count
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_count=@count
+	while (@t_count%@page!=0)
+	begin
+		insert @tmp (gno,noa,noq)
+		select '0',@noa,right('000'+cast(@t_count+1 as nvarchar(50)),3)
+		set @t_count=@t_count+1
+	end
+	fetch next from cursor_table
+	into @noa,@count
+end
+close cursor_table
+deallocate cursor_table
+	
+insert into @tmp(gno,noa,coin,quantity,amount) 
+select '1',noa,MAX(coin),sum(quantity),sum(amount) from @tmp group by noa
+
+select 
+case when productno='' and description='' then null else dbo.getcomma(quantity,3) end quantity
+,case when productno='' and description='' then null else dbo.getcomma(price,2) end price
+,case when productno='' and description='' then null else dbo.getcomma(amount,2) end amount
+,* 
+from @tmp order by noa,gno,noq;
+------------------------------------------------------------------------------------------------------------------------------------------------------
+z_invop2:--z_invop2
+declare @t_invo nvarchar(30) = [2]
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	noq nvarchar(30),
+	nos int,
+	datea nvarchar(50),
+	endate nvarchar(50),
+	--出口商
+	cno nvarchar(50),
+	ecomp nvarchar(90),
+	eaddr nvarchar(200),
+	--收貨人
+	custno nvarchar(50),
+	ccomp nvarchar(90),
+	caddr nvarchar(200),
+	attn nvarchar(50),
+	tel nvarchar(90),
+	fax nvarchar(90),
+	--pack
+	description nvarchar(MAX),
+	weight float,
+	gweight float,
+	mount float,
+	memo nvarchar(MAX),
+	pkgs float,
+	sets float,
+	pcs float
+)
+
+insert into @tmp
+select '0',a.noa,b.noq,RANK() OVER(partition by a.noa ORDER BY a.noa,b.noq)
+,a.datea,cast(convert(int,LEFT(a.datea,3)+1911) as nvarchar(50))+'/'+SUBSTRING(a.datea,5,2)+'/'+RIGHT(a.datea,2)
+,a.cno,c.ename,c.addr,a.custno,a.comp,a.addr,a.attn
+,(case when (select count(*) from conn where noa=a.custno and namea=a.attn)>0  
+then (select top 1 tel from conn where noa=a.custno and namea=a.attn) else d.tel end)
+,(case when (select count(*) from conn where noa=a.custno and namea=a.attn)>0  
+then (select top 1 fax from conn where noa=a.custno and namea=a.attn) else d.fax end)
+,b.product,b.weight,b.gweight,b.mount,b.memo,null,null,null
+from invo a left join packing b on a.noa=b.noa
+left join acomp c on c.noa=a.cno
+left join cust d on a.custno=d.noa
+where (len(@t_invo)=0 or a.noa = @t_invo)
+
+--空白欄
+declare @page int=15
+declare @noa nvarchar(50)
+declare @count int
+declare @t_count int
+declare cursor_table cursor for
+select noa,count(*) from @tmp group by noa
+open cursor_table
+fetch next from cursor_table
+into @noa,@count
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_count=@count
+	while (@t_count%@page!=0)
+	begin
+		insert @tmp (gno,noa,noq)
+		select '0',@noa,right('000'+cast(@t_count+1 as nvarchar(50)),3)
+		set @t_count=@t_count+1
+	end
+	fetch next from cursor_table
+	into @noa,@count
+end
+close cursor_table
+deallocate cursor_table
+
+insert into @tmp(gno,noa,mount,weight,gweight,pkgs,sets,pcs)
+select '1',noa,sum(mount),sum(weight),sum(gweight),count(*),sum(mount),sum(mount)
+from @tmp group by noa
+
+select
+dbo.getcomma(mount,0) mount
+,dbo.getcomma(weight,2) weight
+,dbo.getcomma(gweight,2) gweight
+,dbo.getcomma(pkgs,0) pkgs
+,dbo.getcomma(sets,0) sets
+,dbo.getcomma(pcs,0) pcs
+,'Box No. '+cast(nos as nvarchar(50)) nos
+,*
+from @tmp order by noa,gno,noq
+;

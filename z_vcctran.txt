@@ -1,0 +1,786 @@
+z_vcctran02:--z_vcctran02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)		
+	declare @t_bdate nvarchar(10) = case when '#non'=[4] then '' else [4] end 
+	declare @t_edate nvarchar(10) = case when '#non'=[5] then char(255) else [5] end 
+	declare @t_bcustno nvarchar(20) = case when '#non'=[6] then '' else [6] end 
+	declare @t_ecustno nvarchar(20) = case when '#non'=[7] then char(255) else [7] end 
+	declare @t_bproductno nvarchar(20) = ''
+	declare @t_eproductno nvarchar(20) = char(255)
+	------------------------------------------------
+	declare @tmp table(
+		pno nvarchar(10),
+		gno nvarchar(10),
+		recno int,
+		accy nvarchar(10),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		custno nvarchar(20),
+		comp nvarchar(40),
+		nick nvarchar(20),
+		
+		productno nvarchar(20),
+		product nvarchar(50),
+		price float,
+		mount float,
+		totals float,
+		
+		[money] float,
+		tax float,
+		total float,
+		
+		memo nvarchar(max),
+		ghref nvarchar(max)
+	)
+	
+	insert into @tmp(pno,gno,recno,accy,noa,noq,custno,comp,nick
+		,productno,product,price,mount,totals,memo
+		,[money],tax,total)
+	select '1','1',ROW_NUMBER()over(partition by a.accy,a.noa order by a.noq)
+		,a.accy,a.noa,a.noq,b.custno,b.comp,b.nick
+		,a.productno,a.product,a.price,a.mount,a.total
+		,b.memo
+		,b.[money],b.tax,b.total
+	from view_vccs a
+	left join view_vcc b on a.accy=b.accy and a.noa=b.noa
+	where b.datea between @t_bdate and @t_edate
+	and ISNULL(b.custno,'') between @t_bcustno and @t_ecustno
+	and ISNULL(a.productno,'') between @t_bproductno and @t_eproductno
+	------------------------------------------------------------------------------------
+	update @tmp set ghref = "vcctran?noa=\'"+noa+"\' and "+cast(recno as nvarchar)+"=$recno?"+accy
+		,gno = case when recno!=1 then '2' else gno end
+	
+	insert into @tmp(pno,gno,mount,totals,[money],tax,total)
+	select '3','3',SUM(ISNULL(mount,0)),SUM(ISNULL(totals,0))
+	,SUM(case when recno=1 then ISNULL([money],0) else 0 end)
+	,SUM(case when recno=1 then ISNULL([tax],0) else 0 end)
+	,SUM(case when recno=1 then ISNULL([total],0) else 0 end)
+	from @tmp
+	
+	select * 
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,totals),1)),4,12)) tts
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mmm
+		,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) ttt
+	from @tmp order by pno,accy,noa,noq;
+	
+
+z_vcctran6:--z_vcctran6
+SET QUOTED_IDENTIFIER OFF 
+declare @cmd nvarchar(max) 
+declare @t_accy nvarchar(10) 
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_bcustno nvarchar(20) 
+declare @t_ecustno nvarchar(20) 
+declare @t_vccno nvarchar(20) 
+declare @t_sort3 nvarchar(20) 
+declare @t_bummdate nvarchar(20) 
+declare @t_eummdate nvarchar(20) 
+declare @t_part nvarchar(max)
+
+set @t_accy = '[1]'
+set @t_bmon = case when '#non'=[18] then '' else [18] end 
+set @t_emon = case when '#non'=[19] then CHAR(255) else [19] end 
+set @t_bcustno = case when '#non'=[21] then '' else [21] end 
+set @t_ecustno = case when '#non'=[22] then CHAR(255) else [22] end 
+set @t_part = case when '#non'=[23] then '' else [23] end
+set @t_vccno = case when '#non'=[28] then '' else [28] end 
+set @t_sort3 = case when '#non2'=[29] then '' else [29] end 
+set @t_bummdate = case when '#non'=[30] then '' else [30] end 
+set @t_eummdate = case when '#non'=[31] then CHAR(255) else [31] end 
+-------------------------------------------------------------------------------------------- 
+declare @string nvarchar(max)
+	declare @n int
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select @string
+			end
+			break
+		end
+		insert into #part select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+
+declare @vccno nvarchar(20)
+	declare @datea nvarchar(10)
+	declare @mon nvarchar(10)
+	declare @custno nvarchar(20)
+	declare @nick nvarchar(20)
+	declare @total float
+	declare @unpay float
+	declare @ummno nvarchar(20)
+	declare @ummnoq nvarchar(10)
+	declare @datea2 nvarchar(10)
+	declare @chgs float
+	declare @paysale float
+	declare @t_unpay float
+	declare @checkno nvarchar(20)
+	declare @money float
+	declare @indate nvarchar(10)
+	--------------------------------------------------------------------------------------------
+	declare @tmp1 table(
+		partno nvarchar(20),
+		vccno nvarchar(20),
+		datea nvarchar(20),
+		mon nvarchar(10),
+		custno nvarchar(20),
+		nick nvarchar(20),
+		total float,
+		unpay float
+	)
+	---------請款單號=0 (立帳請款作業)
+	if len(@t_vccno)=0
+	begin
+		set @cmd =
+		" select a.partno,a.noa,a.datea,a.mon,a.custno,a.nick,a.total,a.unpay"+
+		" from view_vcc"+@t_accy+" a"+
+		" where (a.mon between @t_bmon and @t_emon)"+
+		" and (a.custno between @t_bcustno and @t_ecustno) and a.partno in (select * from #part)"
+		insert into @tmp1
+		execute sp_executesql @cmd,N'@t_bmon nvarchar(10),@t_emon nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20)'
+		,@t_bmon=@t_bmon,@t_emon=@t_emon,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno
+	end
+	else
+	begin
+		set @cmd =
+		" select a.partno,a.noa,a.datea,a.mon,a.custno,a.nick,a.total,a.unpay"+
+		" from view_vcc"+@t_accy+" a"+
+		" where a.noa=@t_vccno and a.partno in (select * from #part)"
+		insert into @tmp1
+		execute sp_executesql @cmd,N'@t_vccno nvarchar(20)',@t_vccno=@t_vccno
+	end
+	------收款作業--------
+	declare @tmp2 table(
+		vccno nvarchar(20),
+		ummno nvarchar(20),
+		ummnoq nvarchar(10),
+		datea nvarchar(10),
+		chgs float,
+		paysale float
+	)
+	insert into @tmp2
+	select a.vccno,a.noa,a.noq,b.datea,a.chgs,a.paysale
+	from umms a
+	left join umm b on a.noa=b.noa
+	left join @tmp1 c on a.vccno=c.vccno
+	where (c.vccno is not null) and (a.chgs!=0 or a.paysale!=0)
+	
+	IF OBJECT_ID('tempdb..#z_ummtran3')is not null
+	BEGIN
+		set @cmd = 'drop table #z_ummtran3'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_ummtran3(
+		pno int,
+		gno nvarchar(3),
+		partno nvarchar(20),
+		vccno nvarchar(20),
+		datea nvarchar(10),
+		mon nvarchar(10),
+		custno nvarchar(20),
+		nick nvarchar(20),
+		total float,
+		unpay float,
+		ummno nvarchar(20),
+		ummnoq nvarchar(10),
+		datea2 nvarchar(10),
+		chgs float,
+		paysale float,
+		checkno nvarchar(max)
+	)
+	
+	insert into #z_ummtran3
+	select 1,'0',*,'','','',null,null,null from @tmp1------立帳請款作業
+	
+	declare cursor_table cursor for
+	select vccno,datea,mon,custno,nick,total,unpay from @tmp1----請款作業
+	open cursor_table
+	fetch next from cursor_table
+	into @vccno,@datea,@mon,@custno,@nick,@total,@unpay
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @t_unpay=@total
+		declare cursor_table2 cursor for
+		select ummno,ummnoq,datea,chgs,paysale from @tmp2 where vccno=@vccno----收款作業
+		open cursor_table2
+		fetch next from cursor_table2
+		into @ummno,@ummnoq,@datea2,@chgs,@paysale
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @cmd = ''
+			declare cursor_table3 cursor for
+			select checkno,indate,money from umms where noa=@ummno and len(isnull(checkno,''))>0 --收款作業
+			open cursor_table3
+			fetch next from cursor_table3
+			into @checkno,@indate,@money
+			while(@@FETCH_STATUS <> -1)
+			begin
+				--set @cmd = @cmd + case when LEN(@cmd)>0 then ',&nbsp'+char(59) else '' end + @checkno 
+				--+ '&nbsp'+char(59)+ '&nbsp'+char(59)+@indate
+				--+ '&nbsp'+char(59)+ '&nbsp'+char(59)+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12))
+				set @cmd = @cmd + case when LEN(@cmd)>0 then ', ' else '' end + @checkno 
+				+ ' '+@indate
+				+ ' '+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,@money),1)),4,12))
+				
+				fetch next from cursor_table3
+				into @checkno,@indate,@money
+			end
+			close cursor_table3
+			deallocate cursor_table3
+		
+			select @t_unpay=@t_unpay-@paysale
+			if exists(select * from #z_ummtran3 where vccno=@vccno and len(ummno)=0)
+				update #z_ummtran3 set ummno=@ummno,ummnoq=@ummnoq,datea2=@datea2,chgs=@chgs,paysale=@paysale,checkno=@cmd where vccno=@vccno
+			else
+				insert into #z_ummtran3(pno,gno,vccno,datea,mon,custno,nick,total,unpay,ummno,ummnoq,datea2,chgs,paysale,checkno)
+				values(1,'0',@vccno,@datea,@mon,@custno,@nick,@total,@unpay,@ummno,@ummnoq,@datea2,@chgs,@paysale,@cmd)
+				
+			fetch next from cursor_table2
+			into @ummno,@ummnoq,@datea2,@chgs,@paysale
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		if (@t_unpay-@unpay)!=0
+		insert into #z_ummtran3(pno,gno,vccno,mon,nick,total,unpay)
+		values(1,'0',@vccno,'異常',cast((@t_unpay-@unpay) as nvarchar),@total,@unpay)
+		
+		select @n=0
+		select @n=COUNT(1) from @tmp2 where vccno=@vccno
+		if @n>1
+			insert into #z_ummtran3
+			select 1,'0','',@vccno,@datea,@mon,@custno,@nick,@total,@unpay,CHAR(255),'','小計：',SUM(ISNULL(chgs,0)),SUM(ISNULL(paysale,0)),'' from @tmp2  where vccno=@vccno
+		
+		insert  into  #z_ummtran3(pno,gno,vccno,custno,total,unpay)values(1,'1',@vccno,@custno,@total,@unpay)
+		
+		fetch next from cursor_table
+		into @vccno,@datea,@mon,@custno,@nick,@total,@unpay
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select vccno from #z_ummtran3 where (datea2 between @t_bummdate and @t_eummdate) group by vccno
+	open cursor_table
+	fetch next from cursor_table
+	into @vccno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update #z_ummtran3 set gno=gno+'z' where vccno=@vccno	
+		fetch next from cursor_table
+		into @vccno
+	end
+	close cursor_table
+	deallocate cursor_table
+	delete #z_ummtran3 where len(gno)=1
+	update #z_ummtran3 set gno=left(gno,1) 
+	
+	declare @tot_total float
+	declare @tot_unpay float
+	select @tot_total=0,@tot_unpay=0
+	select @tot_total=SUM(ISNULL(total,0)),@tot_unpay=SUM(ISNULL(unpay,0)) from #z_ummtran3 where gno='1'
+	
+	insert into #z_ummtran3(pno,gno,total,unpay)values(2,'2',@tot_total,@tot_unpay)
+	
+	set @cmd=
+	" select *,(select part from part where noa=partno) part"+
+	" ,vccno g"+
+	" ,case when ummno=char(255) or  len(isnull(ummno,''))=0 then  ''  else  (ummno)  end nox"+
+	" ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) ctotal"+
+	" ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) cunpay"+
+	" ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgs),1)),4,12)) cchgs"+
+	" ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paysale),1)),4,12)) cpaysale"+
+	" from #z_ummtran3 order by pno,"
+	
+	if @t_sort3='vccno'
+		set @cmd=@cmd+"vccno,gno,ummno"
+	else
+		if @t_sort3='custno'
+			set @cmd=@cmd+@t_sort3+",vccno,gno,ummno"
+		else
+			set @cmd=@cmd+@t_sort3+" desc,vccno,gno,ummno"
+	execute sp_executesql @cmd
+	drop table #z_ummtran3;
+-----------------------------------------------------------------------
+z_vcctran5:--z_vcctran5
+declare @t_accy nvarchar(10) 
+declare @t_bdate nvarchar(20) 
+declare @t_edate nvarchar(20) 
+declare @t_bcustno nvarchar(20) 
+declare @t_ecustno nvarchar(20)
+declare @t_bpartno nvarchar(20)
+declare @t_epartno nvarchar(20) 
+set @t_accy = '[1]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcustno = case when '#non' = [6] then '' else [6] end
+set @t_ecustno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bpartno = case when '#non' = [8] then '' else [8] end
+set @t_epartno = case when '#non' = [9] then CHAR(255) else [9] end
+declare @tmpa table(
+		gno nvarchar(1),
+		datea nvarchar(10),
+		custno nvarchar(20),
+		comp nvarchar(50),
+		tmoney float,
+		tax float,
+		ttotal float
+)
+insert into @tmpa
+select '0' gno,a.datea,a.custno,a.comp,a.money,a.tax,a.total 
+from view_vcc[1] a  
+where (a.datea between @t_bdate and @t_edate) and
+(a.custno between @t_bcustno and @t_ecustno) and
+(a.partno between @t_bpartno and @t_epartno)
+insert into @tmpa
+select '1' gno,'',custno,MAX(comp),SUM(tmoney),SUM(tax),SUM(ttotal)
+from @tmpa
+group by custno
+
+declare @tmp table( 
+		gno nvarchar(1), 
+		noa nvarchar(30), 
+		noq nvarchar(20), 
+		datea nvarchar(10), 
+		typea nvarchar(10), 
+		custno nvarchar(20), 
+		comp nvarchar(50), 
+		mon nvarchar(10), 
+		invo nvarchar(20), 
+		part nvarchar(20), 
+		sales nvarchar(20), 
+		bpart nvarchar(20), 
+		bsales nvarchar(20), 
+		tranmoney int, 
+		tmoney int, 
+		tax int, 
+		ttotal int, 
+		pno nvarchar(20), 
+		product nvarchar(50), 
+		unit nvarchar(10), 
+		mount int, 
+		price int, 
+		total int, 
+		memo nvarchar(200) 
+) 
+insert into @tmp 
+select '0' gno,a.noa,b.noq,a.datea,a.typea,a.custno,a.comp,a.mon,a.invono,a.part,a.sales,a.part2,a.sales2, 
+tranmoney,c.tmoney,c.tax,c.ttotal,b.productno,b.product,b.unit,b.mount,b.price,b.total,b.memo 
+from view_vcc[1] a 
+left join view_vccs[1] b on a.noa = b.noa 
+left join @tmpa c on a.custno = c.custno and gno = '1'
+where 
+(a.datea between @t_bdate and @t_edate) and 
+(isnull(a.custno,'') between @t_bcustno and @t_ecustno) and
+(isnull(a.partno,'') between @t_bpartno and @t_epartno)
+
+insert into @tmp 
+select '1' gno,'','','','',custno,MAX(comp),'','','','','','', 
+MAX(tranmoney),MAX(tmoney),MAX(tax),MAX(ttotal),'','','',0,0,0,'' 
+from @tmp 
+group by custno
+
+select gno,noa,datea,typea,custno,comp,mon,invo,part,sales,bpart,bsales, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tranmoney),1)),4,12)) tranmoney, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmoney),1)),4,12)) tmoney, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttotal),1)),4,12)) ttotal, 
+pno,product,unit, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price),1)),4,12)) price, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total, 
+memo 
+from @tmp 
+order by custno,gno;
+-----------------------------------------------------------------------------------------------
+z_vcctran3:--z_vcctran3
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(20)
+	declare @t_edate nvarchar(20)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bpartno nvarchar(20)
+	declare @t_epartno nvarchar(20)
+	declare @t_xfilter nvarchar(20)
+	declare @t_bmon nvarchar(20)
+	declare @t_emon nvarchar(20)
+	
+	set @t_accy = '[1]'
+	set @t_bdate = case when '#non' = [4] then '' else [4] end
+	set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+	set @t_bcustno = case when '#non' = [6] then '' else [6] end
+	set @t_ecustno = case when '#non' = [7] then CHAR(255) else [7] end
+	set @t_bpartno = case when '#non' = [8] then '' else [8] end
+	set @t_epartno = case when '#non' = [9] then CHAR(255) else [9] end
+	
+	set @t_bmon = case when '#non' = [18] then '' else [18] end
+	set @t_emon = case when '#non' = [19] then CHAR(255) else [19] end
+	
+	set @t_xfilter = case when '#non' = [26] then '' else [26] end 
+	declare @tmp table( 
+			gno nvarchar(10), 
+			accy nvarchar(20),		
+			noa nvarchar(20), 
+			datea nvarchar(10),
+			mon nvarchar(10), 
+			partno nvarchar(20), 
+			part nvarchar(40), 
+			custno nvarchar(20), 
+			comp nvarchar(40), 
+			serial nvarchar(20), 
+			product nvarchar(200), 
+			total float, 
+			payed float, 
+			unpay float, 
+			[money] float 
+		) 
+	insert into @tmp(gno,noa,datea,partno,part,custno,comp,serial,product,total,payed,unpay,[money])
+	select '1' gno,ROW_NUMBER()over(order by a.custno,a.partno),'',a.partno,max(a.part),a.custno,max(isnull(b.nick,left(a.comp,4))),'','',sum(a.total) ,sum(a.payed),sum(a.unpay) ,0 
+	from view_vcc a
+	left join cust b on (a.custno=b.noa)
+	where (a.datea between @t_bdate and @t_edate) and 
+	(a.mon between @t_bmon and @t_emon) and 
+	(a.custno between @t_bcustno and @t_ecustno) and 
+	(a.partno between @t_bpartno and @t_epartno) and (a.unpay != 0 )
+	group by a.custno,a.partno
+
+	if(patindex('%detail%',@t_xfilter)>0)
+	begin
+		insert into @tmp(gno,accy,noa,datea,mon,partno,part,custno,comp,serial,product,total,payed,unpay,[money]) 
+		select '2' gno,a.accy,a.noa,a.datea,a.mon,a.partno,a.part,a.custno, 
+		case when len(c.nick)>0 then c.nick else LEFT(a.comp,4) end, 
+		c.serial,b.product,0,0,0,b.total 
+		from view_vcc a 
+		left join view_vccs b on a.noa = b.noa 
+		left join cust c on a.custno = c.noa 
+		where (a.datea between @t_bdate and @t_edate) and 
+		(a.mon between @t_bmon and @t_emon) and 
+		(a.custno between @t_bcustno and @t_ecustno) and 
+		(a.partno between @t_bpartno and @t_epartno) and a.unpay != 0 
+		order by isnull(a.mon,''),a.datea
+	end
+
+	insert into @tmp(gno,custno,total,payed,unpay,[money])
+	select '3',CHAR(255),SUM(ISNULL(total,0)),SUM(ISNULL(payed,0)),SUM(ISNULL(unpay,0)),SUM(ISNULL([money],0))
+	from @tmp where gno='1'
+
+	select gno,noa,mon,datea,partno,part,custno,comp,serial,product, 
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total, 
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,payed),1)),4,12)) payed, 
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay, 
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,
+	"vcctran?left(noa,"+cast(len(noa)as nvarchar)+")=$noa?"+accy ghref
+	from @tmp 
+	order by custno,gno,isnull(mon,'');
+---------------------------------------------------------------------
+z_vcctran01:--z_vcctran01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bmon nvarchar(10)
+	declare @t_emon nvarchar(10)
+	declare @t_cno nvarchar(max)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_part nvarchar(max)
+	declare @t_kind nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_bdate = case when '#non'=[16] then '' else [16] end
+	set @t_edate = case when '#non'=[17] then char(255) else [17] end
+	set @t_bmon = case when '#non'=[18] then '' else [18] end
+	set @t_emon = case when '#non'=[19] then char(255) else [19] end
+	set @t_cno = case when '#non'=[20] then '' else [20] end
+	set @t_bcustno = case when '#non'=[21] then '' else [21] end
+	set @t_ecustno = case when '#non'=[22] then char(255) else [22] end
+	set @t_part = case when '#non'=[23] then '' else [23] end
+	set @t_kind = case when '#non'=[24] then '' else [24] end
+	---------------------------------------------------------------------------------------
+	declare @string nvarchar(max)
+	declare @n int
+	IF OBJECT_ID('tempdb..#part')is not null
+	BEGIN
+		set @cmd = 'drop table #part'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #part(
+		noa nvarchar(20)
+	)
+	set @string = @t_part
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #part select @string
+			end
+			break
+		end
+		insert into #part select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	---------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_vcctran01')is not null
+	BEGIN
+		set @cmd = 'drop table #z_vcctran01'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_vcctran01(
+		gno nvarchar(10),
+		noa nvarchar(20),
+		cno nvarchar(10),
+		acomp nvarchar(40),
+		datea nvarchar(10),
+		mon nvarchar(10),
+		custno nvarchar(20),
+		comp nvarchar(40),
+		nick nvarchar(20),
+		partno nvarchar(20),
+		part nvarchar(20),
+		total float,
+		kind nvarchar(max),
+		memo nvarchar(max)
+	)
+	
+	set @cmd=
+	" select '0',a.noa,a.cno,a.acomp,a.datea,a.mon,a.custno,a.comp,isnull(c.nick,''),a.partno,a.part,a.total,a.kind,a.memo"+
+	" from view_vcc"+@t_accy+" a"+
+	" left join #part b on a.partno=b.noa"+
+	" left join cust c on a.custno=c.noa"+
+	" where (b.noa is not null)"+
+	" and (a.datea between @t_bdate and @t_edate)"+
+	" and (a.mon between @t_bmon and @t_emon)"+
+	" and (len(@t_cno)=0 or @t_cno=a.cno)"+
+	" and (a.custno between @t_bcustno and @t_ecustno)"+
+	" and (len(@t_kind)=0 or @t_kind=a.kind)"
+	insert into #z_vcctran01
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bmon nvarchar(10),@t_emon nvarchar(10),@t_cno nvarchar(max),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20),@t_kind nvarchar(max)'
+	,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bmon=@t_bmon,@t_emon=@t_emon,@t_cno=@t_cno,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno,@t_kind=@t_kind
+	
+	insert into #z_vcctran01
+	select '1','','','','','','','','','','',sum(isnull(total,0)),'',''
+	from #z_vcctran01 where gno='0'
+	select *
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(total,0)),1)),4,12)) tt
+	from #z_vcctran01 order by gno,datea,noa
+
+	drop table #z_vcctran01;
+
+
+z_vcctran1:--z_vcctran1
+declare @t_accy nvarchar(10)
+declare @t_bxnoa nvarchar(20)
+declare @t_exnoa nvarchar(20)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bcustno nvarchar(20)
+declare @t_ecustno nvarchar(20)
+declare @t_xpaydate nvarchar(20)
+set @t_accy = '[1]'
+set @t_bxnoa = case when '#non' = [2] then '' else [2] end
+set @t_exnoa = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcustno = case when '#non' = [6] then '' else [6] end
+set @t_ecustno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_xpaydate = case when '#non' = [27] then '' else [27] end 
+declare @tmp table( 
+	gno nvarchar(1), 
+	noa nvarchar(30), 
+	noq nvarchar(20), 
+	datea nvarchar(10), 
+	typea nvarchar(10), 
+	custno nvarchar(20), 
+	comp nvarchar(50), 
+	mon nvarchar(10), 
+	invo nvarchar(20), 
+	part nvarchar(20), 
+	sales nvarchar(20), 
+	bpart nvarchar(20), 
+	bsales nvarchar(20), 
+	tranmoney int, 
+	tmoney int, 
+	tax int, 
+	ttotal int, 
+	tmemo nvarchar(200), 
+	pno nvarchar(20), 
+	product nvarchar(50), 
+	unit nvarchar(10), 
+	mount int, 
+	price int, 
+	total int, 
+	memo nvarchar(200) 
+) 
+insert into @tmp 
+select '0' gno,a.noa,b.noq,a.datea,a.typea,a.custno,a.comp,a.mon,a.invono,a.part,a.sales,a.part2,a.sales2, 
+tranmoney,a.money,a.tax,a.total,a.memo,b.productno,b.product,b.unit,b.mount,b.price,b.total,b.memo 
+from view_vcc[1] a 
+left join view_vccs[1] b on a.noa = b.noa 
+where (a.noa between @t_bxnoa and @t_exnoa) and 
+--(a.datea between @t_bdate and @t_edate) and 
+(isnull(a.custno,'') between @t_bcustno and @t_ecustno) 
+
+insert into @tmp 
+select '1' gno,noa,'','','',MAX(custno),'','','','','','','', 
+MAX(tranmoney),MAX(tmoney),MAX(tax),MAX(ttotal),MAX(tmemo),'','','',0,0,0,'' 
+from @tmp 
+group by noa 
+
+select gno,noa,datea,typea,custno,comp,mon,invo,part,sales,bpart,bsales, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tranmoney),1)),4,12)) tranmoney, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmoney),1)),4,12)) tmoney, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tax),1)),4,12)) tax, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttotal),1)),4,12)) ttotal, 
+tmemo,pno,product,unit, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price),1)),4,12)) price, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total, 
+memo,(case when len(@t_xpaydate)>0 then '請款日期：'+@t_xpaydate else '' end) pay  
+from @tmp 
+order by noa,gno;
+--------------------------------------------------------------------------------------------------------
+z_vcctran2:--z_vcctran2
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bcustno nvarchar(20)
+declare @t_ecustno nvarchar(20)
+declare @t_bpartno nvarchar(20)
+declare @t_epartno nvarchar(20)
+declare @t_bsalesno nvarchar(20)
+declare @t_esalesno nvarchar(20)
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcustno = case when '#non' = [6] then '' else [6] end
+set @t_ecustno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bpartno = case when '#non' = [8] then '' else [8] end
+set @t_epartno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_bsalesno = case when '#non' = [14] then '' else [14] end
+set @t_esalesno = case when '#non' = [15] then CHAR(255) else [15] end
+declare @tmp table( 
+	gno nvarchar(1), 
+	part nvarchar(20),
+	datea nvarchar(10), 
+	custno nvarchar(20), 
+	comp nvarchar(40), 
+	serial nvarchar(20),
+	salesno nvarchar(20),
+	sales nvarchar(20),
+	total decimal(12, 0) 
+) 
+insert into @tmp 
+select '0' gno,part,datea,custno,case when len(b.nick)>0 then b.nick else LEFT(a.comp,4) end,b.serial,a.salesno,a.sales,total
+from view_vcc[1] a 
+left join cust b on a.custno = b.noa 
+where ((a.datea between @t_bdate and @t_edate) and (isnull(a.custno,0) between @t_bcustno and @t_ecustno)) and
+(isnull(a.partno,'') between @t_bpartno and @t_epartno) and (isnull(a.salesno,'') between @t_bsalesno and @t_esalesno)
+
+insert into @tmp
+select '1' gno,'',char(255),CHAR(255),'','','','',SUM(total)
+from @tmp
+
+
+select gno,part,datea,custno,comp,serial,salesno,sales, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total 
+from @tmp order by datea,custno,comp,gno;
+-----------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------
+z_vcctran4:--z_vcctran4
+declare @t_accy nvarchar(10)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bcustno nvarchar(20)
+declare @t_ecustno nvarchar(20)
+declare @t_bpartno nvarchar(20)
+declare @t_epartno nvarchar(20)
+declare @t_bsalesno nvarchar(20)
+declare @t_esalesno nvarchar(20)
+declare @t_typea nvarchar(20) 
+
+declare @t_bmon nvarchar(20)
+declare @t_emon nvarchar(20)
+
+set @t_accy = '[1]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcustno = case when '#non' = [6] then '' else [6] end
+set @t_ecustno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bpartno = case when '#non' = [8] then '' else [8] end
+set @t_epartno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_bsalesno = case when '#non' = [14] then '' else [14] end
+set @t_esalesno = case when '#non' = [15] then CHAR(255) else [15] end
+
+set @t_bmon= case when '#non' = [18] then '' else [18] end
+set @t_emon = case when '#non' = [19] then CHAR(255) else [19] end
+
+set @t_typea = case when '#non' = [25] then '' else [25] end
+declare @tmp table( 
+	gno nvarchar(1), 
+	datea nvarchar(10), 
+	partno nvarchar(20), 
+	part nvarchar(40), 
+	custno nvarchar(20), 
+	comp nvarchar(40), 
+	salesno nvarchar(20), 
+	sales nvarchar(40), 
+	total float, 
+	payed float, 
+	unpay float,
+	kind nvarchar(20) 
+) 
+insert into @tmp 
+select '' gno,datea,partno,part,custno, 
+case when len(b.nick)>0 then b.nick else left(a.comp,4) end,a.salesno,a.sales,total,payed,unpay,kind
+from view_vcc102 a 
+left join cust b on a.custno = b.noa 
+where (a.datea between @t_bdate and @t_edate) and 
+(a.mon between @t_bmon and @t_emon) and 
+(a.custno between @t_bcustno and @t_ecustno) and 
+(a.partno between @t_bpartno and @t_epartno) and 
+(a.salesno between @t_bsalesno and @t_esalesno) and 
+(len(@t_typea) = 0 or @t_typea = a.kind) and
+(unpay != 0 or payed != 0)
+
+insert into @tmp 
+select '0' gno,'',partno,part,custno,comp,salesno,sales,SUM(total),SUM(payed),SUM(unpay),kind 
+from @tmp 
+group by custno,comp,partno,part,salesno,sales,kind 
+
+insert into @tmp 
+select '1' gno,'',partno,part,CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(total),SUM(payed),SUM(unpay),'' 
+from @tmp 
+where gno = '' 
+group by partno,part 
+
+insert into @tmp 
+select '2' gno,'',CHAR(255),CHAR(255),CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(total),SUM(payed),SUM(unpay),'' 
+from @tmp 
+where gno = 1 
+
+select gno,datea,partno,part,custno,comp,salesno,sales,kind, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,payed),1)),4,12)) payed, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay 
+from @tmp 
+where len(gno) != 0 
+order by partno,custno ;
+
+

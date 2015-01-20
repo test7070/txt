@@ -1,0 +1,218 @@
+﻿z_bankw1:--z_bankw1
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bankmoney float
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bankmoney = case when '#non'=[4] then 0 else cast(replace([4],',','') as float) end
+
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	datea nvarchar(10), ----日期
+	gqb float, ----到期票據
+	umm float, ----應收帳款
+	pay float, ----應付帳款
+	ordc float, ----預估採購
+	oget float, ----預收
+	bankw float, ----借款融資
+	opay float, ----預付
+	total float, ----餘額
+	memo nvarchar(max), ----備註
+	paymoney float, ----還款金額
+	sales nvarchar(50), ----業務
+	comp nvarchar(90), ----公司名稱
+	typea nvarchar(30), ----種類
+	PRIMARY KEY (idno)
+)
+insert into @tmp
+	select '0',a.datea,0,0,0,0,0,a.money,0,0,
+	(case a.typea when '1' then '銀行借款' when '2' then '融資' when '3' then '股東往來' when '4' then '外部往來' end) + ' ' + a.memo,
+	0,'',a.comp,'1BANKW'
+	from bankw a
+	union
+	select '0',a.paydate,0,0,0,0,0,a.money,0,0,
+	(case a.typea when '1' then '銀行借款' when '2' then '融資' when '3' then '股東往來' when '4' then '外部往來' end) + ' ' + a.memo,
+	(a.money * ( 1+ a.rate /365/100 * (DATEDIFF(day,CONVERT(datetime,cast((cast(left(a.datea,3) as int)+1911) as nvarchar)+right(a.datea,6)),
+					CONVERT(datetime,cast((cast(left(a.paydate,3) as int)+1911) as nvarchar)+right(a.paydate,6)))))) money,
+	'',a.comp,'2BANKW'
+	from bankw a
+	where isnull(a. paydate,'') != ''
+	union
+	select '0',a.datea,0,0,0,0,0,a.money,0,0,'',a.pay,
+			'',
+			a.tgg,'1LCS'
+	from lcs a
+	where (a.money-a.pay) > 0 or (a.paydate > @t_edate)
+	union
+	select
+		'0',a.datea,0,0,0,0,(a.opay-a.unpay),0,0,0,'預收>未收，' + cast(a.opay as nvarchar) + '>' + cast(a.unpay as nvarchar),
+		0,'',a.comp,'3UMM3'
+	from umm a
+	where a.opay >a.unpay
+	union
+	select
+		'0',a.datea,0,0,0,0,0,0,(a.opay-a.unpay),0,'預付>未付，' + cast(a.opay as nvarchar) + '>' + cast(a.unpay as nvarchar),
+		0,'',a.comp,'3PAY3'
+	from pay a
+	where a.opay >a.unpay
+	union
+	select
+		'0',a.datea,0,a.sale,0,0,0,0,0,0,a.memo,
+		0,'',a.comp,'1UMM'
+	from umm a
+	union
+	select
+		'0',a.datea,0,0,a.sale,0,0,0,0,0,a.memo,
+		0,'',a.comp,'1PAY'
+	from pay a
+	union 
+	select '0',a.datea,0,0,0,a.money,0,0,0,0,a.memo,0,'','','1ORDC' from (
+		select a.datea,(a.notv*a.price) money,a.memo from view_ordcs[1] a
+	) a
+	union
+	select '0',a.indate,a.money,0,0,0,0,0,0,0,
+	case a.typea when '1' then '收票' when '2' then '開票' when '3' then '收退' when '4' then '開退' end +' ' + a.indate+' 票號=' + a.gqbno,
+	0,'','','1GQB'
+	from gqb a
+	where isnull(a.enda,'')='' and (a.indate between @t_bdate and @t_edate)
+	order by datea
+	
+update @tmp set total = gqb+umm-pay-ordc+opay-oget+bankw-paymoney
+
+declare @idno int
+declare @total float
+declare cursor_table cursor for
+select idno,total from @tmp order by datea
+open cursor_table
+fetch next from cursor_table
+into @idno,@total
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_bankmoney = @t_bankmoney+isnull(@total,0)
+	update @tmp set total = @t_bankmoney where idno = @idno
+	fetch next from cursor_table
+	into @idno,@total
+end
+close cursor_table
+deallocate cursor_table
+
+select
+	gno,datea,gqb,
+	dbo.getComma(umm,0)umm,
+	dbo.getComma(pay,0)pay,
+	dbo.getComma(ordc,0)ordc,
+	dbo.getComma(oget,0)oget,
+	dbo.getComma(bankw,0)bankw,
+	dbo.getComma(opay,0)opay,
+	dbo.getComma(total,0)total,
+	dbo.getComma(paymoney,0)paymoney,
+	memo,
+	sales,comp,'' typea
+from @tmp;
+-------------------------------------------------------------------------------------------------*
+z_bankw2:--z_bankw2
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bankmoney float
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bankmoney = case when '#non'=[4] then 0 else cast(replace([4],',','') as float) end
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	datea nvarchar(10), ----日期
+	gqb float, ----到期票據
+	umm float, ----應收帳款
+	pay float, ----應付帳款
+	ordc float, ----預估採購
+	oget float, ----預收
+	bankw float, ----借款融資
+	opay float, ----預付
+	total float, ----餘額
+	paymoney float,
+	PRIMARY KEY (idno)
+)
+insert into @tmp
+	select '1',a.datea,0,0,0,0,0,a.money,0,0,
+	0
+	from bankw a
+	union
+	select '1',a.paydate,0,0,0,0,0,a.money,0,0,
+	(a.money * ( 1+ a.rate /365/100 * (DATEDIFF(day,CONVERT(datetime,cast((cast(left(a.datea,3) as int)+1911) as nvarchar)+right(a.datea,6)),
+					CONVERT(datetime,cast((cast(left(a.paydate,3) as int)+1911) as nvarchar)+right(a.paydate,6)))))) money
+	from bankw a
+	where isnull(a. paydate,'') != ''
+	union
+	select '1',a.datea,0,0,0,0,0,a.money,0,0,a.pay
+	from lcs a
+	where (a.money-a.pay) > 0 or (a.paydate > @t_edate)
+	union
+	select
+		'1',a.datea,0,0,0,0,(a.opay-a.unpay),0,0,0,0
+	from umm a
+	where a.opay >a.unpay
+	union
+	select
+		'1',a.datea,0,0,0,0,0,0,(a.opay-a.unpay),0,0
+	from pay a
+	where a.opay >a.unpay
+	union
+	select
+		'1',a.datea,0,a.sale,0,0,0,0,0,0,0
+	from umm a
+	union
+	select
+		'1',a.datea,0,0,a.sale,0,0,0,0,0,0
+	from pay a
+	union 
+	select
+		'1',a.datea,0,0,0,a.money,0,0,0,0,0
+	from (
+		select a.datea,(a.notv*a.price) money,a.memo from view_ordcs a
+	) a
+	union
+	select '1',a.indate,a.money,0,0,0,0,0,0,0,0
+	from gqb a
+	where isnull(a.enda,'')='' and (a.indate between @t_bdate and @t_edate)
+insert into @tmp(gno,datea,gqb,umm,pay,ordc,oget,bankw,opay,total,paymoney)
+	select
+		'0',datea,sum(gqb),sum(umm),sum(pay),sum(ordc),sum(oget),sum(bankw),sum(opay),sum(total),sum(paymoney)
+	from @tmp
+	where gno ='1'
+	group by datea
+delete @tmp where gno='1'
+update @tmp set total = gqb+umm-pay-ordc+opay-oget+bankw-paymoney
+declare @idno int
+declare @total float
+declare cursor_table cursor for
+	select idno,total from @tmp
+open cursor_table
+fetch next from cursor_table
+into @idno,@total
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_bankmoney = @t_bankmoney+@total
+	update @tmp set total = @t_bankmoney where idno = @idno
+	fetch next from cursor_table
+	into @idno,@total
+end
+close cursor_table
+deallocate cursor_table
+insert into @tmp(gno,datea,gqb,umm,pay,ordc,oget,bankw,opay,total,paymoney)
+	select
+		'1','' datea,sum(gqb),sum(umm),sum(pay),sum(ordc),sum(oget),sum(bankw),sum(opay),@t_bankmoney,sum(paymoney)
+	from @tmp
+	where gno = '0'
+select
+	gno,datea,
+	dbo.getComma(gqb,0)gqb,
+	dbo.getComma(umm,0)umm,
+	dbo.getComma(pay,0)pay,
+	dbo.getComma(ordc,0)ordc,
+	dbo.getComma(oget,0)oget,
+	dbo.getComma(bankw,0)bankw,
+	dbo.getComma(opay,0)opay,
+	dbo.getComma(total,0)total,
+	dbo.getComma(paymoney,0)paymoney
+from @tmp;

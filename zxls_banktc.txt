@@ -1,0 +1,239 @@
+zxls_banktc:--zxls_banktc
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @workerno nvarchar(20)
+	declare @worker nvarchar(20)
+	
+	set @workerno=[1]
+	set @worker=[2]
+	
+	declare @nn int
+	declare @a nvarchar(max)
+	declare @b nvarchar(max)
+	declare @c nvarchar(max)
+	declare @d nvarchar(max)
+	declare @e nvarchar(max)
+	declare @f nvarchar(max)
+	declare @g nvarchar(max)
+	declare @h nvarchar(max)
+	declare @i nvarchar(max)
+	declare @j nvarchar(max)
+	
+	declare @bankno nvarchar(20)
+	declare @bank nvarchar(50)
+	declare @account nvarchar(50)
+	declare @datea nvarchar(10)
+	declare @memo nvarchar(max)
+	declare @money1 float
+	declare @money2 float
+	declare @money3 float
+	declare @money4 float
+	declare @transbank nvarchar(20)
+	declare @memo2 nvarchar(max)
+	declare @checkno nvarchar(20)
+	declare @timea nvarchar(20)
+	
+	declare @tmps table(
+		noq nvarchar(10),
+		newnoq nvarchar(10),
+		account nvarchar(50),
+		datea nvarchar(10),
+		memo nvarchar(max),
+		money1 float,
+		money2 float,
+		money3 float,
+		money4 float,
+		transbank nvarchar(20),
+		memo2 nvarchar(max),
+		checkno nvarchar(20),
+		timea nvarchar(20)
+	)
+	
+	set @nn = 1
+
+	declare cursor_table cursor for
+	select a,b,c,d,e,f,g,h,i,j from ztmpxls order by cast(noa as int)
+	open cursor_table
+	fetch next from cursor_table
+	into @a,@b,@c,@d,@e,@f,@g,@h,@i,@j
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@nn<=999)--資料筆數,不得超過999,否則NOQ編碼有問題
+		begin
+			begin try
+				set @account = REPLACE(@a,'=','')
+				set @datea = LEFT(@b,3)+'/'+SUBSTRING(@b,4,2)+'/'+SUBSTRING(@b,6,2)
+				set @memo = @c
+				set @money1 = CAST(@d as float)
+				set @money2 = CAST(@e as float)
+				set @money3 = CAST(@f as float)
+				set @transbank = @g
+				set @memo2 = REPLACE(@h,'=','')
+				set @timea = @j
+				set @checkno = ''
+				if LEN(rtrim(Ltrim(@i)))>0
+				begin
+					--開票的不會有#,-
+					if @money1>0
+					begin
+						select top 1 @checkno= gqbno from gqb 
+						where ([money]=@money1 or [money]=@money2) 
+							and CHARINDEX(rtrim(Ltrim(@i)),gqbno)>0 
+							and (typea='1' or typea='2')
+						order by gqbno 
+					end
+					else
+					begin
+						select top 1 @checkno= gqbno from gqb 
+						where ([money]=@money1 or [money]=@money2) 
+							and CHARINDEX(rtrim(Ltrim(@i)),gqbno)>0 
+							and (typea='1' or typea='2')
+						order by gqbno desc
+					end
+					
+					set @checkno = case when len(isnull(@checkno,''))=0 then RTRIM(LTRIM(@i)) else @checkno end
+				end
+				if LEN(@account)>0 and len(@datea)>0
+				begin
+					insert into @tmps(noq,account,datea,memo,money1,money2,money3,transbank,memo2,checkno,timea)
+					select right('000'+CAST(@nn as nvarchar),3),@account,@datea,@memo,@money1,@money2,@money3,@transbank,@memo2,@checkno,@timea
+					set @nn = @nn +1
+				end
+			end try
+			begin catch
+				--do nothing
+			end catch	
+		end
+		
+		fetch next from cursor_table
+		into @a,@b,@c,@d,@e,@f,@g,@h,@i,@j
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare @noa nvarchar(20)
+	
+	set @datea = right('000'+cast(year(GETDATE())-1911 as nvarchar),3)+'/'
+	+right('00'+cast(month(GETDATE()) as nvarchar),2)+'/'
+	+right('00'+cast(day(GETDATE()) as nvarchar),2)
+	set @noa = ''
+	select @noa = max(noa) from banktmp where noa like replace(@datea,'/','')+'[0-9][0-9][0-9]'
+	if @noa is null
+	begin
+		set @noa = replace(@datea,'/','')+'001'
+	end
+	else
+	begin
+		set @noa = replace(@datea,'/','') + right('000'+ cast(cast(RIGHT(@noa,3) as int)+1 as nvarchar),3)
+	end
+	select @bankno = '', @bank = '', @account = ''
+	select top 1 @account = account from @tmps where len(account)>0
+	if len(@account)>0
+	begin
+		select @bankno=noa,@bank=bank,@account=account from bank where replace(account,'-','')=@account
+	end
+	-----------------------------------------------------------------------------------------------------
+	--1.信用卡　：意思是信用卡扣款
+	--2.金融卡轉：意思是atm轉帳存入
+	--3.代收轉今：支票隔日兌現(支票的錢,隔天才可用)
+	--4.次交轉今：支票隔日兌現(支票的錢,隔天才可用)
+	--5.外埠代收：支票當日兌現(支票的錢,當日可用)
+
+	declare @tmpa table(
+		datea nvarchar(10),
+		[money] float
+	)
+	declare @t_date date
+	declare @nextdate nvarchar(10)
+	declare @noq nvarchar(10)
+	
+	declare cursor_table cursor for
+	select noq,datea,memo from @tmps order by datea,noq
+	open cursor_table
+	fetch next from cursor_table
+	into @noq,@datea,@memo
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @memo='代收轉今' or @memo='次交轉今'
+		begin
+			set @t_date = dateadd(dd,1,convert(date,cast(CAST(LEFT(@datea,3) as int)+1911 as nvarchar)+RIGHT(@datea,6)))
+			set @nextdate = right('000'+cast(Year(@t_date)-1911 as nvarchar),3)
+				+'/'+RIGHT('00'+cast(MONTH(@t_date) as nvarchar),2)
+				+'/'+RIGHT('00'+cast(Day(@t_date) as nvarchar),2)
+			if not exists(select * from @tmps where datea=@nextdate)
+			begin	
+				insert into @tmps(datea,noq)values(@nextdate,@noq+'Z')
+			end
+		end
+
+		fetch next from cursor_table
+		into @noq,@datea,@memo
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	declare @money float
+	select top 1 @money = money3 +money1 - money2 from @tmps order by datea,noq
+	
+	declare cursor_table cursor for
+	select noq,datea,memo,isnull(money1,0),isnull(money2,0) from @tmps order by datea,noq
+	open cursor_table
+	fetch next from cursor_table
+	into @noq,@datea,@memo,@money1,@money2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @memo='代收轉今' or @memo='次交轉今'
+		begin
+			set @money = @money - @money2
+			set @t_date = dateadd(dd,1,convert(date,cast(CAST(LEFT(@datea,3) as int)+1911 as nvarchar)+RIGHT(@datea,6)))
+			set @nextdate = right('000'+cast(Year(@t_date)-1911 as nvarchar),3)
+				+'/'+RIGHT('00'+cast(MONTH(@t_date) as nvarchar),2)
+				+'/'+RIGHT('00'+cast(Day(@t_date) as nvarchar),2)
+			if exists(select * from @tmpa where datea=@nextdate)
+			begin
+				update @tmpa set [money]=ISNULL([money],0)+@money2 where datea=@nextdate
+			end
+			else
+			begin
+				insert into @tmpa(datea,[money])values(@nextdate,@money2)
+			end
+		end
+		
+		select @money = @money - @money1 + @money2
+		if exists(select * from @tmpa where datea=@datea)
+		begin
+			select @money = @money + [money] from @tmpa where datea=@datea
+			delete @tmpa where datea=@datea
+		end
+		update @tmps set money4 = @money where datea=@datea and noq=@noq
+
+		fetch next from cursor_table
+		into @noq,@datea,@memo,@money1,@money2
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare @n int
+	set @n = 0
+	declare cursor_table cursor for
+	select noq,datea from @tmps order by datea,noq
+	open cursor_table
+	fetch next from cursor_table
+	into @noq,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @n = @n + 1
+		update @tmps set newnoq = RIGHT('000'+CAST(@n as nvarchar),3) where datea=@datea and noq=@noq
+		fetch next from cursor_table
+		into @noq,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------------------------------------
+	--insert data
+	insert into banktmps(noa,noq,account,datea,memo,money1,money2,money3,money4,transbank,memo2,checkno,timea)
+	select @noa,newnoq,account,datea,memo,money1,money2,money3,money4,transbank,memo2,checkno,timea 
+	from @tmps order by datea,newnoq
+	--insert into 
+	insert into banktmp(noa,datea,bankno,bank,account,worker)
+	select @noa,@datea,@bankno,@bank,@account,@worker;

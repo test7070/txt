@@ -1,0 +1,1091 @@
+z_workgv1:--z_workgv1
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_bpno nvarchar(90)
+declare @t_epno nvarchar(90)
+declare @t_showworkg nvarchar(90)
+declare @t_showforecast nvarchar(90)
+declare @t_style nvarchar(90)
+
+set @t_bmon = case when '#non' = [1] then '' else [1] end
+set @t_emon = case when '#non' = [2] then CHAR(255) else [2] end
+set @t_bpno = case when '#non' = [3] then '' else [3] end
+set @t_epno = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_style = case when '#non' = [7] then '' else [7] end
+set @t_showworkg = case when '#non' = [8] then '0' else [8] end
+set @t_showforecast = case when '#non' = [10] then '0' else [10] end
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2) 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+
+--月份
+create table #tmp(
+	mon01 nvarchar(10),
+	mon02 nvarchar(10),
+	mon03 nvarchar(10),
+	mon04 nvarchar(10),
+	mon05 nvarchar(10),
+	mon06 nvarchar(10),
+	mon07 nvarchar(10),
+	mon08 nvarchar(10),
+	mon09 nvarchar(10),
+	mon10 nvarchar(10),
+	mon11 nvarchar(10),
+	mon12 nvarchar(10)
+)
+
+declare @moncount int=1
+declare @tmp_mon nvarchar(10)=@t_bmon
+declare @tmp_moncol nvarchar(50)
+while(@tmp_mon<=@t_emon and @moncount<=12)
+begin
+	set @tmp_moncol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+	if(@moncount=1)
+		exec(" insert #tmp ("+@tmp_moncol+") select '"+@tmp_mon+"'")
+	else
+		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
+	
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	
+	set @moncount=@moncount+1
+end
+
+
+create table #tmp2(
+	gno nvarchar(1), 
+	pno nvarchar(100), 
+	product nvarchar(200), 
+	style nvarchar(100), 
+	recno int,
+	tit nvarchar(200), 
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float,
+	mount07 float,
+	mount08 float,
+	mount09 float,
+	mount10 float,
+	mount11 float,
+	mount12 float
+) 
+
+set @moncount=1
+set @tmp_mon =@t_bmon
+while(@tmp_mon<=@t_emon and @moncount<=12)
+begin
+	set @tmp_moncol='mount'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),1,'預測量',sum(a.mount)mount
+	from saleforecasts a where left(a.datea,6)='"+@tmp_mon+"'
+	and a.productno between '"+@t_bpno+"' and '"+@t_epno+"'
+	group by a.productno,isnull(a.style,'')")
+
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),2,'訂單量',sum(ob.mount)mount
+	from view_orde oa left join view_ordes ob on oa.noa=ob.noa
+	where (case when oa.mon!='' then oa.mon else left(oa.odate,6) end)='"+@tmp_mon+"'
+	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ob.productno!=''
+	group by ob.productno,isnull(ob.style,'')")
+	
+	--exec(" insert #tmp2 (gno,pno,product,recno,tit,"+@tmp_moncol+") 
+	--select '9',gb.productno,MAX(gb.product)product,6,'預測已排產量',sum(gb.forecastprepare)mount
+	--from view_workg ga left join view_workgs gb on ga.noa=gb.noa
+	--where left(ga.sfedate,6) ='"+@tmp_mon+"'
+	--and gb.productno between '"+@t_bpno+"' and '"+@t_epno+"'
+	--group by gb.productno")
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',wa.productno,MAX(wa.product)product,isnull(wa.style,''),6,'製令未入量',sum(isnull(wa.mount,0)-isnull(wa.inmount,0))mount
+	from view_work wa 
+	where left(wa.cuadate,6) ='"+@tmp_mon+"'
+	and wa.productno between '"+@t_bpno+"' and '"+@t_epno+"'
+	and wa.noa like 'W[0-9]%'
+	--and len(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(SUBSTRING(wa.noa,2,1),'0',''),'1',''),'2',''),'3',''),'4',''),'5',''),'6',''),'7',''),'8',''),'9',''))=0
+	group by wa.productno,isnull(wa.style,'')")
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',gb.productno,MAX(gb.product)product,isnull(gb.style,''),7,'預測已請購量',sum(gb.forecastprepare)mount
+	from view_workg ga left join view_workgs gb on ga.noa=gb.noa
+	where left(ga.sfedate,6) ='"+@tmp_mon+"' and ordbno!=''
+	and gb.productno between '"+@t_bpno+"' and '"+@t_epno+"'
+	group by gb.productno,isnull(gb.style,'')")
+
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	
+	set @moncount=@moncount+1
+end
+
+	if(LEN(@t_style)>0)
+		delete #tmp2 where style!=@t_style
+
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09,mount10,mount11,mount12) 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),3,'庫存'
+	,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount
+	,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount
+	from stkucc('"+@now_date+"','','') a group by a.productno,isnull(a.style,'')")
+	
+	delete #tmp2 where recno=3 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=3 group by pno,style)
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09,mount10,mount11,mount12) 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),4,'在途量'
+	,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount
+	,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount
+	from view_ordcs a group by a.productno,isnull(a.style,'')")
+	
+	delete #tmp2 where recno=4 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=4 group by pno,style)
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09,mount10,mount11,mount12) 
+	select '9',a.noa,MAX(a.product)product,isnull(a.style,''),5,'安全存量'
+	,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount
+	,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount
+	from view_ucaucc a group by a.noa,isnull(a.style,'')")
+	
+	delete #tmp2 where recno=5 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=5 group by pno,style)
+
+	insert #tmp2
+	select '0',pno,MAX(product),style,recno,tit
+	,SUM(mount01),SUM(mount02),SUM(mount03),SUM(mount04),SUM(mount05),SUM(mount06)
+	,SUM(mount07),SUM(mount08),SUM(mount09),SUM(mount10),SUM(mount11),SUM(mount12)
+	from #tmp2 group by pno,style,recno,tit
+	
+	delete #tmp2 where gno='9'
+	
+	--插入不在的標題
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,1,'預測量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=1) group by pno,style
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,2,'訂單量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=2) group by pno,style
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,3,'庫存' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=3) group by pno,style
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,4,'在途量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=4) group by pno,style
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,5,'安全存量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=5) group by pno,style
+	--insert #tmp2(gno,pno,product,recno,tit)
+	--select '0',pno,MAX(product),6,'預測已排產量' from #tmp2 
+	--where pno not in(select pno from #tmp2 where recno=6) group by pno
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,6,'製令未入量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=6) group by pno,style
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,7,'預測已請購量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=7) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09,mount10,mount11,mount12)
+	select '2',pno,MAX(product),style,8,'待排產量' 
+	,case when isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	,case when isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)!=0
+	then isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) else isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) end
+	--case when isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)> isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)
+	--then isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0) else isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0) end
+	-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)
+	-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)
+	-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	from #tmp2 a where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=8) group by pno,style
+
+update #tmp2
+set mount01=case when mount01>0 then mount01 else 0 end
+,mount02=case when mount02>0 then mount02 else 0 end
+,mount03=case when mount03>0 then mount03 else 0 end
+,mount04=case when mount04>0 then mount04 else 0 end
+,mount05=case when mount05>0 then mount05 else 0 end
+,mount06=case when mount06>0 then mount06 else 0 end
+,mount07=case when mount07>0 then mount07 else 0 end
+,mount08=case when mount08>0 then mount08 else 0 end
+,mount09=case when mount09>0 then mount09 else 0 end
+,mount10=case when mount10>0 then mount10 else 0 end
+,mount11=case when mount11>0 then mount11 else 0 end
+,mount12=case when mount12>0 then mount12 else 0 end
+where recno=8
+
+set @moncount=1
+declare @exist_mon nvarchar(10)
+while(@moncount<=12)
+begin
+	set @tmp_moncol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	set @cmd="select @exist_mon="+@tmp_moncol+" from #tmp"
+	exec sp_executesql @cmd,N'@exist_mon nvarchar(10) output',@exist_mon output
+	
+	set @tmp_moncol='mount'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	if(@exist_mon is null)
+		EXEC("update #tmp2 set "+@tmp_moncol+" = null")
+	else
+		EXEC("update #tmp2 set "+@tmp_moncol+" = 0 where "+@tmp_moncol+" is null")
+		
+	set @moncount=@moncount+1
+end
+
+if(@t_showworkg='1')
+	delete #tmp2 where pno+'_'+style in (select pno+'_'+style from #tmp2 where recno=8 and mount01<=0)
+
+if(@t_showforecast='1')
+	delete #tmp2 where pno+'_'+style in (select pno+'_'+style from #tmp2 where recno=1 
+	and (isnull(mount01,0)+isnull(mount02,0)+isnull(mount03,0)+isnull(mount04,0)+isnull(mount05,0)+isnull(mount06,0)
+	+isnull(mount07,0)+isnull(mount08,0)+isnull(mount09,0)+isnull(mount10,0)+isnull(mount11,0)+isnull(mount12,0))=0)
+	
+update #tmp2 set product=(select top 1 product from view_ucaucc where #tmp2.pno=noa ) 
+
+insert #tmp2(gno,pno,style,recno)
+select '1',pno,style,0 from #tmp2 group by pno,style
+
+insert #tmp2(gno,pno,style,recno)
+select '3',pno,style,9 from #tmp2 group by pno,style
+
+select  gno,pno,product,style,recno,tit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount01),1)),4,30)) mount01 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount02),1)),4,30)) mount02 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount03),1)),4,30)) mount03 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount04),1)),4,30)) mount04 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount05),1)),4,30)) mount05 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount06),1)),4,30)) mount06 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount07),1)),4,30)) mount07 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount08),1)),4,30)) mount08 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount09),1)),4,30)) mount09 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount10),1)),4,30)) mount10 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount11),1)),4,30)) mount11 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount12),1)),4,30)) mount12 
+,mon01,mon02,mon03,mon04,mon05,mon06,mon07,mon08,mon09,mon10,mon11,mon12
+from #tmp2,#tmp order by pno,style,recno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+;
+
+--select a.productno,MAX(a.product)product,left(a.datea,6) mon,sum(a.mount)mount
+--,isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where ob.productno=a.productno and (case when oa.mon!='' then oa.mon else left(oa.odate,6) end)=left(a.datea,6)),0) orde
+--,isnull((select SUM(mount) from stkucc(@now_date,'','') where productno=a.productno),0) stk
+--,isnull((select SUM(mount) from ordc where enda!='1' and productno=a.productno),0) sch
+--,isnull((select top 1 safemount from view_ucaucc where noa=a.productno),0) safm
+--from saleforecasts a 
+--where left(a.datea,6) >=@t_mon and left(a.datea,6)<@t_emon
+--and a.productno between @t_bpno and @t_epno
+--group by a.productno,left(a.datea,6)
+
+--****************************************************************************************************
+z_workgv2:--z_workgv2
+--1030604 只顯示6個月
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_bpno nvarchar(90)
+declare @t_epno nvarchar(90)
+declare @t_style nvarchar(90)
+declare @t_showordb nvarchar(90)
+declare @t_showforecast nvarchar(90)
+declare @t_uccgano nvarchar(90)
+declare @t_uccgbno nvarchar(90)
+declare @t_uccgcno nvarchar(90)
+
+set @t_bmon = case when '#non' = [1] then '' else [1] end
+set @t_emon = case when '#non' = [2] then '' else [2] end
+set @t_bpno = case when '#non' = [3] then '' else [3] end
+set @t_epno = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_style = case when '#non' = [7] then '' else [7] end
+set @t_showordb = case when '#non' = [9] then '0' else [9] end
+set @t_showforecast = case when '#non' = [10] then '0' else [10] end
+set @t_uccgano = case when '#non' = [11] then '' else [11] end
+set @t_uccgbno = case when '#non' = [12] then '' else [12] end
+set @t_uccgcno = case when '#non' = [13] then '' else [13] end
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2) 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+
+--月份
+create table #tmp(
+	mon01 nvarchar(10),
+	mon02 nvarchar(10),
+	mon03 nvarchar(10),
+	mon04 nvarchar(10),
+	mon05 nvarchar(10),
+	mon06 nvarchar(10)
+--	,
+--	mon07 nvarchar(10),
+--	mon08 nvarchar(10),
+--	mon09 nvarchar(10),
+--	mon10 nvarchar(10),
+--	mon11 nvarchar(10),
+--	mon12 nvarchar(10)
+)
+
+declare @moncount int=1
+declare @tmp_mon nvarchar(10)=@t_bmon
+declare @tmp_moncol nvarchar(50)
+--while(@tmp_mon<=@t_emon and @moncount<=12)
+while(@tmp_mon<=@t_emon and @moncount<=6)
+begin
+	set @tmp_moncol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+	if(@moncount=1)
+		exec(" insert #tmp ("+@tmp_moncol+") select '"+@tmp_mon+"'")
+	else
+		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
+	
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	
+	set @moncount=@moncount+1
+end
+
+
+create table #tmp2(
+	gno nvarchar(1), 
+	pno nvarchar(100), 
+	product nvarchar(200), 
+	style nvarchar(100),
+	recno int,
+	tit nvarchar(200), 
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float
+--	,
+--	mount07 float,
+--	mount08 float,
+--	mount09 float,
+--	mount10 float,
+--	mount11 float,
+--	mount12 float
+) 
+
+set @moncount=1
+set @tmp_mon =@t_bmon
+while(@tmp_mon<=@t_emon and @moncount<=6)
+begin
+	set @tmp_moncol='mount'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),1,'預測量',sum(a.mount)mount
+	from view_workhs a where left(a.cuadate,6)='"+@tmp_mon+"'
+	and a.productno between '"+@t_bpno+"' and '"+@t_epno+"'
+	group by a.productno,isnull(a.style,'')")
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),2,'製令未領量',sum(a.mount-a.gmount)mount
+	from view_works a where left(a.cuadate,6)<='"+@tmp_mon+"'
+	and a.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ('"+@t_showforecast+"'='0' or a.productno in (select pno from #tmp2))
+	group by a.productno,isnull(a.style,'')")
+
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),3,'訂單未交量',sum(ob.mount-ob.c1)mount
+	from view_orde oa left join view_ordes ob on oa.noa=ob.noa
+	where (case when oa.mon!='' then oa.mon else left(oa.odate,6) end)<='"+@tmp_mon+"'
+	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ob.productno in (select noa from ucc)
+	and ('"+@t_showforecast+"'='0' or ob.productno in (select pno from #tmp2))
+	group by ob.productno,isnull(ob.style,'')")
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),4,'預測已請購量',sum(ob.mount-ob.c1)mount
+	from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa
+	where oa.workgno!='' and (select top 1 left(sfedate,6) from view_workg where CHARINDEX(noa,oa.workgno)>0)<='"+@tmp_mon+"'
+	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ob.productno in (select noa from ucc)
+	and ('"+@t_showforecast+"'='0' or ob.productno in (select pno from #tmp2))
+	group by ob.productno,isnull(ob.style,'')")
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),5,'非預測請購量',sum(ob.mount-ob.c1)mount
+	from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa
+	where isnull(oa.workgno,'')='' and  left(oa.odate,6) <='"+@tmp_mon+"'
+	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ob.productno in (select noa from ucc)
+	and ('"+@t_showforecast+"'='0' or ob.productno in (select pno from #tmp2))
+	group by ob.productno,isnull(ob.style,'')")	
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
+	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),8,'當月採購量',sum(ob.mount-ob.c1)mount
+	from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa
+	where isnull(oa.workgno,'')='' and  left(oa.odate,6) ='"+@tmp_mon+"'
+	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ob.productno in (select noa from ucc)
+	and ('"+@t_showforecast+"'='0' or ob.productno in (select pno from #tmp2))
+	group by ob.productno,isnull(ob.style,'')")	
+
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	
+	set @moncount=@moncount+1
+end
+	if(LEN(@t_style)>0)
+		delete #tmp2 where style!=@t_style
+		
+	if(LEN(@t_uccgano)>0)	
+		delete a from #tmp2 a left join view_ucaucc b on a.pno=b.noa where b.groupano=@t_uccgano
+	if(LEN(@t_uccgbno)>0)	
+		delete a from #tmp2 a left join view_ucaucc b on a.pno=b.noa where b.groupbno=@t_uccgbno
+	if(LEN(@t_uccgcno)>0)	
+		delete a from #tmp2 a left join view_ucaucc b on a.pno=b.noa where b.groupcno=@t_uccgcno
+
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05	,mount06
+	--,mount07,mount08,mount09,mount10,mount11,mount12
+	) 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),6,'庫存'
+	,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount
+	--,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount
+	from stkucc('"+@now_date+"','','') a where ('"+@t_showforecast+"'='0' or a.productno+'_'+isnull(a.style,'') in (select pno+'_'+style from #tmp2)) group by a.productno,isnull(a.style,'')")
+	
+	delete #tmp2 where recno=6 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=6 group by pno+'_'+style)
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06
+	--,mount07,mount08,mount09,mount10,mount11,mount12
+	) 
+	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),7,'在途量'
+	,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount
+	--,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount
+	from view_ordcs a where ('"+@t_showforecast+"'='0' or a.productno+'_'+isnull(a.style,'') in (select pno+'_'+style from #tmp2)) group by a.productno,isnull(a.style,'')")
+	
+	delete #tmp2 where recno=7 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=7 group by pno+'_'+style)
+	
+	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06
+	--,mount07,mount08,mount09,mount10,mount11,mount12
+	) 
+	select '9',a.noa,MAX(a.product)product,isnull(a.style,''),9,'安全存量'
+	,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount
+	--,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount
+	from view_ucaucc a  where ('"+@t_showforecast+"'='0' or a.noa+'_'+isnull(a.style,'') in (select pno+'_'+style from #tmp2)) group by a.noa,isnull(a.style,'')")
+	
+	delete #tmp2 where recno=9 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=9 group by pno+'_'+style)
+	
+	insert #tmp2
+	select '0',pno,MAX(product),style,recno,tit
+	,SUM(mount01),SUM(mount02),SUM(mount03),SUM(mount04),SUM(mount05),SUM(mount06)
+	--,SUM(mount07),SUM(mount08),SUM(mount09),SUM(mount10),SUM(mount11),SUM(mount12)
+	from #tmp2 group by pno,style,recno,tit
+	
+	delete #tmp2 where gno='9'
+	
+	--插入不在的標題
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,1,'預測量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=1) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,2,'製令未領量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=2) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,3,'訂單未交量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=3) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,4,'預測已請購量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=4) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,5,'非預測請購量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=5) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,6,'庫存' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=6) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,7,'在途量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=7) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,8,'當月採購量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=8) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit)
+	select '0',pno,MAX(product),style,9,'安全存量' from #tmp2 
+	where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=9) group by pno,style
+	
+	insert #tmp2(gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06
+	--,mount07,mount08,mount09,mount10,mount11,mount12
+	)
+	select '2',pno,MAX(product),style,10,'待備料量' 
+	,isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount01 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	,isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount02 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	,isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount03 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	,isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount04 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	,isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount05 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	,isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount06 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	--,isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	---isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	---isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount07 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	--,isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	---isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	---isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount08 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	--,isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	---isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	---isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount09 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	--,isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	---isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	---isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount10 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	--,isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	---isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	---isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount11 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	--,isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='1'),0)+isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='2'),0)+isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='3'),0)
+	---isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='4'),0)-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='5'),0)-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='6'),0)
+	---isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='7'),0)-isnull((select mount12 from #tmp2 where pno=a.pno and style=a.style and recno='8'),0)
+	from #tmp2 a where pno+'_'+style not in(select pno+'_'+style from #tmp2 where recno=10) group by pno,style
+
+update #tmp2
+set mount01=case when mount01>0 then mount01 else 0 end
+,mount02=case when mount02>0 then mount02 else 0 end
+,mount03=case when mount03>0 then mount03 else 0 end
+,mount04=case when mount04>0 then mount04 else 0 end
+,mount05=case when mount05>0 then mount05 else 0 end
+,mount06=case when mount06>0 then mount06 else 0 end
+--,mount07=case when mount07>0 then mount07 else 0 end
+--,mount08=case when mount08>0 then mount08 else 0 end
+--,mount09=case when mount09>0 then mount09 else 0 end
+--,mount10=case when mount10>0 then mount10 else 0 end
+--,mount11=case when mount11>0 then mount11 else 0 end
+--,mount12=case when mount12>0 then mount12 else 0 end
+where recno=10
+
+set @moncount=1
+declare @exist_mon nvarchar(10)
+--while(@moncount<=12)
+while(@moncount<=6)
+begin
+	set @tmp_moncol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	set @cmd="select @exist_mon="+@tmp_moncol+" from #tmp"
+	exec sp_executesql @cmd,N'@exist_mon nvarchar(10) output',@exist_mon output
+	
+	set @tmp_moncol='mount'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	if(@exist_mon is null)
+		EXEC("update #tmp2 set "+@tmp_moncol+" = null")
+	else
+		EXEC("update #tmp2 set "+@tmp_moncol+" = 0 where "+@tmp_moncol+" is null")
+		
+	
+	set @moncount=@moncount+1
+end
+
+if(@t_showordb='1')
+	delete #tmp2 where pno+'_'+style in (select pno+'_'+style from #tmp2 where recno=10 and mount01<=0)
+	
+update #tmp2 set product=isnull((select top 1 product from view_ucaucc where #tmp2.pno=noa),'')
+
+insert #tmp2(gno,pno,style,recno)
+select '1',pno,style,0 from #tmp2 group by pno,style
+
+insert #tmp2(gno,pno,style,recno)
+select '3',pno,style,11 from #tmp2 group by pno,style
+
+select  gno,pno,product,style,recno,tit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount01),1)),4,30)) mount01 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount02),1)),4,30)) mount02 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount03),1)),4,30)) mount03 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount04),1)),4,30)) mount04 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount05),1)),4,30)) mount05 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount06),1)),4,30)) mount06 
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount07),1)),4,30)) mount07 
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount08),1)),4,30)) mount08 
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount09),1)),4,30)) mount09 
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount10),1)),4,30)) mount10 
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount11),1)),4,30)) mount11 
+--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount12),1)),4,30)) mount12 
+,mon01,mon02,mon03,mon04,mon05,mon06--,mon07,mon08,mon09,mon10,mon11,mon12
+from #tmp2,#tmp order by pno,style,recno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+;
+
+--select a.productno,MAX(a.product)product,left(a.cuadate,6) mon,sum(a.mount)mount
+--,SUM(a.mount-a.gmount) emount
+--,isnull((select SUM(ob.mount-ob.c1) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where ob.productno=a.productno and (case when oa.mon!='' then oa.mon else left(oa.odate,6) end)=left(a.cuadate,6)),0) orde
+--,isnull((select SUM(ob.mount) from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa where oa.workgno!='' and ob.productno=a.productno and (select top 1 left(sfedate,6) from view_workg where CHARINDEX(noa,oa.workgno)>0)=left(a.cuadate,6)),0) sordb
+--,isnull((select SUM(ob.mount) from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa where isnull(oa.workgno,'')='' and ob.productno=a.productno and left(oa.odate,6)=left(a.cuadate,6)),0) uordb
+--,isnull((select SUM(mount) from stkucc(@now_date,'','') where productno=a.productno),0) stk
+--,isnull((select SUM(mount) from ordc where enda!='1' and productno=a.productno),0) sch
+--,isnull((select top 1 safemount from view_ucaucc where noa=a.productno),0) safm
+--from view_workhs a 
+--group by a.productno,left(a.cuadate,6)
+
+--****************************************************************************************************
+z_workgv3:--z_workgv3
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_bpno nvarchar(90)
+declare @t_epno nvarchar(90)
+declare @t_btggno nvarchar(90)
+declare @t_etggno nvarchar(90)
+declare @t_style nvarchar(90)
+declare @t_uccgano nvarchar(90)
+declare @t_uccgbno nvarchar(90)
+declare @t_uccgcno nvarchar(90)
+
+set @t_bmon = case when '#non' = [1] then '' else [1] end
+set @t_emon = case when '#non' = [2] then '' else [2] end
+set @t_bpno = case when '#non' = [3] then '' else [3] end
+set @t_epno = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_style = case when '#non' = [7] then '' else [7] end
+set @t_uccgano = case when '#non' = [11] then '' else [11] end
+set @t_uccgbno = case when '#non' = [12] then '' else [12] end
+set @t_uccgcno = case when '#non' = [13] then '' else [13] end
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2) 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpb')is not null
+BEGIN
+	set @cmd = 'drop table #tmpb'
+	EXECUTE sp_executesql @cmd
+END
+
+--月份
+create table #tmp(
+	mon01 nvarchar(10),
+	mon02 nvarchar(10),
+	mon03 nvarchar(10),
+	mon04 nvarchar(10),
+	mon05 nvarchar(10),
+	mon06 nvarchar(10)
+)
+
+declare @moncount int=1
+declare @tmp_mon nvarchar(10)=@t_bmon
+declare @tmp_moncol nvarchar(50)
+while(@tmp_mon<=@t_emon and @moncount<=6)
+begin
+	set @tmp_moncol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+	if(@moncount=1)
+		exec(" insert #tmp ("+@tmp_moncol+") select '"+@tmp_mon+"'")
+	else
+		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
+	
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	
+	set @moncount=@moncount+1
+end
+
+create table #tmpa(
+	cuano nvarchar(100),
+	cuanoq nvarchar(100),
+	datea nvarchar(10),
+	tggno nvarchar(100),
+	pno nvarchar(100), 
+	style nvarchar(100),
+	amount float,
+	mount float,
+	ucasmount float
+)
+
+--預測製令
+insert #tmpa
+select a.cuano,a.cuanoq,a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,b.mount/a.mount
+from view_workh a left join view_workhs b on a.noa=b.noa 
+left join ucc c on b.productno=c.noa
+where (left(a.uindate,6) between @t_bmon and @t_emon)
+and b.productno between @t_bpno and @t_epno
+and (len(@t_style)=0 or isnull(b.style,'')=@t_style)
+and c.noa!='' and isnull(c.tggno,'')!=''
+and (isnull(c.tggno,'') between @t_btggno and @t_etggno)
+and (len(@t_uccgano)=0 or isnull(c.groupano,'')=@t_uccgano)
+and (len(@t_uccgbno)=0 or isnull(c.groupbno,'')=@t_uccgbno)
+and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
+
+--目前製令(含模擬)
+insert #tmpa
+select a.cuano,a.cuanoq,a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,b.mount/a.mount
+from view_work a left join view_works b on a.noa=b.noa 
+left join ucc c on b.productno=c.noa
+where (left(a.uindate,6) between @t_bmon and @t_emon)
+and b.productno between @t_bpno and @t_epno
+and (len(@t_style)=0 or isnull(b.style,'')=@t_style)
+and c.noa!='' and isnull(c.tggno,'')!=''
+and (isnull(c.tggno,'') between @t_btggno and @t_etggno)
+and (len(@t_uccgano)=0 or isnull(c.groupano,'')=@t_uccgano)
+and (len(@t_uccgbno)=0 or isnull(c.groupbno,'')=@t_uccgbno)
+and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
+
+--訂單
+--insert #tmpa
+--select '','',b.datea,c.tggno,b.productno,isnull(b.style,''),b.mount-b.c1,b.mount-b.c1,1
+--from view_orde a left join view_ordes b on a.noa=b.noa 
+--left join ucc c on b.productno=c.noa
+--where (left(b.datea,6) between @t_bmon and @t_emon)
+--and b.productno between @t_bpno and @t_epno
+--and (len(@t_style)=0 or isnull(b.style,'')=@t_style)
+--and c.noa!='' and isnull(c.tggno,'')!=''
+--and (isnull(c.tggno,'') between @t_btggno and @t_etggno)
+--and (len(@t_uccgano)=0 or isnull(c.groupano,'')=@t_uccgano)
+--and (len(@t_uccgbno)=0 or isnull(c.groupbno,'')=@t_uccgbno)
+--and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
+
+--不更新ucasmount 為 製令最小用量
+
+--依製令的用量
+--update a
+--set ucasmount=(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,6)=left(a.datea,6) and cuano=a.cuano and cuanoq=a.cuanoq)
+--,mount=mount/(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,6)=left(a.datea,6) and cuano=a.cuano  and cuanoq=a.cuanoq)
+--from #tmpa a
+
+--依機型的總用量
+update a
+set ucasmount=round(isnull((select sum(mount)/sum(amount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style),0),2)
+,amount=mount/round((select sum(mount)/sum(amount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style ),2)
+from #tmpa a
+
+create table #tmpb(
+	gno nvarchar(1),
+	tggno nvarchar(100),
+	tgg nvarchar(100),
+	pno nvarchar(100),
+	product nvarchar(100),
+	style nvarchar(100),
+	stdmount float,--標準包裝量
+	smount float,--最低庫存
+	hmount float,--最高庫存
+	minmount float,--最低採購
+	bmount float,--期初庫存
+	ucasmount float,--用量
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float,
+	mount float,
+	rdate01 nvarchar(10),--進料日期
+	rdate02 nvarchar(10),
+	rdate03 nvarchar(10),
+	rdate04 nvarchar(10),
+	rdate05 nvarchar(10),
+	rdate06 nvarchar(10),
+	rmount01 float,--進料數量
+	rmount02 float,
+	rmount03 float,
+	rmount04 float,
+	rmount05 float,
+	rmount06 float,
+	rmount float,
+	tmount01 float,--結存
+	tmount02 float,
+	tmount03 float,
+	tmount04 float,
+	tmount05 float,
+	tmount06 float,
+	tmount float
+)
+
+insert #tmpb(gno,tggno,pno,style,ucasmount)
+select '0',tggno,pno,style,ucasmount from #tmpa group by tggno,pno,style,ucasmount
+
+declare	@tggno nvarchar(100)
+declare @pno nvarchar(100)
+declare @style nvarchar(100)
+declare @ucasmount nvarchar(50)
+
+set @moncount=1
+set @tmp_mon =@t_bmon
+while(@tmp_mon<=@t_emon and @moncount<=6)
+begin
+	set @tmp_moncol=right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	declare cursor_table cursor for
+	select tggno,pno,style,cast(ucasmount as nvarchar(50)) from #tmpa group by tggno,pno,style,ucasmount
+	open cursor_table
+	fetch next from cursor_table
+	into @tggno,@pno,@style,@ucasmount
+	while(@@FETCH_STATUS <> -1)
+	begin
+	
+		EXEC("update #tmpb 
+		set mount"+@tmp_moncol+"=(select sum(amount) from #tmpa where left(datea,6)='"+@tmp_mon+"' and tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"')
+		where tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"'")
+		
+		fetch next from cursor_table
+		into @tggno,@pno,@style,@ucasmount
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @moncount=@moncount+1
+end
+
+update #tmpb
+set mount=isnull(mount01,0)+isnull(mount02,0)+isnull(mount03,0)+isnull(mount04,0)+isnull(mount05,0)+isnull(mount06,0)
+
+insert #tmpb(gno,tggno,pno,mount,mount01,mount02,mount03,mount04,mount05,mount06)
+select '1',tggno,pno
+,sum((isnull(mount01,0)+isnull(mount02,0)+isnull(mount03,0)+isnull(mount04,0)+isnull(mount05,0)+isnull(mount06,0))*isnull(ucasmount,0))
+,sum(isnull(mount01,0)*isnull(ucasmount,0)),sum(isnull(mount02,0)*isnull(ucasmount,0)),sum(isnull(mount03,0)*isnull(ucasmount,0)),sum(isnull(mount04,0)*isnull(ucasmount,0)),sum(isnull(mount05,0)*isnull(ucasmount,0)),sum(isnull(mount06,0)*isnull(ucasmount,0)) 
+from #tmpb group by tggno,pno
+
+update a
+set tgg=case when isnull(c.nick,'')!='' then c.nick else LEFT(c.comp,4) end
+,product=b.product,stdmount=isnull(b.stdmount,0),smount=b.safemount
+,minmount=(select top 1 minmount from ucctgg where productno=a.pno and tggno=a.tggno)
+,bmount=isnull((select sum(mount) from stkucc(@now_date,'','') where productno=a.pno),0)
+from #tmpb a left join ucc b on a.pno=b.noa
+left join tgg c on a.tggno=c.noa
+
+set @moncount=1
+set @tmp_mon =@t_bmon
+declare @tmp_pmoncol nvarchar(50)
+while(@tmp_mon<=@t_emon and @moncount<=6)
+begin
+	set @tmp_moncol=right('00'+cast(@moncount as nvarchar(10)),2)
+	set @tmp_pmoncol=right('00'+cast(@moncount-1 as nvarchar(10)),2)
+	
+	EXEC("update a
+	set rdate"+@tmp_moncol+"=isnull((select MAX(trandate) from view_ordcs where left(trandate,6)='"+@tmp_mon+"' and productno=a.pno),'"+@tmp_mon+"'+'/01')
+	,rmount"+@tmp_moncol+"=isnull((select SUM(mount) from view_ordcs where left(trandate,6)='"+@tmp_mon+"' and productno=a.pno),0)
+	from #tmpb a where gno='1'")
+	
+	if(@moncount=1)
+	begin
+		EXEC("update a
+		set tmount"+@tmp_moncol+"=bmount-mount"+@tmp_moncol+"+rmount"+@tmp_moncol+"
+		from #tmpb a where gno='1'")
+	end
+	else
+	begin
+		EXEC("update a
+		set tmount"+@tmp_moncol+"=tmount"+@tmp_pmoncol+"-mount"+@tmp_moncol+"+rmount"+@tmp_moncol+"
+		from #tmpb a where gno='1'")
+	end
+		
+	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
+	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
+	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @moncount=@moncount+1
+end
+
+update #tmpb
+set rmount=isnull(rmount01,0)+isnull(rmount02,0)+isnull(rmount03,0)+isnull(rmount04,0)+isnull(rmount05,0)+isnull(rmount06,0)
+,tmount=tmount06
+
+select DENSE_RANK() over(order by tggno,pno) recno,
+dbo.getComma(stdmount,case when round(stdmount,4) != cast(stdmount as decimal(18, 0)) then 2 else 0 end)stdmount,
+dbo.getComma(smount,case when round(smount,4) != cast(smount as decimal(18, 0)) then 2 else 0 end)smount,
+dbo.getComma(hmount,case when round(hmount,4) != cast(hmount as decimal(18, 0)) then 2 else 0 end)hmount,
+dbo.getComma(minmount,case when round(minmount,4) != cast(minmount as decimal(18, 0)) then 2 else 0 end)minmount,
+dbo.getComma(bmount,case when round(bmount,4) != cast(bmount as decimal(18, 0)) then 2 else 0 end)bmount,
+dbo.getComma(ucasmount,case when round(ucasmount,4) != cast(ucasmount as decimal(18, 0)) then 2 else 0 end)ucasmount,
+dbo.getComma(mount01,case when round(mount01,4) != cast(mount01 as decimal(18, 0)) then 2 else 0 end)mount01,
+dbo.getComma(mount02,case when round(mount02,4) != cast(mount02 as decimal(18, 0)) then 2 else 0 end)mount02,
+dbo.getComma(mount03,case when round(mount03,4) != cast(mount03 as decimal(18, 0)) then 2 else 0 end)mount03,
+dbo.getComma(mount04,case when round(mount04,4) != cast(mount04 as decimal(18, 0)) then 2 else 0 end)mount04,
+dbo.getComma(mount05,case when round(mount05,4) != cast(mount05 as decimal(18, 0)) then 2 else 0 end)mount05,
+dbo.getComma(mount06,case when round(mount06,4) != cast(mount06 as decimal(18, 0)) then 2 else 0 end)mount06,
+dbo.getComma(mount,case when round(mount,4) != cast(mount as decimal(18, 0)) then 2 else 0 end)mount,
+dbo.getComma(rmount01,case when round(rmount01,4) != cast(rmount01 as decimal(18, 0)) then 2 else 0 end)rmount01,
+dbo.getComma(rmount02,case when round(rmount02,4) != cast(rmount02 as decimal(18, 0)) then 2 else 0 end)rmount02,
+dbo.getComma(rmount03,case when round(rmount03,4) != cast(rmount03 as decimal(18, 0)) then 2 else 0 end)rmount03,
+dbo.getComma(rmount04,case when round(rmount04,4) != cast(rmount04 as decimal(18, 0)) then 2 else 0 end)rmount04,
+dbo.getComma(rmount05,case when round(rmount05,4) != cast(rmount05 as decimal(18, 0)) then 2 else 0 end)rmount05,
+dbo.getComma(rmount06,case when round(rmount06,4) != cast(rmount06 as decimal(18, 0)) then 2 else 0 end)rmount06,
+dbo.getComma(rmount,case when round(rmount,4) != cast(rmount as decimal(18, 0)) then 2 else 0 end)rmount,
+dbo.getComma(tmount01,case when round(tmount01,4) != cast(tmount01 as decimal(18, 0)) then 2 else 0 end)tmount01,
+dbo.getComma(tmount02,case when round(tmount02,4) != cast(tmount02 as decimal(18, 0)) then 2 else 0 end)tmount02,
+dbo.getComma(tmount03,case when round(tmount03,4) != cast(tmount03 as decimal(18, 0)) then 2 else 0 end)tmount03,
+dbo.getComma(tmount04,case when round(tmount04,4) != cast(tmount04 as decimal(18, 0)) then 2 else 0 end)tmount04,
+dbo.getComma(tmount05,case when round(tmount05,4) != cast(tmount05 as decimal(18, 0)) then 2 else 0 end)tmount05,
+dbo.getComma(tmount06,case when round(tmount06,4) != cast(tmount06 as decimal(18, 0)) then 2 else 0 end)tmount06,
+dbo.getComma(tmount,case when round(tmount,4) != cast(tmount as decimal(18, 0)) then 2 else 0 end)tmount,
+* from #tmpb,#tmp order by tggno,pno,gno,style
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpb')is not null
+BEGIN
+	set @cmd = 'drop table #tmpb'
+	EXECUTE sp_executesql @cmd
+END
+;

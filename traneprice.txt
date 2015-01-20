@@ -1,0 +1,75 @@
+edit:--edit
+	--修改出車單單價,交運日期一定要輸入才會執行,單價必須大於0才會異動	
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_noa nvarchar(20) =[1]
+
+	declare @t_btrandate nvarchar(10)='',@t_etrandate nvarchar(10)=''
+		,@t_custno nvarchar(20)='',@t_driverno nvarchar(20)=''
+		,@t_carno nvarchar(20)='',@t_calctype nvarchar(20)=''
+		,@t_straddrno nvarchar(20) = ''
+		,@t_inprice float = 0,@t_outprice float = 0
+
+	select @t_btrandate=bdate,@t_etrandate=edate,@t_custno=custno,@t_driverno=driverno
+		,@t_carno=carno,@t_calctype=calctype,@t_straddrno=straddrno
+		,@t_inprice = inprice,@t_outprice = outprice
+	from traneprice where noa=@t_noa
+
+	if LEN(isnull(@t_btrandate,''))=0 or LEN(isnull(@t_etrandate,''))=0
+	begin
+		select '交運日期異常!' msg
+		return
+	end	
+	declare @tmp table(
+		accy nvarchar(10),
+		noa nvarchar(20),
+		isoutside bit,
+		price float,
+		price2 float,
+		price3 float
+	)	
+	insert into @tmp(accy,noa,isoutside,price,price2,price3)
+	select a.accy,a.noa,b.isoutside,a.price,a.price2,a.price3
+	from view_trans a
+	left join calctypes b on a.calctype=b.noa+b.noq
+	where ISNULL(a.trandate,'') between @t_btrandate and @t_etrandate
+	and (len(@t_custno)=0 or (len(@t_custno)>0 and a.custno=@t_custno))
+	and (len(@t_driverno)=0 or (len(@t_driverno)>0 and a.driverno=@t_driverno))
+	and (len(@t_carno)=0 or (len(@t_carno)>0 and a.carno=@t_carno))
+	and (len(@t_straddrno)=0 or (len(@t_straddrno)>0 and a.straddrno=@t_straddrno))
+	and (len(@t_calctype)=0 or (@t_calctype='1' and isnull(b.isoutside,0)=0) or (@t_calctype='2' and isnull(b.isoutside,0)=1))
+	-----------------------------------------------------------------------------------
+	declare @cmd nvarchar(max)
+	declare @accy nvarchar(10)
+	declare @noa nvarchar(20)
+	declare @isoutside bit
+	declare @price float
+	declare @price2 float
+	declare @price3 float
+	
+	declare cursor_table cursor for
+	select accy,noa,isoutside,price,price2,price3 from @tmp 
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@noa,@isoutside,@price,@price2,@price3
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		set @price = case when isnull(@t_inprice,0)>0 then @t_inprice else @price end
+		set @price2 = case when isnull(@t_outprice,0)>0 and ISNULL(@isoutside,0)=0 then @t_outprice else @price2 end
+		set @price3 = case when isnull(@t_outprice,0)>0 and ISNULL(@isoutside,0)=1 then @t_outprice else @price3 end	
+		set @cmd = 
+		"update trans"+@accy+" set price = @price 
+			,price2 = @price2
+			,price3 = @price3
+			,total = round(a.mount*@price,0) 
+			,total2 =  round(a.mount2*discount*(@price2+@price3),0) 
+		from trans"+@accy+" a where a.noa=@noa"
+		execute sp_executesql @cmd,N'@noa nvarchar(20),@isoutside bit,@price float,@price2 float,@price3 float,@t_inprice float,@t_outprice float'
+		,@noa=@noa,@isoutside=@isoutside,@price=@price,@price2=@price2,@price3=@price3,@t_inprice=@t_inprice,@t_outprice=@t_outprice
+		
+		fetch next from cursor_table
+		into @accy,@noa,@isoutside,@price,@price2,@price3
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select '異動 '+cast(count(1) as nvarchar)+' 筆!' msg from @tmp;

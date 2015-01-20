@@ -1,0 +1,342 @@
+z_workkp1:--z_workkp1
+
+declare @t_noa nvarchar(50)
+set @t_noa = case when '#non' = [2] then '' else [2] end
+--*********************************************************************
+declare @tmp table(
+	gno nvarchar(1),
+	a_typea nvarchar(30),
+	a_noa nvarchar(30),
+	a_datea nvarchar(10),
+	a_stationno nvarchar(50),
+	a_station nvarchar(100),
+	a_storeno nvarchar(50),
+	a_store nvarchar(100),
+	a_srinno nvarchar(50),
+	a_srin nvarchar(100),
+	a_memo nvarchar(MAX),
+	b_noq nvarchar(50),
+	b_pno nvarchar(50),
+	b_product nvarchar(100),
+	b_unit nvarchar(20),
+	b_mount float,
+	b_memo nvarchar(MAX),
+	b_workno nvarchar(30)
+)
+
+insert @tmp 
+select '0',a.typea,a.noa,a.datea,a.stationno,a.station,a.storeno,a.store,a.storeinno,a.storein,a.memo
+,b.noq,b.productno,b.product,b.unit,b.mount,b.memo,b.workno 
+from view_workk a left join view_workks b on a.noa=b.noa
+where (len(@t_noa)=0 or a.noa=@t_noa)
+
+insert @tmp (gno,a_typea,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo)
+select '1',a_typea,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo
+from @tmp group by a_typea,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo
+
+select gno,a_noa,a_datea,a_stationno,a_station,a_storeno,a_store,a_srinno,a_srin,a_memo
+--,(case when a_typea='1' then '調撥' else '抵扣料' end) typea
+,b_noq,b_pno,b_product,b_unit,b_memo,b_workno
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,b_mount),1)),0,30)) b_mount
+from @tmp order by a_noa,gno,b_noq
+;
+-------------------------------------------------------------------------------------------------------------------------------------------
+z_workkp2:--z_workkp2
+
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(50)
+declare @t_estationno nvarchar(50)
+declare @t_bstationgno nvarchar(50)
+declare @t_estationgno nvarchar(50)
+declare @t_bpno nvarchar(50)
+declare @t_epno nvarchar(50)
+
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstationno = case when '#non' = [5] then '' else [5] end
+set @t_estationno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bstationgno = case when '#non' = [7] then '' else [7] end
+set @t_estationgno = case when '#non' = [8] then CHAR(255) else [8] end
+set @t_bpno = case when '#non' = [9] then '' else [9] end
+set @t_epno = case when '#non' = [10] then CHAR(255) else [10] end
+
+declare @t_stkdate nvarchar(30) --倉庫運算日期
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+
+
+--*********************************************************************
+declare @store table( 
+	sno nvarchar(MAX), 
+	pno nvarchar(50), 
+	mount float
+) 
+
+insert @store
+select storeno,productno,mount from stkucc(@t_stkdate,'','')
+where (productno between @t_bpno and @t_epno)
+
+declare @tmp table(
+	gno nvarchar(1),
+	stationno nvarchar(50),
+	station nvarchar(100),
+	pno nvarchar(50),
+	product nvarchar(100),
+	gmount float,
+	inmount float,
+	unmount float,
+	smount float,
+	stmount float, 
+	diffmount float,
+	scmount float
+)
+
+insert @tmp 
+	select
+		'0',a.stationno,a.station,b.productno,MAX(b.product)
+		,isnull(round(SUM(isnull(b.mount,0)),2),0) mount
+		,isnull(round(SUM(isnull(b.gmount,0)),2),0) inmount
+		,isnull(round(SUM(case when isnull(b.emount,0)=0 and isnull(b.gmount,0)=0 then isnull(b.mount,0) else isnull(b.emount,0) end),2),0) unmount
+		,isnull((select SUM(mount) mount from @store where pno=b.productno and sno=c.storeno),0) 
+		,isnull((select SUM(mount) mount from @store where pno=b.productno),0),0,0
+	from view_work a
+	left join view_works b on a.noa=b.noa
+	left join station c on a.stationno=c.noa 
+	where (isnull(a.enda,0)!='1') and (a.stationno!='')
+		and (a.cuadate between @t_bdate and @t_edate)
+		and (a.stationno between @t_bstationno and @t_estationno)
+		and (c.stationgno between @t_bstationgno and @t_estationgno)
+		and (b.productno between @t_bpno and @t_epno)
+		and isnull(a.tggno,'')='' 
+		and (isnull(a.isfreeze,0)!= '1')
+		and a.noa like 'W[0-9]%'
+		--and left(a.noa,2)!='WJ'
+	group by a.stationno,a.station,b.productno,c.storeno
+	
+update @tmp set scmount=smount-unmount
+update @tmp set scmount=0 where scmount<0
+	
+update @tmp set diffmount=-1*(smount-unmount)
+update @tmp set diffmount=0 where diffmount<0
+
+update @tmp set stmount=stmount-smount
+
+delete @tmp where unmount=0
+
+select
+	gno,ROW_NUMBER()over(order by gno,stationno,pno) recno,stationno,station,pno,product
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gmount),1)),0,30)) gmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,unmount),1)),0,30)) unmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),0,30)) smount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stmount),1)),0,30)) stmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,scmount),1)),0,30)) scmount
+from @tmp order by gno,stationno,pno
+;
+----------------------------------------------------------------------------------------------------------*
+z_workkp3:--z_workkp3
+declare @t_noa nvarchar(50) = case when '#non' = [2] then '' else [2] end
+declare @t_bstationno nvarchar(50) = case when '#non' = [5] then '' else [5] end
+declare @t_estationno nvarchar(50) = case when '#non' = [6] then char(255) else [6] end
+------------報表設定<<Start>>------------
+declare @pageline int = 7 --每頁幾行
+------------報表設定<<End>>------------
+declare @tmp table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	pageno int,
+	noapageno int,
+	noatotpno int,
+	recno int,
+	stationno nvarchar(50),
+	stations nvarchar(90),
+	datea nvarchar(10),
+	noa nvarchar(50),
+	instoreno nvarchar(50),
+	instores nvarchar(90),
+	outstoreno nvarchar(50),
+	outstores nvarchar(90),
+	productno nvarchar(max),
+	products nvarchar(max),
+	spec nvarchar(max),
+	unit nvarchar(15),
+	amount float,
+	rackmount float,
+	memo nvarchar(max)
+)
+insert into @tmp
+	select
+		'0' gno,0 pageno,0 noapageno,0 noatotpno,0 recno,
+		a.stationno,a.station,a.datea,a.noa,a.storeinno,a.storein,a.storeno,a.store,
+		b.productno,b.product,b.spec,b.unit,b.mount,0 rackmount,b.memo
+	from view_workk a
+	left join view_workks b on (a.noa=b.noa)
+	where (len(@t_noa)=0 or a.noa=@t_noa) and
+		  (a.stationno between @t_bstationno and @t_estationno)
+	order by a.noa,b.noq
+------gno-> 1=空白行,2=加總
+declare @idno int
+declare @noa nvarchar(50)
+declare @pageno int
+declare @recCount int
+declare @noapageno int
+------------更新頁數<<Start>>------------
+declare @pageno_int int = 0
+declare @lastidno int
+declare @lastnoa nvarchar(50) = ''
+declare cursor_table cursor for
+	select idno,noa from @tmp order by idno
+open cursor_table
+fetch next from cursor_table
+into @idno,@noa
+while(@@FETCH_STATUS <> -1)
+begin
+	if((@recCount > @pageline) or (@noa != @lastnoa))
+	begin
+		if(@noa != @lastnoa)
+			set @noapageno = 1
+		else if((@recCount > @pageline))
+			set @noapageno = @noapageno + 1
+		set @pageno_int = @pageno_int+1
+		set @recCount = 1
+	end
+	update @tmp set pageno=@pageno_int,recno=@recCount,noapageno=@noapageno where idno=@idno
+	set @lastnoa = @noa
+	set @recCount = @recCount+1
+	fetch next from cursor_table
+	into @idno,@noa
+end
+close cursor_table
+deallocate cursor_table
+------------更新頁數<<End>>-------------
+------------插入空白行<<Start>>------------
+set @recCount = 0
+declare cursor_table cursor for
+	select pageno,noapageno,noa,max(recno) from @tmp where (gno='0') group by pageno,noapageno,noa
+open cursor_table
+fetch next from cursor_table
+into @pageno,@noapageno,@noa,@recCount
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@recCount<@pageline)
+	begin
+		while(@recCount<@pageline)
+		begin
+			set @recCount = @recCount+1
+			insert into @tmp(gno,noa,pageno,noapageno,recno)
+				values('1',@noa,@pageno,@noapageno,@recCount)
+		end
+	end
+	fetch next from cursor_table
+	into @pageno,@noapageno,@noa,@recCount
+end
+close cursor_table
+deallocate cursor_table
+------------插入空白行<<End>>-------------
+------------插入合計<<Start>>-------------
+insert into @tmp(gno,noa,pageno,noapageno,recno,amount,rackmount)
+	select
+		'2' gno,noa,pageno,noapageno,max(recno)+1,b.amount,b.rackmount
+	from @tmp a
+	outer apply(select sum(amount) amount,sum(rackmount) rackmount from @tmp where (gno='0') and (noa=a.noa)) b
+	group by noa,pageno,noapageno,b.amount,b.rackmount
+------------插入合計<<End>>-------------
+update a
+	set noatotpno = b.pageno
+from @tmp a
+outer apply(select max(noapageno) pageno from @tmp where a.noa=noa) b
+select
+	a.gno,a.idno,a.pageno,a.noapageno npno1,a.noatotpno npno2,a.recno,
+	a.stationno,a.stations,a.datea,a.noa,a.instoreno,a.instores,a.outstoreno,a.outstores,
+	a.productno,a.products,a.spec,a.unit,a.amount,a.rackmount,a.memo,
+	isnull(a.instoreno,'') + '→' + isnull(a.outstoreno,'') usestore
+from @tmp a
+order by a.pageno,a.gno,a.recno;
+----------------------------------------------------------------------------------------------------------*
+z_workkp4:--z_workkp4
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(50)
+declare @t_estationno nvarchar(50)
+declare @t_bstationgno nvarchar(50)
+declare @t_estationgno nvarchar(50)
+declare @t_bpno nvarchar(50)
+declare @t_epno nvarchar(50)
+
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstationno = case when '#non' = [5] then '' else [5] end
+set @t_estationno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bstationgno = case when '#non' = [7] then '' else [7] end
+set @t_estationgno = case when '#non' = [8] then CHAR(255) else [8] end
+set @t_bpno = case when '#non' = [9] then '' else [9] end
+set @t_epno = case when '#non' = [10] then CHAR(255) else [10] end
+
+declare @t_stkdate nvarchar(30) --倉庫運算日期
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+
+
+--*********************************************************************
+declare @store table( 
+	sno nvarchar(MAX), 
+	pno nvarchar(50), 
+	mount float
+) 
+
+insert @store
+select storeno,productno,mount from stkucc(@t_stkdate,'','')
+where (productno between @t_bpno and @t_epno) 
+
+declare @tmp table(
+	gno nvarchar(1),
+	recno nvarchar(10),
+	cuadate nvarchar(10),
+	workno nvarchar(90),
+	stationno nvarchar(50),
+	station nvarchar(100),
+	pno nvarchar(50),
+	product nvarchar(100),
+	gmount float,
+	inmount float,
+	unmount float,
+	smount float,
+	stmount float, 
+	diffmount float
+)
+
+insert @tmp (gno,recno,cuadate,workno,stationno,station,pno,product,gmount,inmount,unmount) 
+select '0',ROW_NUMBER() over(Partition by a.stationno order by a.stationno,b.productno) recno,a.cuadate,a.noa,a.stationno,a.station,b.productno,b.product	,isnull(b.mount,0) mount ,isnull(b.gmount,0) inmount
+,case when isnull(b.emount,0)=0 and isnull(b.gmount,0)=0 then isnull(b.mount,0) else isnull(b.emount,0) end unmount
+from view_work a left join view_works b on a.noa=b.noa left join station c on a.stationno=c.noa 
+where (isnull(a.enda,0)!='1') and (a.stationno!='') and (a.cuadate between @t_bdate and @t_edate)
+and (a.stationno between @t_bstationno and @t_estationno)
+and (b.productno between @t_bpno and @t_epno)
+and (c.stationgno between @t_bstationgno and @t_estationgno)
+and isnull(a.tggno,'')='' and (isnull(a.isfreeze,0)!= '1')
+and a.noa like 'W[0-9]%' 
+--and left(a.noa,2)!='WJ'
+
+insert @tmp (gno,stationno,station,pno,product,gmount,inmount,unmount,smount,stmount,diffmount)
+select '1',a.stationno,MAX(a.station),pno,MAX(product),sum(gmount),sum(inmount),sum(unmount)
+,isnull((select SUM(mount) mount from @store where pno=a.pno and sno=b.storeno),0)
+,isnull((select SUM(mount) mount from @store where pno=a.pno),0),0
+from @tmp a left join station b on a.stationno=b.noa  group by a.stationno,a.pno,b.storeno
+
+update @tmp set diffmount=-1*(smount-unmount) where gno='1'
+update @tmp set diffmount=0 where diffmount<0 and gno='1'
+
+insert @tmp (gno,stationno,station,pno)
+select '2',stationno,MAX(station),CHAR(255) from @tmp group by stationno
+
+select gno,recno,cuadate,workno,stationno,station,pno,product
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gmount),1)),0,30)) gmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,unmount),1)),0,30)) unmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),0,30)) smount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stmount),1)),0,30)) stmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
+from @tmp order by stationno,pno,gno
+;

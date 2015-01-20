@@ -1,0 +1,347 @@
+z_acx1:--z_acx1
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_stype nvarchar(90)
+declare @t_kind nvarchar(20)
+declare @t_xmon nvarchar(20)
+
+set @t_stype = case when '#non' = '[2]' then '' else '[2]' end
+set @t_kind = case when '#non' = [3] then '' else [3] end
+set @t_xmon = case when '#non' = [4] then '' else [4] end
+--**************************************************************
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#stype')is not null
+	BEGIN
+		set @cmd = 'drop table #stype'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #stype(
+		noa nvarchar(20),
+		stype nvarchar(20)
+	)
+	set @string = @t_stype
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #stype select left(@string,charindex('@',@string)-1),right(@string,len(@string)-charindex('@',@string))
+			end
+			break
+		end
+		insert into #stype select left(@string,charindex('@',@string)-1),substring(@string,charindex('@',@string)+1,charindex(',',@string)-charindex('@',@string)-1)
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+--------------------------------------------------------------------------------------------------------------------
+declare @tmp table( 
+	gno nvarchar(10), 
+	stypeno nvarchar(50),
+	stype nvarchar(50),
+	productno nvarchar(MAX),
+	wbegin float,
+	w1 float,
+	w2 float,
+	w3 float,
+	w4 float,
+	w5 float,
+	w6 float,
+	w7 float,
+	w8 float,
+	w9 float,
+	w10 float,
+	w11 float,
+	w12 float,
+	w13 float,
+	w14 float,
+	w15 float,
+	w16 float,
+	w17 float,
+	w18 float,
+	w19 float,
+	w20 float,
+	wend float
+)
+ 
+ insert  @tmp (gno,stypeno,stype,productno)
+ select '0',b.noa,b.stype,a.noa from ucc a , #stype b 
+
+ --炳圳:不會有盤點,全部資料拉出來
+ declare @tmpa table( 
+ 	tablea nvarchar(50),
+ 	datea nvarchar(50),
+	stype nvarchar(50),
+	typea nvarchar(50),
+	productno nvarchar(MAX),
+	weight float
+)
+
+--退貨W2(2),進貨W1(1)
+insert @tmpa
+select 'rc2s',a.datea,'1',a.typea,b.productno,b.weight
+from view_rc2 a left join view_rc2s b on a.noa=b.noa left join style c on b.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--退貨入庫 W4,製管W19,切管W5,其他W3
+insert @tmpa
+select 'ina',a.datea,a.itype,case when charindex('退貨',a.typea)>0 then '4' else '3' end,b.productno,b.weight
+from view_ina a left join view_inas b on a.noa=b.noa left join style c on b.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+union all
+select 'cubu',a.datea,d.itype,case when a.typea='1' then '19' when a.typea='2' then '5' else '3' end,b.productno,b.weight
+from view_cub a left join view_cubu b on a.noa=b.noa left join style c on b.style=c.noa
+left join uccb d on b.uno=d.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--委外W6 ,非委外W5
+insert @tmpa
+select 'cut',a.datea,a.itype,case when len(a.tggno)>0 then '6' else '5' end,b.productno,b.weight
+from view_cut a left join view_cuts b on a.noa=b.noa left join style c on b.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--非捲W7
+insert @tmpa
+select 'cut',a.datea,a.itype,'7',b.productno,b.weight
+from view_cut a left join view_cuts b on a.noa=b.noa left join style c on b.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product not like '%捲%' and len(a.tggno)=0 
+
+--條W8 片W9 其他W11
+insert @tmpa
+select 'cut',a.datea,a.itype
+,case when charindex('條',c.product)>0 then '8' when charindex('片',c.product)>0 then '9' else '11' end
+,b.productno,b.weight
+from view_cut a left join view_cuts b on a.noa=b.noa left join style c on b.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--委出w12,委入W6
+insert @tmpa
+select 'cng',a.datea,d.itype
+,case when len(a.tggno)=0 and a.storeno!=a.storeinno and isnull(a.storeno,'')!='' then '6' else '12' end
+,b.productno,b.weight
+from view_cng a left join view_cngs b on a.noa=b.noa left join style c on b.style=c.noa
+left join uccb d on b.uno=d.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--出貨W15 寄庫 W16 代工W17
+insert @tmpa
+select 'vcc',a.datea,a.stype
+,case when UPPER(isnull(b.usecoil,''))='Y' then '16' when UPPER(isnull(b.usecoil,''))='Z' then '17' else '15' end
+,b.productno,b.weight
+from view_vcc a left join view_vccs b on a.noa=b.noa left join style c on b.style=c.noa
+left join uccb d on b.uno=d.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%' and a.typea='1'
+
+--領料W20 製管W18 切管W10
+insert @tmpa
+select 'cubt',a.datea,d.itype,case when a.typea='1' then '18' when a.typea='2' then '10' else '20' end,b.productno,b.weight
+from view_cub a left join view_cubt b on a.noa=b.noa left join uccb d on b.uno=d.noa
+left join style c on d.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--領料W20
+insert @tmpa
+select 'get',a.datea,d.itype,'20',b.productno,b.weight
+from view_get a left join view_gets b on a.noa=b.noa left join style c on b.style=c.noa
+left join uccb d on b.uno=d.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--訂單轉入W14 轉出W13
+insert @tmpa
+select 'ucch',a.datea,a.typea,'13',a.productno,a.weight
+from view_ucch a left join style c on a.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+insert @tmpa
+select 'ucch',a.datea,a.typea2,'14',a.productno,a.weight2
+from view_ucch a left join style c on a.style=c.noa
+where a.datea<=@t_xmon+'/31' and c.product like '%'+@t_kind+'%'
+
+--select * from @tmpa
+
+update a
+set wbegin=isnull((select sum((case when typea in('2','7','8','9','10','11','12','13','15','16','17','18','20') then -1 else 1 end)* weight) 
+from @tmpa where datea<@t_xmon+'/01' and productno=a.productno and stype=a.stypeno),0)
+,w1=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='1'),0)
+,w2=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='2'),0)
+,w3=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='3'),0)
+,w4=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='4'),0)
+,w5=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='5'),0)
+,w6=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='6'),0)
+,w7=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='7'),0)
+,w8=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='8'),0)
+,w9=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='9'),0)
+,w10=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='10'),0)
+,w11=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='11'),0)
+,w12=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='12'),0)
+,w13=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='13'),0)
+,w14=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='14'),0)
+,w15=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='15'),0)
+,w16=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='16'),0)
+,w17=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='17'),0)
+,w18=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='18'),0)
+,w19=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='19'),0)
+,w20=isnull((select sum(weight)from @tmpa where datea>=@t_xmon+'/01' and productno=a.productno and stype=a.stypeno and typea='20'),0)
+,wend=isnull((select sum((case when typea in('2','7','8','9','10','11','12','13','15','16','17','18','20') then -1 else 1 end)* weight) 
+from @tmpa where productno=a.productno and stype=a.stypeno),0)
+from @tmp a
+
+
+if(@t_kind='捲')
+begin
+	update @tmp	set gno='2'
+	insert @tmp(gno,stypeno,stype,productno) 
+	select '3',stypeno,stype,CHAR(255) from @tmp group by stypeno,stype
+	insert @tmp(gno,stypeno,stype,productno)
+	select '4','0','合計',''
+	insert @tmp
+	select '4',stypeno,stype,''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='2' group by stypeno,stype
+	insert @tmp
+	select '5','','',''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='2'
+	insert @tmp(gno) select '1' 
+	
+	select 
+	dbo.getComma(wbegin,0) wbegin,
+	dbo.getComma(w1+w3,0) w01_3,
+	dbo.getComma(w4,0) w4,
+	dbo.getComma(w6,0) w6,
+	dbo.getComma(w5,0) w5,
+	dbo.getComma(w15+w16+w17,0) w01567,
+	dbo.getComma(w12,0) w12,
+	dbo.getComma(w2,0) w02,
+	dbo.getComma(w7,0) w7,
+	dbo.getComma(w8,0) w8,
+	dbo.getComma(w9,0) w9,
+	dbo.getComma(w20,0) w20,
+	dbo.getComma(w13,0) w13,
+	dbo.getComma(w14,0) w14,
+	dbo.getComma(wend,0) wend,
+	dbo.getComma(w10+w18,0) w0118,--避免xls顯示錯誤
+	gno,(case when gno='2' and productno!=(select MIN(noa) from ucc) then '' else stype end) stype,productno,'鋼捲' typea,*
+	from @tmp order by (case when gno='3' then '2' else gno end),stypeno,productno
+end
+
+if(@t_kind='帶')
+begin
+	update @tmp	set gno='7'
+	insert @tmp(gno,stypeno,stype,productno) 
+	select '8',stypeno,stype,CHAR(255) from @tmp group by stypeno,stype
+	insert @tmp(gno,stypeno,stype,productno)
+	select '9','0','合計',''
+	insert @tmp
+	select '9',stypeno,stype,''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='7' group by stypeno,stype
+	insert @tmp
+	select '10','','',''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='7'
+	insert @tmp(gno) select '6' 
+	
+	select 
+	dbo.getComma(wbegin,0) wbegin,
+	dbo.getComma(w1+w3,0) w01_3,
+	dbo.getComma(w4,0) w4,
+	dbo.getComma(w6,0) w6,
+	dbo.getComma(w5,0) w5,
+	dbo.getComma(w15+w16+w17,0) w01567,
+	dbo.getComma(w12,0) w12,
+	dbo.getComma(w2,0) w02,
+	dbo.getComma(w8,0) w8,
+	dbo.getComma(w9,0) w9,
+	dbo.getComma(w10+w18,0) w0118,
+	dbo.getComma(w20,0) w20,
+	dbo.getComma(w13,0) w13,
+	dbo.getComma(w14,0) w14,
+	dbo.getComma(wend,0) wend,
+	gno,(case when gno='2' and productno!=(select MIN(noa) from ucc) then '' else stype end) stype,productno,'鋼帶' typea,*
+	from @tmp order by (case when gno='8' then '7' else gno end),stypeno,productno
+end
+if(@t_kind='片')
+begin
+	update @tmp	set gno='12'
+	insert @tmp(gno,stypeno,stype,productno) 
+	select '13',stypeno,stype,CHAR(255) from @tmp group by stypeno,stype
+	insert @tmp(gno,stypeno,stype,productno)
+	select '14','0','合計',''
+	insert @tmp
+	select '14',stypeno,stype,''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='12' group by stypeno,stype
+	insert @tmp
+	select '15','','',''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='12'
+	insert @tmp(gno) select '11' 
+	
+	select 
+	dbo.getComma(wbegin,0) wbegin,
+	dbo.getComma(w1+w3,0) w01_3,
+	dbo.getComma(w4,0) w4,
+	dbo.getComma(w6,0) w6,
+	dbo.getComma(w5,0) w5,
+	dbo.getComma(w15+w16+w17,0) w01567,
+	dbo.getComma(w12,0) w12,
+	dbo.getComma(w2,0) w02,
+	dbo.getComma(w9,0) w9,
+	dbo.getComma(w20,0) w20,
+	dbo.getComma(w13,0) w13,
+	dbo.getComma(w14,0) w14,
+	dbo.getComma(wend,0) wend,
+	dbo.getComma(w10+w18,0) w0118,--避免xls顯示錯誤
+	gno,(case when gno='2' and productno!=(select MIN(noa) from ucc) then '' else stype end) stype,productno,'鋼片' typea,*
+	from @tmp order by (case when gno='13' then '12' else gno end),stypeno,productno
+end
+if(@t_kind='管')
+begin
+	update @tmp	set gno='17'
+	insert @tmp(gno,stypeno,stype,productno) 
+	select '18',stypeno,stype,CHAR(255) from @tmp group by stypeno,stype
+	insert @tmp(gno,stypeno,stype,productno)
+	select '19','0','合計',''
+	insert @tmp
+	select '19',stypeno,stype,''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='17' group by stypeno,stype
+	insert @tmp
+	select '20','','',''
+	,SUM(wbegin),SUM(w1),SUM(w2),SUM(w3),SUM(w4),SUM(w5),SUM(w6),SUM(w7),SUM(w8),SUM(w9),SUM(w10)
+	,SUM(w11),SUM(w12),SUM(w13),SUM(w14),SUM(w15),SUM(w16),SUM(w17),SUM(w18),SUM(w19),SUM(w20),SUM(wend)
+	from @tmp where gno='17'
+	insert @tmp(gno) select '16'
+	
+	select 
+	dbo.getComma(wbegin,0) wbegin,
+	dbo.getComma(w1+w3,0) w01_3,
+	dbo.getComma(w4,0) w4,
+	dbo.getComma(w6,0) w6,
+	dbo.getComma(w5,0) w5,
+	dbo.getComma(w19,0) w19,
+	dbo.getComma(w15+w16+w17,0) w01567,
+	dbo.getComma(w2,0) w02,
+	dbo.getComma(w12,0) w12,
+	dbo.getComma(w10,0) w10,
+	dbo.getComma(w18,0) w18,
+	dbo.getComma(w20,0) w20,
+	dbo.getComma(w13,0) w13,
+	dbo.getComma(w14,0) w14,
+	dbo.getComma(wend,0) wend,
+	dbo.getComma(w10+w18,0) w0118,--避免xls顯示錯誤
+	gno,(case when gno='2' and productno!=(select MIN(noa) from ucc) then '' else stype end) stype,productno,'鋼管' typea,*
+	from @tmp order by (case when gno='18' then '17' else gno end),stypeno,productno
+end
+;
+--**********************************************************************************
