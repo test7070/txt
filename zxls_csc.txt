@@ -1,4 +1,4 @@
-zxls_csc:--zxls_csc  中鋼外銷
+zxls_csc:--zxls_csc  中鋼外銷    可重覆上傳
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
 	declare @workerno nvarchar(max) = [1]
@@ -20,6 +20,7 @@ zxls_csc:--zxls_csc  中鋼外銷
 		calctype nvarchar(20),
 		custno nvarchar(20),
 		comp nvarchar(50),
+		nick nvarchar(20),
 		straddrno nvarchar(20),
 		straddr nvarchar(20),
 		uccno nvarchar(20),
@@ -79,7 +80,8 @@ zxls_csc:--zxls_csc  中鋼外銷
 	declare @i nvarchar(max)
 	declare @j nvarchar(max)
 	declare @k nvarchar(max)
-
+	
+	declare @nick nvarchar(20)
 ---------------------------------------------------------------------------------------------
 	declare cursor_table cursor for
 	select a,b,c,d,e,f,g,h,i,j,k from ztmpxls order by CAST(noa as int)
@@ -98,15 +100,18 @@ zxls_csc:--zxls_csc  中鋼外銷
 				
 				select @straddrno = '',@straddr='',@uccno='',@product=''
 				set @straddrno = case when LEFT(@h,1)='C' and LEFT(@g,2)='ER' and LEFT(@f,2)='ED' then 'B053-013' 
-					when LEFT(@h,1)='A' and LEFT(@g,2)='ER' and LEFT(@f,2)='ED' then 'B053-014' 
+					when LEFT(@h,1)='K' and LEFT(@g,2)='ER' and LEFT(@f,2)='ED' then 'B053-014' 
 					when LEFT(@h,1)='T' and LEFT(@g,2)='ER' and LEFT(@f,2)='ED' then 'B053-015' 
 					when LEFT(@h,1)='C' and LEFT(@f,2)='EA' then 'B053-016'
-					when LEFT(@h,1)='C' and LEFT(@f,2)='EA' then 'B053-017'
-					when LEFT(@h,1)='C' and LEFT(@f,2)='EA' then 'B053-018' 
-					else 'B053-002' end
+					when LEFT(@h,1)='K' and LEFT(@f,2)='EA' then 'B053-017'
+					when LEFT(@h,1)='T' and LEFT(@f,2)='EA' then 'B053-018' 
+					when LEFT(@h,1)='C' then 'B053-010' 
+					when LEFT(@h,1)='K' then 'B053-011' 
+					when LEFT(@h,1)='T' then 'B053-012' 
+					else 'B053-010' end 
 				select @straddr=addr,@uccno=productno,@product=product from addr where noa=@straddrno
 				select @custno = LEFT(@straddrno,4)
-				select @comp = comp from cust where noa=@custno
+				select @comp = comp,@nick=nick from cust where noa=@custno
 				
 				select @inmount=0,@outmount=0,@weight=0
 				select @inmount=CAST(@j as float)/1000,@outmount=CAST(@j as float)/1000,@weight=CAST(@j as float)/1000
@@ -118,8 +123,8 @@ zxls_csc:--zxls_csc  中鋼外銷
 				--D01公司車  E01外車
 				select @carno='',@driverno='',@driver='',@calctype='E01',@discount=0
 				select @carno=carno,@driverno=driverno
-					,@calctype = case when cartype='2' then 'D01' else 'E01' end 
-					,@discount = case when cartype='2' then 1 else 0.88 end 
+					,@calctype = case when cartype='2' then case when carspecno='C03' then 'D02' else 'D01' end else 'E01' end 
+					,@discount = case when cartype='2' then case when carspecno='C03' then 0.25 else 0.28 end else 0.88 end 
 					from car2 where CHARINDEX(REPLACE(carno,'-',''),@b)>0
 				select @driver=namea from driver where noa=@driverno
 			
@@ -127,9 +132,10 @@ zxls_csc:--zxls_csc  中鋼外銷
 				
 				
 				insert into @tmp(datea,trandate,mon,boatno,carno,calctype,driverno,driver,straddrno,straddr,uccno,product
-					,custno,comp,inmount,outmount,[weight],inprice,outprice,discount,memo,qtime,worker)
-				select @datea,@datea,LEFT(@datea,3),@boatno,@carno,@calctype,@driverno,@driver,@straddrno,@straddr,@uccno,@product
-					,@custno,@comp,@inmount,@outmount,@weight,@inprice,@outprice,@discount,@filename,@curdate,@worker
+					,custno,comp,nick,inmount,outmount,[weight],inprice,outprice,discount,qtime,worker,memo)
+				select @datea,@datea,LEFT(@datea,6),@boatno,@carno,@calctype,@driverno,@driver,@straddrno,@straddr,@uccno,@product
+					,@custno,@comp,@nick,@inmount,@outmount,@weight,@inprice,@outprice,@discount,@curdate,@worker
+					,@datea+@carno+rtrim(ltrim(@e))+rtrim(ltrim(@f))+rtrim(ltrim(@j))
 			end
 		end try
 		begin catch 
@@ -168,6 +174,9 @@ zxls_csc:--zxls_csc  中鋼外銷
 	declare @tmpno2 nvarchar(20)
 	declare @noq nvarchar(10)
 	declare @n int
+
+	declare @curnoa nvarchar(20)
+
 	
 	declare cursor_table cursor for
 	select datea from @tmp group by datea
@@ -192,9 +201,22 @@ zxls_csc:--zxls_csc  中鋼外銷
 		into @pno
 		while(@@FETCH_STATUS <> -1)
 		begin
-			set @noq = SUBSTRING(@string,floor(@n/100)+1,1)+right('00'+cast(@n%100 as nvarchar),2)
-			set @noa = @key+REPLACE(@datea,'/','')+@noq
-			set @n = @n + 1
+			set @curnoa=''
+			select @curnoa=b.noa
+			from @tmp a
+			outer apply(select top 1 noa from carcsc where memo=a.memo) b
+			where a.pno=@pno and len(a.memo)>0 and b.noa is not null
+			
+			if LEN(@curnoa)>0
+			begin
+				set @noa = @curnoa
+			end
+			else
+			begin
+				set @noq = SUBSTRING(@string,floor(@n/100)+1,1)+right('00'+cast(@n%100 as nvarchar),2)
+				set @noa = @key+REPLACE(@datea,'/','')+@noq
+				set @n = @n + 1
+			end
 			
 			update @tmp set noa=@noa where pno=@pno
 			fetch next from cursor_table2
@@ -208,9 +230,37 @@ zxls_csc:--zxls_csc  中鋼外銷
 	end
 	close cursor_table
 	deallocate cursor_table
+	
 	-----------------------------------------------------------------------------------------------------
-	insert into carcsc(noa,datea,trandate,mon,boatno,carno,calctype,driverno,driver,addrno,addr,uccno,product
-			,custno,comp,inmount,outmount,[weight],inprice,outprice,discount,inmoney,outmoney,memo,qtime,worker)
-	select noa,datea,trandate,mon,boatno,carno,calctype,driverno,driver,straddrno,straddr,uccno,product
-			,custno,comp,inmount,outmount,[weight],inprice,outprice,discount,inmoney,outmoney,memo,qtime,worker
-	from @tmp;
+	insert into carcsc(noa)
+	select noa from @tmp a where not exists(select noa from carcsc where noa=a.noa)
+	
+	update carcsc set datea=b.datea
+		,trandate=b.trandate
+		,mon=b.mon
+		,boatno=b.boatno
+		,carno=b.carno
+		,calctype=b.calctype
+		,driverno=b.driverno
+		,driver=b.driver
+		,addrno=b.straddrno
+		,addr=b.straddr
+		,uccno=b.uccno
+		,product=b.product
+		,custno=b.custno
+		,comp=b.comp
+		,nick=b.nick
+		,inmount=b.inmount
+		,outmount=b.outmount
+		,[weight]=b.[weight]
+		,inprice=b.inprice
+		,outprice=b.outprice
+		,discount=b.discount
+		,inmoney=b.inmoney
+		,outmoney=b.outmoney
+		,memo=b.memo
+		,qtime=b.qtime
+		,worker=b.worker
+	from carcsc a
+	left join @tmp b on a.noa=b.noa
+	where b.noa is not null;
