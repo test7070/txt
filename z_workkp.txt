@@ -80,6 +80,9 @@ declare @store table(
 insert @store
 select storeno,productno,mount from stkucc(@t_stkdate,'','')
 where (productno between @t_bpno and @t_epno)
+and storeno not in (select storeno from tgg where isnull(storeno,'')!='' ) 
+and storeno not in (select storeno from station where isnull(storeno,'')!='')
+and (storeno between @t_bstoreno and @t_estoreno)
 
 declare @tmp table(
 	gno nvarchar(1),
@@ -98,14 +101,31 @@ declare @tmp table(
 	scmount float
 )
 
+declare @tmpa table(
+	gno nvarchar(1),
+	stationno nvarchar(50),
+	station nvarchar(100),
+	sno nvarchar(50),
+	store nvarchar(100),
+	pno nvarchar(50),
+	product nvarchar(100),
+	gmount float,
+	inmount float,
+	unmount float,--製令未領量
+	smount float,--撥料庫存量
+	stmount float, --倉庫可領量
+	diffmount float,--撥料不足量
+	scmount float--撥料倉餘量
+)
+
 insert @tmp 
 	select
-		'0',a.stationno,a.station,c.storeno,MAX(c.store),b.productno,MAX(b.product)
+		'0',a.stationno,a.station,'','',b.productno,MAX(b.product)
 		,isnull(round(SUM(isnull(b.mount,0)),2),0) mount
 		,isnull(round(SUM(isnull(b.gmount,0)),2),0) inmount
 		,isnull(round(SUM(case when isnull(b.emount,0)=0 and isnull(b.gmount,0)=0 then isnull(b.mount,0) else isnull(b.emount,0) end),2),0) unmount
-		,isnull((select SUM(mount) mount from @store where pno=b.productno and sno=c.storeno),0) 
-		,isnull((select SUM(mount) mount from @store where pno=b.productno),0),0,0
+		,isnull((select SUM(mount) mount from stkucc(@t_stkdate,'','') where productno=b.productno and storeno=c.storeno),0) 
+		,0,0,0
 	from view_work a
 	left join view_works b on a.noa=b.noa
 	left join station c on a.stationno=c.noa 
@@ -114,24 +134,29 @@ insert @tmp
 		and (a.stationno between @t_bstationno and @t_estationno)
 		and (c.stationgno between @t_bstationgno and @t_estationgno)
 		and (b.productno between @t_bpno and @t_epno)
-		and (c.storeno between @t_bstoreno and @t_estoreno)
 		and isnull(a.tggno,'')='' 
 		and (isnull(a.isfreeze,0)!= '1')
 		and a.noa like 'W[0-9]%'
 		--and left(a.noa,2)!='WJ'
 	group by a.stationno,a.station,b.productno,c.storeno
 	
-update @tmp set scmount=smount-unmount
-update @tmp set scmount=0 where scmount<0
+	insert @tmpa
+	select  b.gno,b.stationno,b.station,a.sno,'',b.pno,b.product,b.gmount,b.inmount,b.unmount,b.smount,a.mount,0,0
+	from @store a,@tmp b where a.pno=b.pno
 	
-update @tmp set diffmount=-1*(smount-unmount)
-update @tmp set diffmount=0 where diffmount<0
+	update a
+	set a.store=isnull(b.store,'')
+	from @tmpa a left join store b on a.sno=b.noa
+	
+update @tmpa set scmount=smount-unmount
+update @tmpa set scmount=0 where scmount<0
+update @tmpa set diffmount=-1*(smount-unmount)
+update @tmpa set diffmount=0 where diffmount<0
+update @tmpa set stmount=stmount-smount
+delete @tmpa where unmount=0
+delete @tmpa where stmount<=0
 
-update @tmp set stmount=stmount-smount
-
-delete @tmp where unmount=0
-
-insert @tmp(gno,sno)
+insert @tmpa(gno,sno)
 select '1',sno from @tmp group by sno
 
 
@@ -145,7 +170,7 @@ select
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stmount),1)),0,30)) stmount
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,scmount),1)),0,30)) scmount
-from @tmp order by sno,gno,stationno,pno
+from @tmpa order by sno,gno,stationno,pno
 ;
 ----------------------------------------------------------------------------------------------------------*
 z_workkp3:--z_workkp3
