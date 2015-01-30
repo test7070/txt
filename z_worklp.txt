@@ -62,6 +62,19 @@ set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
 
 --*********************************************************************
+declare @store table( 
+	sno nvarchar(MAX), 
+	pno nvarchar(50), 
+	mount float
+) 
+
+insert @store
+select storeno,productno,mount from stkucc(@t_stkdate,'','')
+where (productno between @t_bpno and @t_epno) 
+and storeno not in (select storeno from tgg where isnull(storeno,'')!='' ) 
+and storeno not in (select storeno from station where isnull(storeno,'')!='')
+and (storeno between @t_bstoreno and @t_estoreno)
+
 declare @tmp table(
 	gno nvarchar(1),
 	tggno nvarchar(50),
@@ -72,21 +85,38 @@ declare @tmp table(
 	product nvarchar(100),
 	gmount float,
 	inmount float,
-	unmount float,
-	smount float,
-	stmount float, 
-	diffmount float,
-	scmount float
+	unmount float,--製令未領量
+	smount float,--撥料庫存量
+	stmount float, --倉庫可領量
+	diffmount float,--撥料不足量
+	scmount float--撥料倉餘量
+)
+
+declare @tmpa table(
+	gno nvarchar(1),
+	tggno nvarchar(50),
+	tgg nvarchar(100),
+	sno nvarchar(50),
+	store nvarchar(100),
+	pno nvarchar(50),
+	product nvarchar(100),
+	gmount float,
+	inmount float,
+	unmount float,--製令未領量
+	smount float,--撥料庫存量
+	stmount float, --倉庫可領量
+	diffmount float,--撥料不足量
+	scmount float--撥料倉餘量
 )
 
 insert @tmp 
 	select
-		'0',a.tggno,c.nick,d.noa,MAX(d.store),b.productno,MAX(b.product)
+		'0',a.tggno,c.nick,'','',b.productno,MAX(b.product)
 		,isnull(round(SUM(isnull(b.mount,0)),2),0) mount
 		,isnull(round(SUM(isnull(b.gmount,0)),2),0) inmount
 		,isnull(round(SUM(case when isnull(b.emount,0)=0 and isnull(b.gmount,0)=0 then isnull(b.mount,0) else isnull(b.emount,0) end),2),0) unmount
 		,isnull((select SUM(mount) mount from stkucc(@t_stkdate,'','') where productno=b.productno and storeno=d.noa),0)
-		,isnull((select SUM(mount) mount from stkucc(@t_stkdate,'','') where productno=b.productno),0),0,0
+		,0,0,0
 	from view_work a
 	left join view_works b on a.noa=b.noa
 	left join tgg c on a.tggno=c.noa 
@@ -97,19 +127,28 @@ insert @tmp
 		and isnull(a.stationno,'')=''
 		and (isnull(a.isfreeze,0)!= '1')
 		and a.noa like 'W[0-9]%' 
-		and (d.noa between @t_bstoreno and @t_estoreno)
 		--and left(a.noa,2)!='WJ'
 	group by a.tggno,c.nick,b.productno,d.noa
 	
-update @tmp set scmount=smount-unmount
-update @tmp set scmount=0 where scmount<0
-update @tmp set diffmount=-1*(smount-unmount)
-update @tmp set diffmount=0 where diffmount<0
-update @tmp set stmount=stmount-smount
-delete @tmp where diffmount=0
 
-insert @tmp(gno,sno)
-select '1',sno from @tmp group by sno
+insert @tmpa
+select  b.gno,b.tggno,b.tgg,a.sno,'',b.pno,b.product,b.gmount,b.inmount,b.unmount,b.smount,a.mount,0,0
+from @store a,@tmp b where a.pno=b.pno
+
+update a
+set a.store=isnull(b.store,'')
+from @tmpa a left join store b on a.sno=b.noa
+	
+update @tmpa set scmount=smount-unmount
+update @tmpa set scmount=0 where scmount<0
+update @tmpa set diffmount=-1*(smount-unmount)
+update @tmpa set diffmount=0 where diffmount<0
+update @tmpa set stmount=stmount-smount
+delete @tmpa where diffmount=0
+delete @tmpa where stmount<=0
+
+insert @tmpa(gno,sno)
+select '1',sno from @tmpa group by sno
 
 select
 	gno,ROW_NUMBER()over(PARTITION BY sno order by sno,gno,tggno,pno) recno
@@ -121,7 +160,7 @@ select
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stmount),1)),0,30)) stmount
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,diffmount),1)),0,30)) diffmount
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,scmount),1)),0,30)) scmount
-from @tmp order by sno,gno,tggno,pno
+from @tmpa order by sno,gno,tggno,pno
 ;
 ----------------------------------------------------------------------------------------------------------*
 z_worklp3:--z_worklp3
@@ -345,7 +384,6 @@ set @t_estoreno = case when '#non' = [12] then CHAR(255) else [12] end
 declare @t_stkdate nvarchar(30) --倉庫運算日期
 set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
-
 
 --*********************************************************************
 declare @tmp table(
