@@ -11,7 +11,6 @@ tre_rj:--tre_rj
 	declare @t_bdriverno nvarchar(20) = [7]
 	declare @t_edriverno nvarchar(20) = [8]
 	-----------------------------------------------------------------------------------------
-	-----------------------------------------------------------------------------------------
 	declare @tmpa table(
 		tranaccy nvarchar(10),
 		tranno nvarchar(20),
@@ -22,14 +21,19 @@ tre_rj:--tre_rj
 		driverno nvarchar(20),
 		driver nvarchar(40),
 		carno nvarchar(20),
+		straddrno nvarchar(20),
 		straddr nvarchar(40),
+		endaddrno nvarchar(20),
 		endaddr nvarchar(40),
+		productno nvarchar(20),
 		product nvarchar(40),
 		unit nvarchar(20),
 		isoutside int,
 		price float,
 		discount float,
-		mount float,
+		mount1 float,--台數	
+		mount2 float,--米數
+		mount3 float,--噸數
 		total float,
 		
 		caseno nvarchar(20),
@@ -37,8 +41,12 @@ tre_rj:--tre_rj
 		custnick nvarchar(20),
 		fill nvarchar(20)
 	)
-	insert into @tmpa(tranaccy,tranno,trannoq,datea,trandate,carno,isoutside)
+	insert into @tmpa(tranaccy,tranno,trannoq,datea,trandate,carno,isoutside
+		,driverno,driver,straddrno,straddr,endaddrno,endaddr,productno,product
+		,mount1,mount2,mount3)
 	select a.accy,a.noa,a.noq,a.datea,a.trandate,a.carno,case when isnull(c.cartype,'')='2' then 0 else 1 end
+		,a.driverno,a.driver,a.straddrno,a.straddr,a.endaddrno,a.endaddr,a.uccno,a.product
+		,a.inmount,a.mount3,a.mount4
 	from view_trans a
 	left join view_tres b on a.accy=b.tranaccy and a.noa=b.tranno and a.noq=b.trannoq
 	left join car2 c on a.carno=c.carno 
@@ -48,19 +56,15 @@ tre_rj:--tre_rj
 	and len(isnull(a.driverno,0))>0
 	and isnull(a.driverno,0) between @t_bdriverno and case when len(@t_edriverno)=0 then char(255) else @t_edriverno end
 	
-	update @tmpa set driverno=isnull(b.driverno,''),driver=isnull(b.driver,'')
-		,straddr=b.straddr,endaddr=b.endaddr
-		,product=b.product,unit=case isnull(a.isoutside,0) when 1 then e.driverunit2 else e.driverunit end
-		,price=case when a.isoutside=1 then isnull(e.driverprice2,0) else isnull(e.driverprice,0) end
-		,mount=case when a.isoutside=1 then (case e.driverunit2 when '台數' then b.inmount when '米數' then b.mount3 when '噸數' then b.mount4 else 0 end)
-			else (case e.driverunit when '台數' then b.inmount when '米數' then b.mount3 when '噸數' then b.mount4 else 0 end) end		
-		,caseno=b.caseno,caseno2=b.caseno2,custnick=b.nick,fill=b.fill
+	--司機單價
+	update @tmpa set unit=case a.isoutside when 1 then c.driverunit2 else c.driverunit end
+		,price =case a.isoutside when 1 then c.driverprice2 else c.driverprice end
+		,mount2=case when ISNULL(c.commission,0)=0 or ISNULL(a.mount2,0)!=0 then a.mount3 else ROUND(isnull(a.mount3,0)/ISNULL(c.commission,0),2) end
 	from @tmpa a
-	left join view_trans b on a.tranaccy=b.accy and a.tranno=b.noa and a.trannoq=b.noq
-	left join addr d on b.straddrno = d.straddrno and b.endaddrno=d.endaddrno and b.uccno=d.productno 
-	outer apply (select top 1 * from addrs where noa=d.noa and datea <= a.trandate  order by datea desc) e
+	left join addr b on a.straddrno=b.straddrno and a.endaddrno=b.endaddrno and a.productno=b.productno
+	outer apply(select top 1 * from addrs where noa=b.noa order by datea desc) c
 	
-	update @tmpa set total = round(ISNULL(mount,0)*ISNULL(price,0),0)
+	update @tmpa set total = ROUND( case unit when '台數' then mount1 when '米數' then mount2 when '噸數' then mount3 end*price,0)
 	------------------------------------------------------------------------------------
 	declare @tmpb table(
 		carchgno nvarchar(20),
@@ -78,7 +82,7 @@ tre_rj:--tre_rj
 	where b.noa is null
 	and a.datea between @t_bdate and @t_edate
 	and isnull(a.driverno,0) between @t_bdriverno and case when len(@t_edriverno)=0 then char(255) else @t_edriverno end
-	---------------------------------------------------------------------------------------
+	-----------------------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#tre_rj')is not null
 	BEGIN
 		set @cmd = 'drop table #tre_rj'
@@ -119,7 +123,9 @@ tre_rj:--tre_rj
 		isoutside int,
 		price float,
 		discount float,
-		mount float,
+		mount float,--台
+		overweightcost float,--米
+		othercost float,--噸
 		total float,
 		caseno nvarchar(20),
 		caseno2 nvarchar(20),
@@ -137,9 +143,9 @@ tre_rj:--tre_rj
 	left join driver b on a.driverno=b.noa
 	
 	insert into #tres_rj(tranaccy,tranno,trannoq,datea,trandate,driverno,driver,carno,straddr,endaddr
-		,product,unit,isoutside,price,discount,mount,total,caseno,caseno2,custnick,fill)
+		,product,unit,isoutside,price,discount,mount,overweightcost,othercost,total,caseno,caseno2,custnick,fill)
 	select tranaccy,tranno,trannoq,datea,trandate,driverno,driver,carno,straddr,endaddr
-		,product,unit,isoutside,price,discount,mount,total,caseno,caseno2,custnick,fill 
+		,product,unit,isoutside,price,discount,mount1,mount2,mount3,total,caseno,caseno2,custnick,fill 
 	from @tmpa
 	--------------------------------------------------------------------------------
 	declare @noa nvarchar(20)
@@ -246,8 +252,8 @@ tre_rj:--tre_rj
 			+" select noa,@t_date,tggno,tgg,driverno,driver,money,plusmoney,minusmoney,total,carchgno,@t_worker from #tre_rj order by noa"
 		execute sp_executesql @cmd,N'@t_date nvarchar(10),@t_worker nvarchar(20)',@t_date=@t_date,@t_worker=@t_worker
 	
-		set @cmd = "insert into tres"+LEFT(@t_date,3)+" (noa,noq,tranaccy,tranno,trannoq,trandate,memo,straddr,endaddr,product,unit,[money],mount,price,discount,caseno,caseno2,comp,fill)"
-			+" select noa,noq,tranaccy,tranno,trannoq,trandate,carno,straddr,endaddr,product,unit,total,mount,price,discount,caseno,caseno2,custnick,fill from #tres_rj order by noa"
+		set @cmd = "insert into tres"+LEFT(@t_date,3)+" (noa,noq,tranaccy,tranno,trannoq,trandate,memo,straddr,endaddr,product,unit,[money],mount,overweightcost,othercost,price,discount,caseno,caseno2,comp,fill)"
+			+" select noa,noq,tranaccy,tranno,trannoq,trandate,carno,straddr,endaddr,product,unit,total,mount,overweightcost,othercost,price,discount,caseno,caseno2,custnick,fill from #tres_rj order by noa"
 		execute sp_executesql @cmd
 		
 		update carchg set treno=b.treno
