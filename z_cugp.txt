@@ -437,7 +437,15 @@ set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
 set @t_bdate = case when '#non' = [9] then '' else  [9] end
 set @t_edate = case when '#non' = [10] then CHAR(255) else  [10] end
 ---------------------------------------------------------------------------------------------------------------------------------
-declare @tmp table(
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
 	gno nvarchar(2),
 	workgno nvarchar(50),
 	workgnoq nvarchar(50),
@@ -477,14 +485,20 @@ declare @tmpb table(
 	ordeno nvarchar(max)
 )
 
-insert into @tmp
+insert into #tmp
 select '0',b.cuano,b.cuanoq,b.rank,a.noq,a.nos,a.stationno,b.station,b.processno,a.process,b.productno,b.product,a.mount,a.hours,a.datea,a.workno
 ,d.custno,d.comp,'work?noa=$workno?'+b.accy,b.ordeno
-,0,0,isnull((select gen from view_cugt where noa=a.stationno and datea=a.datea),0),isnull(e.gen,8),isnull(e.mount,1)
-from view_cugu a left join view_work b on a.workno=b.noa
-left join(select noa+'-'+noq cuano,ordeno+'-'+no2 ordeno from view_cuas
-union all select noa+'-'+noq cuano,ordeno from view_workgs)c on b.cuano+'-'+b.cuanoq=c.cuano
-left join view_orde d on CHARINDEX(d.noa,c.ordeno)>0 left join station e on a.stationno=e.noa
+,0,0,isnull((select gen from view_cugt where noa=a.stationno and datea=a.datea),0)
+,isnull(e.gen,8),isnull(e.mount,1)
+from view_cugu a 
+left join view_work b on a.workno=b.noa
+left join(
+	select noa+'-'+noq cuano,ordeno+'-'+no2 ordeno from view_cuas
+	union all 
+	select noa+'-'+noq cuano,ordeno from view_workgs
+)c on b.cuano+'-'+b.cuanoq=c.cuano
+left join view_orde d on CHARINDEX(d.noa,c.ordeno)>0 
+left join station e on a.stationno=e.noa
 where (a.stationno between @t_bstation and @t_estation)
 and (isnull(b.processno,'') between @t_bprocess and @t_eprocess)
 and (a.datea between @t_bdate and @t_edate)
@@ -492,9 +506,9 @@ and a.datea!='' order by a.stationno,a.datea,a.nos,a.noq
 
 --更新累計時數
 update a
-set thours=(select SUM(hours) from @tmp where stationno=a.stationno and a.datea+'-'+a.nos+'-'+a.noq>=datea+'-'+nos+'-'+noq)
-,dhours=(select SUM(hours) from @tmp where stationno=a.stationno and a.datea=datea and a.nos+'-'+a.noq>=nos+'-'+noq)
-from @tmp a
+set thours=(select SUM(hours) from #tmp where stationno=a.stationno and a.datea+'-'+a.nos+'-'+a.noq>=datea+'-'+nos+'-'+noq)
+,dhours=(select SUM(hours) from #tmp where stationno=a.stationno and a.datea=datea and a.nos+'-'+a.noq>=nos+'-'+noq)
+from #tmp a
 
 insert into @tmpb
 select '0',b.cuano,b.cuanoq,b.rank,a.noq,a.nos,a.datea,a.workno,b.ordeno
@@ -507,8 +521,8 @@ where a.datea!=''
 --outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
 --where a.rank>b.rank
 
-insert into @tmp (gno,stationno,station,hours,mount)
-select '1',stationno,MAX(station),sum(hours),sum(mount) from @tmp group by stationno
+insert into #tmp (gno,stationno,station,hours,mount)
+select '1',stationno,MAX(station),sum(hours),sum(mount) from #tmp group by stationno
 
 select gno,noq,nos,stationno,station,processno,process,productno pno,product
 ,(case when dhours>(case when dgen=0 then gen else dgen end) then '<font color="red">' else '' end)
@@ -524,11 +538,19 @@ select gno,noq,nos,stationno,station,processno,process,productno pno,product
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dgen),1)),0,30)) dgen
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gen),1)),0,30)) gen
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),4,30)) smount
-,(select COUNT(*) from(select stationno,workno from @tmp where gno='0' and stationno=a.stationno and workno!='' group by stationno,workno)tmp) wmount
-from @tmp a outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
+,(select COUNT(*) from(select stationno,workno from #tmp where gno='0' and stationno=a.stationno and workno!='' group by stationno,workno)tmp) wmount
+from #tmp a outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
 order by stationno,gno
 ,REPLACE(REPLACE(REPLACE(datea,'<font color="red">',''),'<font color="FA8000">',''),'</font>','')
-,nos,noq;
+,nos,noq
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+;
 --**************************************************************************************************
 z_cugp3:--z_cugp3
 declare @t_ordeno nvarchar(50)
@@ -541,7 +563,15 @@ set @t_ordeno = case when '#non' = [11] then '' else  [11] end
 set @t_workgno = case when '#non' = [13] then '' else  [13] end
 --set @t_workgnoq = case when '#non' = [14] then '' else  [14] end
 ----------------------------------------------------------------------------------------------------------------------------------------------------
-declare @tmp table(
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+IF OBJECT_ID('tempdb..#tmp') is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
 	gno nvarchar(2),
 	workgno nvarchar(90),
 	workgnoq nvarchar(30),
@@ -565,7 +595,7 @@ declare @tmp table(
 	qhref nvarchar(max)
 )
 
-insert into @tmp
+insert into #tmp
 select '0',b.cuano,b.cuanoq,b.ordeno,d.productno,d.product,a.workno,b.rank,a.accy,a.datea,a.noq,a.nos
 ,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
 ,b.processno,a.process,b.productno,b.product,a.hours,a.mount
@@ -580,33 +610,40 @@ order by b.cuano,b.cuanoq,a.datea,a.noq,a.nos
 
 update a
 set rank='<font color="red">'+a.rank+'</font>',datea='<font color="red">'+a.datea+'</font>'
-from @tmp a
-outer apply(select min(rank) rank from @tmp where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
+from #tmp a
+outer apply(select min(rank) rank from #tmp where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
 where a.rank>b.rank
 
-insert into @tmp
+insert into #tmp
 select '0',e.workgno,e.workgnoq,e.ordeno,e.productno,e.product,a.workno,b.rank,a.accy,a.datea,a.noq,a.nos
 ,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
 ,b.processno,a.process,b.productno,b.product,a.hours,a.mount,''
 from view_cugu a left join view_work b on a.workno=b.noa
 left join station c on a.stationno=c.noa
 left join view_workgs d on b.cuano=d.noa and b.cuanoq=d.noq
-left join @tmp e on a.datea=e.datea and a.stationno=e.stationno
+left join #tmp e on a.datea=e.datea and a.stationno=e.stationno
 where a.datea!='' and a.workno=''
 and (len(@t_ordeno)=0 or CHARINDEX(@t_ordeno,b.ordeno)>0)
 and (len(@t_workgno)=0 or charindex(@t_workgno,b.cuano+'-'+b.cuanoq)>0)
 and e.workgno!=''
 order by b.cuano,b.cuanoq,a.datea,a.noq,a.nos
 
-insert into @tmp(gno,workgno,workgnoq,hours,mount)
-select '1',workgno,workgnoq,sum(hours),sum(mount) from @tmp group by workgno,workgnoq
+insert into #tmp(gno,workgno,workgnoq,hours,mount)
+select '1',workgno,workgnoq,sum(hours),sum(mount) from #tmp group by workgno,workgnoq
 
 select gno,workgno wgnoa,workgnoq wgnoq,ordeno,productno,product,workno,rank,accy,datea,noq,nos
 ,stationno,stations,processno,process,mproductno mpno,mproduct,qhref
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hours),1)),0,30)) hours
-,(select COUNT(*) from(select workgno,workgnoq,workno from @tmp where gno='0' and workgno=a.workgno and workgnoq=a.workgnoq and workno!='' group by workgno,workgnoq,workno)tmp) wmount
-from @tmp a order by workgno,workgnoq,gno,REPLACE(REPLACE(datea,'<font color="red">',''),'</font>',''),noq,nos;
+,(select COUNT(*) from(select workgno,workgnoq,workno from #tmp where gno='0' and workgno=a.workgno and workgnoq=a.workgnoq and workno!='' group by workgno,workgnoq,workno)tmp) wmount
+from #tmp a order by workgno,workgnoq,gno,REPLACE(REPLACE(datea,'<font color="red">',''),'</font>',''),noq,nos
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
 ----------------------------------------------------------------------------------------*
 z_cugp4:--z_cugp4
 declare @t_bstationno nvarchar(max)
