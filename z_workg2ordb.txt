@@ -713,7 +713,11 @@ declare @tmp table(
 	src2 float,
 	sunrc2 float,
 	sfdate nvarchar(10),
-	ordcdate nvarchar(10)
+	ordcdate nvarchar(10),
+	--104/03/16 調整抓取速度
+	maxdate nvarchar(10),
+	mindate nvarchar(10),
+	mpno nvarchar(MAX)
 )
 
 declare cursor_table cursor for 
@@ -725,8 +729,13 @@ while(@@FETCH_STATUS <> -1)
 	begin
 		if ((select count(*) from @tmp where charindex(@workgno,workgno)>0)=0)
 		begin
-			insert into @tmp (gno,ordbno,noq,workgno,productno,products,style,smount)
+			insert into @tmp (gno,ordbno,noq,workgno,productno,products,style,smount
+			,maxdate,mindate,mpno)
 			select '0',b.noa,b.no3,a.workgno,b.productno,b.product,b.style,b.smount
+			--104/03/16 調整抓取速度
+			,(select MIN(wa.sfbdate) from view_workg wa where charindex(wa.noa,a.workgno)>0 and wa.stype='3')
+			,(select MAX(wa.sfbdate) from view_workg wa where charindex(wa.noa,a.workgno)>0 and wa.stype='3')
+			,(select productno+',' from view_workgs where charindex(noa,a.workgno)>0 For XML PATH(''))
 			from view_ordb a left join view_ordbs b on a.noa=b.noa  where charindex(@workgno,a.workgno)>0 		
 		 end
 		fetch next from cursor_table 
@@ -750,10 +759,12 @@ set gdemand=dbo.split(smount,',',0)
 +isnull((select SUM(ob.mount) from view_ordc oa left join view_ordct ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno),0) 
 ,ordcnos=isnull(STUFF((select ','+oa.noa from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno and isnull(ob.cancel,'')!='1' and isnull(oa.cancel,'')!='1' FOR XML PATH('')),1,1,''),'') 
 
-,sfdate=(select MAX(datea) from saleforecasts where
-datea between (select MIN(wa.sfbdate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 )
-and (select MAX(wa.sfedate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 )
-and productno in(select productno from view_workgs where charindex(noa,a.workgno)>0)  and dbo.split(smount,',',6) !='0')
+--,sfdate=(select MAX(datea) from saleforecasts where
+--datea between (select MIN(wa.sfbdate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 )
+--and (select MAX(wa.sfedate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 )
+--and productno in(select productno from view_workgs where charindex(noa,a.workgno)>0)  and dbo.split(smount,',',6) !='0')
+--104/03/16 調整抓取速度
+,sfdate=(select MAX(datea) from saleforecasts where datea between a.mindate and a.maxdate and CHARINDEX(productno,a.mpno)>0  and dbo.split(smount,',',6) !='0')
 ,ordcdate=isnull((select MAX(ob.trandate) from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno and isnull(ob.cancel,'')!='1' and isnull(oa.cancel,'')!='1'),'') 
 
 from @tmp a
@@ -815,12 +826,20 @@ declare @tmpa table(
 	src2 float, 
 	sunrc2 float, 
 	sfdate nvarchar(10), 
-	ordcdate nvarchar(10) 
+	ordcdate nvarchar(10),
+	--104/03/16 調整抓取速度
+	maxdate nvarchar(10),
+	mindate nvarchar(10),
+	mpno nvarchar(MAX)
 ) 
 
 
 declare cursor_table cursor for 
 select noa from view_workg 
+--104/03/16 調整抓取速度 (只抓 完工日區間)
+where (wbdate between @t_benddate and @t_eenddate
+or wedate between @t_benddate and @t_eenddate)
+or (noa between @t_bnoa and @t_enoa)
 open cursor_table 
 fetch next from cursor_table 
 into @workgno 
@@ -828,16 +847,26 @@ while(@@FETCH_STATUS <> -1)
 begin 
 if ((select count(*) from @tmpa where charindex(@workgno,workgno)>0)=0) 
 begin 
-	insert into @tmpa (gno,ordbno,noq,workgno,productno,products,style,smount) 
+	insert into @tmpa (gno,ordbno,noq,workgno,productno,products,style,smount
+	,maxdate,mindate,mpno) 
 	select '0',b.noa,b.no3,a.workgno,b.productno,b.product,b.style,b.smount 
+	--104/03/16 調整抓取速度
+	,(select MIN(wa.sfbdate) from view_workg wa where charindex(wa.noa,a.workgno)>0 and wa.stype='3')
+	,(select MAX(wa.sfbdate) from view_workg wa where charindex(wa.noa,a.workgno)>0 and wa.stype='3')
+	,(select productno+',' from view_workgs where charindex(noa,a.workgno)>0 For XML PATH(''))
 	from view_ordb a left join view_ordbs b on a.noa=b.noa where charindex(@workgno,a.workgno)>0 
 	
-	insert into @tmpa (gno,ordbno,noq,workgno,productno,products,style,smount) 
+	insert into @tmpa (gno,ordbno,noq,workgno,productno,products,style,smount
+	,maxdate,mindate,mpno) 
 	select '0'gno ,a.ordbno,'' noq,a.workgno,b.productno,b.product,b.style
 	,cast(isnull(b.gmount,0) as nvarchar(30))+','+cast(isnull(b.wmount,0) as nvarchar(30))+','
 	+cast(isnull(b.stkmount,0) as nvarchar(30))+','+cast(isnull(schmount,0) as nvarchar(30))+','
 	+cast(isnull(safemount,0) as nvarchar(30))+','+cast(isnull(netmount,0) as nvarchar(30))+','
 	+cast(isnull(fmount,0) as nvarchar(30))+',0,0,0,0'+workdate
+	--104/03/16 調整抓取速度
+	,(select MIN(wa.sfbdate) from view_workg wa where charindex(wa.noa,a.workgno)>0 and wa.stype='3')
+	,(select MAX(wa.sfbdate) from view_workg wa where charindex(wa.noa,a.workgno)>0 and wa.stype='3')
+	,(select productno+',' from view_workgs where charindex(noa,a.workgno)>0 For XML PATH(''))
 	from orda a left join ordas b on a.noa=b.noa where isnull(b.fdate,'')!=''
 	and charindex(@workgno,a.workgno)>0 and workgno not in (select workgno from @tmpa)
 end 
@@ -862,10 +891,12 @@ set gdemand=dbo.split(smount,',',0)
 +isnull((select SUM(ob.mount) from view_ordc oa left join view_ordct ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno and isnull(oa.cancel,'')!='1'),0)  
 ,ordcnos=isnull(STUFF((select ','+oa.noa from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno and isnull(ob.cancel,'')!='1' and isnull(oa.cancel,'')!='1' FOR XML PATH('')),1,1,''),'')  
 
-,sfdate=(select MAX(datea) from saleforecasts where 
-datea between (select MIN(wa.sfbdate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 ) 
-and (select MAX(wa.sfedate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 ) 
-and productno in(select productno from view_workgs where charindex(noa,a.workgno)>0)  and dbo.split(smount,',',6) !='0') 
+--,sfdate=(select MAX(datea) from saleforecasts where 
+--datea between (select MIN(wa.sfbdate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 ) 
+--and (select MAX(wa.sfedate) from view_workg wa left join view_workgs wb on wa.noa=wb.noa where charindex(wa.noa,a.workgno)>0 ) 
+--and productno in(select productno from view_workgs where charindex(noa,a.workgno)>0)  and dbo.split(smount,',',6) !='0')
+--104/03/16 調整抓取速度
+,sfdate=(select MAX(datea) from saleforecasts where datea between a.mindate and a.maxdate and CHARINDEX(productno,a.mpno)>0  and dbo.split(smount,',',6) !='0')  
 ,ordcdate=isnull((select MAX(ob.trandate) from view_ordc oa left join view_ordcs ob on oa.noa=ob.noa where ob.ordbno=a.ordbno and ob.productno=a.productno and isnull(ob.cancel,'')!='1' and isnull(oa.cancel,'')!='1'),'')  
 
 from @tmpa a 
