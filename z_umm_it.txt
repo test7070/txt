@@ -486,14 +486,28 @@ set @t_bcustno = case when '#non' = [8] then '' else [8] end
 set @t_ecustno = case when '#non' = [9] then CHAR(255) else [9] end
 set @t_bsmon = case when '#non' = [6] then '' else [6] end
 set @t_esmon = case when '#non' = [7] then CHAR(255) else [7] end
+
+declare @cmd nvarchar(max) 
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
 ---------------(前期未收金額)顯示每個月份應收金額 begin--------------------------------------------------------------------------------------------
-declare @tmpa table( 
+create table #tmpa(
 	custno nvarchar(20), 
 	money float, 
 	mon nvarchar(MAX)
 )
 
-insert into @tmpa (custno,money,mon) 
+insert into #tmpa (custno,money,mon) 
 select custno,SUM(money),mon from ( 
 --trd 
 --select aa.custno,bb.salesno,SUM(isnull(unpay,0)) money,(case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end)mon from view_trd aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) < @t_bsmon 
@@ -520,10 +534,10 @@ select custno,SUM(money),mon from (
 --from cara ca left join caras cb on ca.noa=cb.noa where ca.mon=@t_bsmon and cb.caritemno='001' 
 )tmp where custno between @t_bcustno and @t_ecustno group by custno,mon
 
-delete @tmpa where money=0 
+delete #tmpa where money=0 
 --------------------顯示每個月份應收金額 end---------------------------------------------------------------------------------------
 
-declare @tmp table( 
+create table #tmp(
 	gno nvarchar(1), 
 	custno nvarchar(20), 
 	comp nvarchar(50), 
@@ -536,7 +550,7 @@ declare @tmp table(
 ) 
 
 --前期
-insert into @tmp (gno,custno,money,total,payed)
+insert into #tmp (gno,custno,money,total,payed)
 select '9',custno,SUM(money),0,0 from (
 	--trd 
 	--select aa.custno,bb.salesno,SUM(isnull(unpay,0)) money from view_trd aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) < @t_bsmon group by  aa.custno,bb.salesno
@@ -561,7 +575,7 @@ select '9',custno,SUM(money),0,0 from (
 
 --本期
 
-insert into @tmp (gno,custno,money,total,payed)
+insert into #tmp (gno,custno,money,total,payed)
 select '9',custno,0,SUM(total),0 from (
 	--trd 
 	--select aa.custno,bb.salesno,SUM(isnull(total,0)) total from view_trd aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) between @t_bsmon and @t_esmon group by  aa.custno,bb.salesno
@@ -585,7 +599,7 @@ select '9',custno,0,SUM(total),0 from (
 )tmp where custno between @t_bcustno and @t_ecustno group by custno
 
 --本期已收
-insert into @tmp (gno,custno,money,total,payed)
+insert into #tmp (gno,custno,money,total,payed)
 select '9',custno,0,0,SUM(payed) from (
 	--trd 
 	--select aa.custno,bb.salesno,SUM(isnull(payed,0)) payed from view_trd aa left join cust bb on aa.custno=bb.noa where (case when len(aa.mon)=0 then left(aa.datea,6) else aa.mon end) between @t_bsmon and @t_esmon group by  aa.custno,bb.salesno
@@ -610,30 +624,30 @@ select '9',custno,0,0,SUM(payed) from (
 )tmp where custno between @t_bcustno and @t_ecustno group by custno
 
 --結果
-insert into @tmp (gno,custno,money,total,payed)
-select '0',custno,SUM(money),SUM(total),SUM(payed) from @tmp group by custno,salesno order by custno
+insert into #tmp (gno,custno,money,total,payed)
+select '0',custno,SUM(money),SUM(total),SUM(payed) from #tmp group by custno,salesno order by custno
 --總計
-insert into @tmp 
-select '3'gno,'ZZZZZZZZZ','','','',sum(money),sum(total),sum(payed),'' from @tmp where gno='0'
+insert into #tmp 
+select '3'gno,'ZZZZZZZZZ','','','',sum(money),sum(total),sum(payed),'' from #tmp where gno='0'
 
-delete @tmp where gno='0'
+delete #tmp where gno='0'
 
 --換成月份分割
-insert into @tmp (gno,custno,money,total,payed,memo)
+insert into #tmp (gno,custno,money,total,payed,memo)
 select '1',a.custno,SUM(a.money),SUM(a.total),SUM(a.payed),b.mon+'：'+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,b.money),1)),4,12))
-from @tmp a left join @tmpa b on a.custno=b.custno where gno='9'
+from #tmp a left join #tmpa b on a.custno=b.custno where gno='9'
 group by a.custno,salesno,b.mon,b.money order by a.custno 
 
-delete @tmp where gno='9'
+delete #tmp where gno='9'
 
-update @tmp
+update #tmp
 set gno='2'
 where custno+'_'+ left(isnull(memo,''),6) not in 
-(select custno+'_'+ MIN(left(isnull(memo,''),6)) from @tmp where gno='1' group by custno)
+(select custno+'_'+ MIN(left(isnull(memo,''),6)) from #tmp where gno='1' group by custno)
 and gno!='3'
 
-delete @tmp where money=0 and total=0 and payed=0 
-update @tmp
+delete #tmp where money=0 and total=0 and payed=0 
+update #tmp
 set comp=(select top 1 nick from ((select nick from cust where noa=custno union select namea from carOwner where noa=custno union select namea from sss where noa=custno))tmp)
 ,namea=(select namea from sss where noa=salesno)
 
@@ -645,4 +659,18 @@ select gno,custno,comp,memo
 	,dbo.charbr(stuff((select ','+noa from view_vcc b
 where (case when len(b.mon)=0 then left(b.datea,6) else b.mon end) between @t_bsmon and @t_esmon and (left(kind,4)!='健勞勞退') 
 and (case when b.custno2!='' then b.custno2 else b.custno end)=a.custno and unpay>0  group by noa for XML Path('')),1,1,''),12) vccno
-from @tmp a order by custno,gno,memo;
+from #tmp a order by custno,gno,memo
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+;
