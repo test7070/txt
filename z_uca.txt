@@ -773,7 +773,210 @@ z_stk:	--庫存表  --z_stk
 	set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 	set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
 	
+	if (@enddate='')
+		set @enddate=@t_stkdate
+	
 	--@t_typea=1@商品,2@製成品,3@半成品,4@原料,5@物料,6@下腳品,7@加工,8@零件,9@其它
+	
+	--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @enddate)  and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @enddate) and (isnull(a.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @enddate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+		insert #tmp
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0) from view_ucce a left join view_ucces b on a.noa=b.noa where a.datea<= @enddate 
+		and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		
+		delete a from #tmp a
+		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+		insert #stkucc
+		select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+		,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+		,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+		from #tmp a left join view_ucaucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+		where (isnull(a.productno,'') between @t_bproductno and @t_eproductno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		group by a.productno,a.storeno
+		order by a.productno,a.storeno
+		
+		delete #stkucc where mount=0 and weight=0
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
 	
 	declare @result table(
 		gno nvarchar(1),
@@ -792,7 +995,9 @@ z_stk:	--庫存表  --z_stk
 		select '0' gno,a.productno,a.product xproduct,a.unit,a.mount totmount,b.price,a.mount*b.price total 
 		from (
 			select s.productno,MAX(s.product) product,sum(s.mount) mount,(select top 1 unit from view_ucaucc where noa=s.productno) unit 
-			from stkucc(@enddate,'','') s where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
+			--from stkucc(@enddate,'','') s
+			 from #stkucc s
+			where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
 		) a
 		left join (select * from costs[1] where mon=LEFT(@enddate,6)) b on a.productno=b.productno
 		outer apply(select top 1 groupano,style from view_ucaucc where a.productno=noa) c
@@ -807,7 +1012,9 @@ z_stk:	--庫存表  --z_stk
 			insert into @result
 			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,c.price,a.mount*c.price total
 			from (
-				select productno,MAX(product) product,sum(mount) mount 	from stkucc(@enddate,'','') s
+				select productno,MAX(product) product,sum(mount) mount 
+				--from stkucc(@enddate,'','') s
+				from #stkucc s
 				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
 			) a
 			left join ucc b on a.productno=b.noa  
@@ -821,7 +1028,9 @@ z_stk:	--庫存表  --z_stk
 			insert into @result
 			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,c.price,a.mount*c.price total
 			from (
-				select productno,MAX(product) product,sum(mount) mount from stkucc(@enddate,'','') s
+				select productno,MAX(product) product,sum(mount) mount 
+				--from stkucc(@enddate,'','') s
+				from #stkucc s
 				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
 			) a
 			left join (
@@ -855,6 +1064,19 @@ z_stk:	--庫存表  --z_stk
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(price,2)),1)),0,30)) price
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(total,0)),1)),4,30)) total
 	from @result
+	
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
 ;
 --*****************************************************************************************
 z_stk1:	
@@ -1110,6 +1332,206 @@ if(len(@enddate)=9)
 begin
 	set @t_stkdate=@enddate
 end
+
+--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate)  and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @t_stkdate) and (isnull(a.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+		insert #tmp
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0) from view_ucce a left join view_ucces b on a.noa=b.noa where a.datea<= @t_stkdate 
+		and (isnull(b.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		
+		delete a from #tmp a
+		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+		insert #stkucc
+		select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+		,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+		,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+		from #tmp a left join view_ucaucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+		where (isnull(a.productno,'') between @t_bpno and @t_epno) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		group by a.productno,a.storeno
+		order by a.productno,a.storeno
+		
+		delete #stkucc where mount=0 and weight=0
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
 --******************************************************************
 declare @tmp table(
 	gno nvarchar(1), 
@@ -1125,7 +1547,8 @@ insert into @tmp
 	select
 		'0',a.storeno,a.store,a.productno,a.product,(select top 1 unit from view_ucaucc where noa=a.productno)
 		,a.mount
-	from stkucc(@t_stkdate,'','') a
+	--from stkucc(@t_stkdate,'','') a
+	from #stkucc a
 	outer apply(select top 1 groupano,style from view_ucaucc where noa=a.productno) b
 	where (a.storeno between @t_bstoreno and @t_estoreno)
 	and (a.productno between @t_bpno and @t_epno)
@@ -1152,6 +1575,19 @@ select
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
 from @tmp
 order by storeno,gno,pno
+
+--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+--104/03/23----------------------------------------------------------------------------------------------------------------------------------
 ;
 --------------------------------------------------------------------------------------------------------------------
 z_uca4:--z_uca4
