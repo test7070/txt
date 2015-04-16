@@ -2,35 +2,12 @@
 	SET QUOTED_IDENTIFIER OFF
 	declare @custno nvarchar(MAX)=[1] --客戶變號
 	declare @accy nvarchar(10)--現在年度
+	declare @oaccy nvarchar(10)--tranorde年度
 	declare @datea nvarchar(10)--現在日期
 	set @datea=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 	set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
 	set @accy=left(@datea,3)
-	
-	declare @cmd nvarchar(max) 
-	IF OBJECT_ID('tempdb..#tmp')is not null
-	BEGIN
-		set @cmd = 'drop table #tmp'
-		EXECUTE sp_executesql @cmd
-	END
-	
-	--暫存資料表
-	create table #tmp(
-		noa nvarchar(50), --單據編號
-		so nvarchar(50),--來源單號
-		addressee nvarchar(50),--姓名
-		caseend nvarchar(50),--郵遞區號
-		aaddr nvarchar(MAX),--地址
-		boat nvarchar(MAX),--行動電話
-		atel nvarchar(MAX),--電話
-		endaddr nvarchar(MAX),--備註
-		straddr nvarchar(MAX),--商品內容
-		unit nvarchar(20),--審件等級
-		price float,--代收貨款
-		po nvarchar(50),--96code
-		boatname nvarchar(50)--97code
-	)
-	
+		
 	declare @a nvarchar(MAX),@b nvarchar(MAX),@c nvarchar(MAX),@d nvarchar(MAX)
 	,@e nvarchar(MAX),@f nvarchar(MAX),@g nvarchar(MAX),@h nvarchar(MAX),@i nvarchar(MAX),@j nvarchar(MAX)
 	
@@ -39,6 +16,7 @@
 	declare @key nvarchar(20)='BA'
 	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 	declare @n int
+	declare @tranordeno nvarchar(30)
 	
 	--取當天最大NOA
 	set @noa = case when @key+REPLACE(@datea,'/','')+'000' >
@@ -67,7 +45,7 @@
 		if((select isnull(siteno,'')from addr2 where noa=@c)='')
 		begin
 			--取得最大96碼(96+流水號7碼+檢查碼)
-			select @max_code96=MAX(po) from (select po from view_transef union all select po from #tmp)tmp
+			select @max_code96=MAX(po) from view_transef
 			if (@max_code96 is null)--沒有最大96碼
 			begin
 				set @code96='9600000011'
@@ -85,21 +63,21 @@
 		end
 		
 		--產生code97
-		select top 1 @bcode97=docketno1,@ecode97=docketno2 from view_tranorde where enda!=1 and left(containertype,3)='edi' and custno=@custno order by noa desc
+		select top 1 @tranordeno=noa,@bcode97=docketno1,@ecode97=docketno2 from view_tranorde where enda!=1 and left(containertype,3)='edi' and custno=@custno order by noa
 		if(@bcode97 is null) set @bcode97='0000000000'
 		if(@ecode97 is null) set @ecode97='0000000000'
-		select @max_code97=MAX(boatname) from (select boatname from view_transef where custno=@custno union all select boatname from #tmp)tmp
+		if(@tranordeno is null) set @tranordeno=''
+		
+		select @max_code97=MAX(boatname) from view_transef where (boatname between @bcode97 and @ecode97)
+		 
 		--預設格式97+流水號8碼(可能有檢查碼暫不考慮)
 		if (@max_code97 is null and @bcode97!='0000000000')--沒有最大97碼
 		begin
 			set @code97=@bcode97
 		end
-		else if ( @max_code97 is not null)
+		else if ( @max_code97 is not null and @bcode97!='0000000000')
 		begin
 			set @code97='97'+right('00000000'+cast(cast(right(@max_code97,8) as int)+1 as nvarchar(10)),8)--流水號
-			--預設格式97+流水號8碼(考慮有檢查碼下面再取消註解)
-			--set @code97='97'+right('00000000'+cast(cast(left(right(@max_code97,8),7) as int)+1 as nvarchar(10)),7)+--流水號
-			--cast((cast(left(right(@max_code97,8),7) as int)+1)%7 as nvarchar(10))--檢查碼
 			if(@code97 not between @bcode97 and @ecode97) --在97碼區間範圍內
 			begin
 				set @code97=''
@@ -110,21 +88,25 @@
 			set @code97=''
 		end
 		
-		insert #tmp
-		select @noa,@a,@b,@c,@d,@e,@f,@g,@h,@i,@j,@code96,@code97
+		EXEC("insert transef"+@accy+" (noa,noq,datea,so,addressee,caseend,aaddr,boat,atel,endaddr,straddr,unit,price,po,boatname,traceno,custno,comp,nick)
+		select '"+@noa+"','001','"+@datea+"','"+@a+"','"+@b+"','"+@c+"','"+@d+"','"+@e+"','"+@f+"','"+@g+"','"+@h+"','"+@i+"','"+@j+"','"+@code96+"','"+@code97
+		+"','"+@tranordeno+"','"+@custno+"',(select top 1 comp from cust where noa='"+@custno+"'),(select top 1 nick from cust where noa='"+@custno+"')")
+		
+		select @oaccy=isnull(accy,'') from view_tranorde where noa=@tranordeno
+	
+		if(@tranordeno!='' )
+		begin
+			EXEC("update tranorde"+@oaccy+" 
+			set boat=(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='')
+			,port=isnull(mount,0)-(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='')
+			,enda=case when isnull(mount,0)=(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='') then 1 else 0 end
+			where noa='"+@tranordeno+"'")
+		end
 		
 		fetch next from cursor_table
 		into @a,@b,@c,@d,@e,@f,@g,@h,@i,@j
 	end
 	close cursor_table
 	deallocate cursor_table
-	
-	EXEC("insert transef"+@accy+" (noa,so,addressee,caseend,aaddr,boat,atel,endaddr,straddr,unit,price,po,boatname)
-	select * from #tmp")
-	
-	IF OBJECT_ID('tempdb..#tmp')is not null
-	BEGIN
-		set @cmd = 'drop table #tmp'
-		EXECUTE sp_executesql @cmd
-	END
+; 
 ; 

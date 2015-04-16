@@ -28,8 +28,9 @@ tboat2:--tboat2
 SET QUOTED_IDENTIFIER OFF
 declare @97code nvarchar(20)=[1]
 declare @accy nvarchar(20) 
+declare @tranordeno nvarchar(20)
 
-select @accy=accy from view_transef where boatname=@97code
+select @accy=isnull(accy,''),@tranordeno=isnull(traceno,'') from view_transef where boatname=@97code
 
 if(@accy!='')
 begin
@@ -37,10 +38,96 @@ begin
 	set addressee=a.namea,atel=a.tel,caseend=a.post,aaddr=a.boatname,accno=a.memo,po=a.ship
 	from tboat2 a left join transef"+@accy+" b on a.code=b.boatname and a.custno=b.custno
 	where a.code='"+@97code+"'")
+	
+	select @accy=isnull(accy,'') from view_tranorde where noa=@tranordeno
+	
+	if(@tranordeno!='' )
+	begin
+		EXEC("update tranorde"+@accy+" 
+		set boat=(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='')
+		,port=isnull(mount,0)-(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='')
+		,enda=case when isnull(mount,0)=(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='') then 1 else 0 end
+		where noa='"+@tranordeno+"'")
+	end
+	
 	select 'success' msg
 end
 else 
 begin
 	select 'error' msg
+end
+;
+--------------------------------------------------------------------------------
+ordeused:--ordeused
+SET QUOTED_IDENTIFIER OFF
+declare @97code nvarchar(20)=[1]
+declare @tranordeno nvarchar(20)
+declare @accy nvarchar(20) 
+
+select @tranordeno=isnull(traceno,'') from view_transef where boatname=@97code
+select @accy=isnull(accy,'') from view_tranorde where noa=@tranordeno
+	
+if(@tranordeno!='' )
+begin
+	EXEC("update tranorde"+@accy+" 
+	set boat=(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='')
+	,port=isnull(mount,0)-(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='')
+	,enda=case when isnull(mount,0)=(select count(*) from view_transef where traceno='"+@tranordeno+"' and isnull(addressee,'')!='') then 1 else 0 end
+	where noa='"+@tranordeno+"'")
+end
+	
+;
+---------------------------------------------------------------------------------
+post:--post
+SET QUOTED_IDENTIFIER OFF
+declare @year nvarchar(20)=[1]--年度
+declare @noa nvarchar(20)=[2]--單據編號
+declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增
+declare @accy nvarchar(50) --資料庫年度
+declare @typea nvarchar(50) --託運單形式
+declare @btransefno nvarchar(50)='' --預購起始號碼
+declare @etransefno nvarchar(50)='' --預購迄止號碼
+declare @key nvarchar(50)='BA' 
+declare @maxnoa nvarchar(20)
+declare @datea nvarchar(20)
+set @datea=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+declare @noq nvarchar(10)
+declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+declare @n int
+
+if(@condition='0')
+begin
+	set @accy=isnull((select top 1 accy from view_transef where traceno=@noa),@year)
+	select @btransefno=docketno1,@etransefno=docketno2,@typea=containertype from view_tranorde where noa=@noa
+
+	--刪除產生的transef
+	if(left(@typea,2)='手寫')
+		EXEC(" delete transef"+@accy+" where traceno='"+@noa+"'")
+		----and (boatname between '"+@btransefno+"' and '"+@etransefno+"')
+end
+
+if(@condition='1')
+begin
+	set @accy=isnull((select top 1 accy from view_tranorde where noa=@noa),@year)
+	select @btransefno=docketno1,@etransefno=docketno2,@typea=containertype from view_tranorde where noa=@noa
+	
+	set @maxnoa = case when @key+REPLACE(@datea,'/','')+'000' >
+	isnull((select MAX(noa) from view_transef where LEFT(noa,9)=@key+replace(@datea,'/','')),'')
+	then @key+REPLACE(@datea,'/','')+'000' else (select MAX(noa) from view_transef where LEFT(noa,9)=@key+replace(@datea,'/','')) end
+	
+	--產生transef
+	while(@btransefno<=@etransefno and left(@typea,2)='手寫')
+	begin
+		set @n =  cast((charindex(left(RIGHT(@maxnoa,3),1),@string)-1)*100+cast(RIGHT(@maxnoa,2) as int)+1 as nvarchar)	
+		set @noq = SUBSTRING(@string,floor(@n/100)+1,1)+right('00'+cast(@n%100 as nvarchar),2)
+		set @maxnoa = @key+REPLACE(@datea,'/','')+@noq
+		
+		exec("insert transef"+@accy+"(noa,noq,boatname,po,custno,comp,nick,datea,carno,calctype,traceno)
+		select '"+@maxnoa+"','001','"+@btransefno+"','',custno,comp,nick,datea,deliveryno,containertype,'"+@noa+"'
+		from view_tranorde where noa='"+@noa+"'")
+		
+		set @btransefno='97'+right('00000000'+cast(cast(RIGHT(@btransefno,8)as int)+1 as nvarchar(10)),8)
+	end
 end
 ;
