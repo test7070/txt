@@ -1,0 +1,1192 @@
+﻿zxls_salrb_csv:--指紋打卡上傳
+--總部+北部
+declare @nbwtime nvarchar(10)='08:30'--上班時間
+declare @nbwtime2 nvarchar(10)='09:30'--上班時間
+declare @nrtime nvarchar(10)='12:30'--中午休息時間
+declare @nrtime2 nvarchar(10)='13:30'--中午休息時間
+declare @newtime nvarchar(10)='17:30'--下班時間
+declare @newtime2 nvarchar(10)='18:30'--下班時間
+
+declare @npart nvarchar(10)='09'--總部+北部編號
+declare @njob nvarchar(10)='01'--主任級主管--不須打卡，平日不計加班
+declare @nspart nvarchar(10)='04'--公共資源部--每週工時40小時即可，平日不計加班
+------------------------------------------------------------
+--各地區域辦公室
+declare @bwtime nvarchar(10)='08:30'--上班時間
+declare @bwtime2 nvarchar(10)='09:00'--上班時間
+declare @rtime nvarchar(10)='12:30'--中午休息時間
+declare @rtime2 nvarchar(10)='13:30'--中午休息時間
+declare @ewtime nvarchar(10)='17:30'--下班時間
+declare @ewtime2 nvarchar(10)='18:00'--下班時間
+-------------------------------------------------------
+declare @tmp table(
+	datea nvarchar(100),
+	timea nvarchar(100),
+	sssno nvarchar(100),
+	namea nvarchar(100)
+)
+
+insert @tmp
+select dbo.AD2ChineseEraName(a),e,c,d
+from ztmpxls 
+where a!='日期' and a!='' and CHARINDEX('/',a)>0 and e!=''
+union
+select dbo.AD2ChineseEraName(a),f,c,d
+from ztmpxls 
+where a!='日期' and a!='' and CHARINDEX('/',a)>0 and f!=''
+
+--bbm
+declare @bbm table(
+		noa nvarchar(20),
+		w133 decimal(10,1),
+		w166 decimal(10,1),
+		w100 decimal(10,1),
+		mount float,
+		holiday bit
+)
+
+--bbs
+declare @bbs table(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		sssno nvarchar(20),
+		namea nvarchar(50),
+		clockin nvarchar(50),
+		clockout nvarchar(50),
+		w133 decimal(10,1),
+		w166 decimal(10,1),
+		w100 decimal(10,1),
+		hr_special decimal(10,1),
+		memo nvarchar(MAX),
+		work nvarchar(1),--1總部+北部 2各地區
+		job nvarchar(50)--1主任級主管 不須打卡 4公共資源部 每週工時40小時
+)
+
+declare @datea nvarchar(10)--當天日期
+declare @t_weekday nvarchar(10)--星期
+declare cursor_table cursor for
+select datea from @tmp a group by datea --匯入日期
+open cursor_table
+fetch next from cursor_table
+into @datea
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@datea,3) as int )+1911 as nvarchar(10))+'/'+right(@datea,5))-1
+	insert @bbm(noa,holiday)
+	select @datea,
+	(select case when not((select COUNT(*) from holiday where noa=@datea
+	and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) 
+	or @datea in(select noa from holiday where isnull(iswork,0)=1)
+	then 0 else 1 end)
+	
+	if((select case when not((select COUNT(*) from holiday where noa=@datea
+	and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) 
+	or @datea in(select noa from holiday where isnull(iswork,0)=1)
+	then 0 else 1 end)=0)
+	begin
+		--每個員工都顯示
+		insert @bbs
+		select @datea,(Rank() OVER (ORDER BY a.sssno))
+		,a.sssno,b.namea,isnull(MIN(a.timea),''),isnull(MAX(a.timea),''),0,0,0,0,''
+		,case when b.partno=@npart then '1' else '2'end
+		,case when isnull(b.issales,0)=1 then '1' when b.partno=@nspart then '4' else '0' end
+		from @tmp a right join sss b on a.sssno=b.noa and (isnull(b.outdate,'')='' or isnull(outdate,'')>@datea)
+		where datea=@datea and noa!='Z001' group by a.sssno,b.namea,b.partno,b.issales
+	end
+	else
+	begin
+		--只有加班員工
+		insert @bbs
+		select @datea,(Rank() OVER (ORDER BY a.sssno))
+		,a.sssno,b.namea,isnull(MIN(a.timea),''),isnull(MAX(a.timea),''),0,0,0,0,''
+		,case when b.partno=@npart then '1' else '2'end
+		,case when isnull(b.issales,0)=1 then '1' when b.partno=@nspart then '4' else '0' end
+		from @tmp a left join sss b on a.sssno=b.noa and (isnull(b.outdate,'')='' or isnull(outdate,'')>@datea)
+		where datea=@datea and noa!='Z001' group by a.sssno,b.namea,b.partno,b.issales
+	end
+	
+	--更新排列順序
+	update @bbs set noq='XX'+noq
+		
+	update a
+	set noq=b.noq2
+	from @bbs a left join (select noa,sssno,(Rank() OVER (ORDER BY sssno))noq2 from @bbs where noa=@datea)b
+	on a.noa+'_'+a.sssno=b.noa+'_'+b.sssno
+	where a.noa=@datea
+	
+	update @bbs set noq=right('000'+noq,3)
+	
+	if((select case when not((select COUNT(*) from holiday where noa=@datea
+	and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) 
+	or @datea in(select noa from holiday where isnull(iswork,0)=1)
+	then 0 else 1 end)=0)--正常日
+	begin
+		--主管不處理不須打卡
+		update a
+		set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+		from @bbs a	where job='1' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+		--公共資源部(不用判斷甚麼時候上班 但檢查每周是否滿40小時 後面處理)
+		update a
+		set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+		from @bbs a	where job='4' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+		
+		--處理總部+北部
+		--其他
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'遲到'
+		where clockin>@nbwtime2 and work='1' and job='0'
+		
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'早退'
+		where clockout<@newtime and work='1' and job='0'
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='1' and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and btime between @nbwtime and @nbwtime2 and hname!='曠工')>0	
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='1'and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and etime between @newtime and @newtime2 and hname!='曠工')>0
+		
+		--update a
+		--set memo=memo+(case when len(memo)>0 then ',' else '' end)+'上班時數不足8小時'
+		--from @bbs a
+		--where clockin!='' and clockout!='' and work='1' and job='0' 
+		--and round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+		----中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		--< (case when clockin<@nrtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+		
+		
+		--各區域
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'遲到'
+		where clockin>@bwtime2 and work='2' and job='0'
+		
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'早退'
+		where clockout<@ewtime and work='2' and job='0'
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='2' and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and btime between @bwtime and @bwtime2 and hname!='曠工')>0	
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='2'and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and etime between @ewtime and @ewtime2 and hname!='曠工')>0
+		
+		--update a
+		--set memo=memo+(case when len(memo)>0 then ',' else '' end)+'上班時數不足8小時'
+		--from @bbs a
+		--where clockin!='' and clockout!='' and work='2' and job='0' 
+		--and round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+		----中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		--< (case when clockin<@rtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+		
+		--更新加班時數>>>以加班單salovertime為主
+		update a
+		set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		,w133=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		from @bbs a
+		--更新加班超過兩小時
+		update @bbs set w133=0 where w133<0 and noa=@datea
+				
+		update @bbs	set w166=round(w133-2,1),w133=2	where w133>2 and noa=@datea
+	end
+	else --假日加班>>>以加班單salovertime為主
+	begin
+		update a
+		set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		,w100=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		from @bbs a
+	end
+	
+	--寫入資料庫內容
+	BEGIN TRY
+		--判斷當天有沒有寫入
+		if((select COUNT(*) from salpresent where noa=@datea)=0)
+		begin
+			--寫入表頭
+			insert salpresent(noa,w133,w166,w100,mount,holiday)
+			select * from @bbm where noa=@datea
+			
+			--預防寫入失敗的bbs 清除
+			delete salpresents where noa=@datea
+			
+			--總部+北部(不含主管)
+			insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,addwork)
+			select noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo
+			+(case when work='1' and job!='1' and (select COUNT(*) from salvacause s where sssno=bbs.sssno 
+			and (@datea between bdate and edate) and (btime between @nbwtime and @nbwtime2) and (etime between @newtime and @newtime2))=0 and (clockin='' or clockout='') 
+			and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6)	or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+			then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end),work
+			from @bbs bbs where noa=@datea
+			--各區域
+			insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,addwork)
+			select noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo
+			+(case when work='2' and job!='1' and (select COUNT(*) from salvacause s where sssno=bbs.sssno 
+			and (@datea between bdate and edate) and (btime between @bwtime and @bwtime2) and (etime between @ewtime and @ewtime2))=0 and (clockin='' or clockout='') 
+			and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6)	or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+			then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end),work
+			from @bbs bbs where noa=@datea
+			
+		end
+		else
+		begin
+			--更新bbs 
+			--目前有的上班時間比更新時間早
+			update b set b.clockin=a.clockin,b.addwork=a.work
+			from @bbs a left join salpresents b on a.noa=b.noa and a.sssno=b.sssno
+			where b.noa!='' and b.sssno!='' and a.clockin!='' 
+			and a.clockin<=(case when isnull(b.clockin,'99:99:99')='' then '99:99:99' else isnull(b.clockin,'99:99:99') end)
+			--目前有的下班時間比更新時間晚
+			update b set b.clockout=a.clockout,b.addwork=a.work
+			from @bbs a left join salpresents b on a.noa=b.noa and a.sssno=b.sssno
+			where b.noa!='' and b.sssno!='' and a.clockout!=''
+			and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
+			
+			--更新遲到與早退
+			--主管不處理不須打卡
+			update a
+			set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+			from salpresents a left join sss b on a.sssno=b.noa where isnull(b.issales,0)=1 
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+			
+			--公共資源部(不用判斷甚麼時候上班 但檢查每周是否滿40小時 後面處理)
+			update a
+			set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+			from salpresents a left join sss b on a.sssno=b.noa where b.partno=@nspart and isnull(b.issales,0)=0
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+		
+			--處理總部+北部
+			--其他
+			update a
+			set memo=a.memo+(case when CHARINDEX('遲到',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'遲到') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockin>@nbwtime2 and a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=a.memo+(case when CHARINDEX('早退',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'早退') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockout<@newtime and a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and btime between @nbwtime and @nbwtime2 and hname!='曠工')>0	
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and etime between @newtime and @newtime2 and hname!='曠工')>0
+			
+			--各區域
+			update a
+			set memo=a.memo+(case when CHARINDEX('遲到',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'遲到') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockin>@bwtime2 and a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=a.memo+(case when CHARINDEX('早退',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'早退') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockout<@ewtime and a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and btime between @bwtime and @bwtime2 and hname!='曠工')>0	
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and etime between @ewtime and @ewtime2 and hname!='曠工')>0
+			
+			
+			--更新加班時數>>>以加班單salovertime為主
+			--正常日
+			if((select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0)
+			begin
+				update a
+				set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				,w133=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				from salpresents a where noa=@datea
+				
+				update salpresents set w133=0 where w133<0 and noa=@datea
+				update salpresents	set w166=round(w133-2,1),w133=2	where w133>2 and noa=@datea and noa=@datea
+			end
+			else
+			begin
+				update a
+				set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				,w100=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				from salpresents a where noa=@datea
+			end
+			
+			--新增bbs(不存在的)
+			insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,addwork)
+			select noa,'x'+noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,work from @bbs
+			where noa+'_'+sssno not in (select noa+'_'+sssno from salpresents)
+			
+			update salpresents
+			set memo=REPLACE(REPLACE(REPLACE(memo,',打卡資料錯誤',''),'打卡資料錯誤,',''),'打卡資料錯誤','')
+			where noa=@datea
+			
+			--總部+北部(不含主管)
+			update a
+			set memo=a.memo+(case when 
+			(select COUNT(*) from salvacause s where sssno=a.sssno
+			and (@datea between bdate and edate) and (btime between @nbwtime and @nbwtime2) and (etime between @newtime and @newtime2))=0 and (clockin='' or clockout='') 
+			and ((select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0) 
+			and CHARINDEX('打卡資料錯誤',a.memo)=0 then (case when len(a.memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			from salpresents a left join sss b on a.sssno=b.noa where a.noa=@datea and addwork='1' and isnull(b.issales,0)=0
+			--各區域
+			update a
+			set memo=a.memo+(case when 
+			(select COUNT(*) from salvacause s where sssno=a.sssno
+			and (@datea between bdate and edate) and (btime between @bwtime and @bwtime2) and (etime between @ewtime and @ewtime2))=0 and (clockin='' or clockout='') 
+			and ((select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0) 
+			and CHARINDEX('打卡資料錯誤',a.memo)=0 then (case when len(a.memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			from salpresents a left join sss b on a.sssno=b.noa where a.noa=@datea and addwork='2' and isnull(b.issales,0)=0
+			
+			--更新bbs排序
+			update a
+			set noq=b.noq2
+			from salpresents a left join (select noa,sssno,(Rank() OVER (ORDER BY sssno))noq2 from salpresents where noa=@datea)b
+			on a.noa+'_'+a.sssno=b.noa+'_'+b.sssno
+			where a.noa=@datea
+			
+			update salpresents
+			set noq=right('000'+noq,3)
+			where noa=@datea
+			
+		end
+		
+		update a
+		set w133=isnull((select sum(w133) from salpresents where noa=a.noa),0)
+		,w166=isnull((select sum(w166) from salpresents where noa=a.noa),0)
+		,w100=isnull((select sum(w100) from salpresents where noa=a.noa),0)
+		,hr_special=isnull((select sum(hr_special) from salpresents where noa=a.noa),0)
+		,mount=isnull((select COUNT(*) from salpresents where noa=a.noa),0)
+		,holiday=(select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)
+		from salpresent a where noa=@datea
+		
+	END TRY
+	BEGIN CATCH
+		SELECT ERROR_NUMBER() as ErrorNumber,ERROR_MESSAGE() as ErrorMessage
+	END CATCH
+	
+	delete @bbm
+	delete @bbs
+	--******************************************************************************************
+	--寫入曠工資料
+	delete salvacause where datea=@datea and rank='1'
+	update salpresents set memo=REPLACE(REPLACE(REPLACE(memo,',曠工',''),'曠工,',''),'曠工','')
+	where CHARINDEX('曠工',memo)>0 and noa=@datea
+	
+	--總部+北部(不含主管)
+		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@nbwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((cast(left(clockin,2)as float)-cast(LEFT(@nbwtime2,2) as float))*60.0)+(cast(right(left(clockin,5),2) as float))-cast(right(LEFT(@nbwtime2,5),2) as float))/60.0,2)  hr_used
+		,@nbwtime2 btime ,left(clockin,5) etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@nbwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@newtime and clockout!='' and clockout>@nbwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((CAST(left(@newtime,2) as float)-cast(left(clockout,2)as float))*60.0)+(cast(right(left(clockout,5),2) as float)-cast(right(left(@newtime,5),2) as float)))/60.0,2)  hr_used
+		,left(clockout,5) btime ,@newtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@newtime and clockout!='' and clockout>@nbwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime) and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,8  hr_used	,@nbwtime btime ,@newtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime) and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時','')+(case when CHARINDEX('上班時數不足8小時',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時',''))>0 then ',' else '' end+'上班時數不足8小時') end)
+		from salpresents a left join sss b on a.sssno=b.noa
+		where clockin!='' and clockout!='' and a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockout) as float)/60),1)
+		--中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		< (case when a.clockin<@nrtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+	
+	--各區域
+		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@bwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((cast(left(clockin,2)as float)-cast(LEFT(@bwtime2,2) as float))*60.0)+(cast(right(left(clockin,5),2) as float))-cast(right(LEFT(@bwtime2,5),2) as float))/60.0,2)  hr_used
+		,@bwtime2 btime ,left(clockin,5) etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@bwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@ewtime and clockout!='' and clockout>@bwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((CAST(left(@ewtime,2) as float)-cast(left(clockout,2)as float))*60.0)+(cast(right(left(clockout,5),2) as float)-cast(right(left(@ewtime,5),2) as float)))/60.0,2)  hr_used
+		,left(clockout,5) btime ,@ewtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@ewtime and clockout!='' and clockout>@bwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime) and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,8  hr_used	,@bwtime btime ,@ewtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime) and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+	
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時','')+(case when CHARINDEX('上班時數不足8小時',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時',''))>0 then ',' else '' end+'上班時數不足8小時') end)
+		from salpresents a left join sss b on a.sssno=b.noa
+		where clockin!='' and clockout!='' and a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockout) as float)/60),1)
+		--中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		< (case when a.clockin<@rtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+	
+	--清除addwork
+	update salpresents
+	set addwork=''
+	where noa=@datea
+	
+	fetch next from cursor_table
+	into @datea
+end
+close cursor_table
+deallocate cursor_table
+
+
+--判斷公共資源部 每周是否滿40小時
+--取得每周上班日
+declare @tmpa table(
+	sssno nvarchar(100),
+	bdate nvarchar(10),
+	edate nvarchar(10),
+	datea nvarchar(10),
+	xhours float
+)
+insert @tmpa(sssno,bdate,edate)
+select sssno,dbo.q_cdn(datea,1-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+,dbo.q_cdn(datea,7-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+from @tmp a group by sssno
+,dbo.q_cdn(datea,1-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+,dbo.q_cdn(datea,7-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+
+update a
+set datea=isnull((select MAX(noa) from salpresents where noa between a.bdate and a.edate and sssno=a.sssno),'')
+,xhours=isnull((select SUM(round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+-(case when clockin<@rtime then 1 else 0 end)) from salpresents where noa between a.bdate and a.edate and sssno=a.sssno),0)
+from @tmpa a
+
+update a
+set memo=REPLACE(REPLACE(REPLACE(memo,',當周上班時數不足40小時',''),'當周上班時數不足40小時,',''),'當周上班時數不足40小時','')
+from salpresents a left join @tmpa b on a.noa between b.bdate and b.edate and a.sssno=b.sssno 
+where b.sssno!='' and charindex('當周上班時數不足40小時',memo)>0
+
+update a
+set memo=memo+(case when len(memo)>0 then ',' else '' end)+'當周上班時數不足40小時'
+from salpresents a left join @tmpa b on a.noa=b.datea and a.sssno=b.sssno 
+where b.sssno!='' and xhours<40
+;
+--****************************************************************************************
+zxls_salrb_txt:--指紋打卡上傳
+--總部+北部
+declare @nbwtime nvarchar(10)='08:30'--上班時間
+declare @nbwtime2 nvarchar(10)='09:30'--上班時間
+declare @nrtime nvarchar(10)='12:30'--中午休息時間
+declare @nrtime2 nvarchar(10)='13:30'--中午休息時間
+declare @newtime nvarchar(10)='17:30'--下班時間
+declare @newtime2 nvarchar(10)='18:30'--下班時間
+
+declare @npart nvarchar(10)='09'--總部+北部編號
+declare @njob nvarchar(10)='01'--主任級主管--不須打卡，平日不計加班
+declare @nspart nvarchar(10)='04'--公共資源部--每週工時40小時即可，平日不計加班
+------------------------------------------------------------
+--各地區域辦公室
+declare @bwtime nvarchar(10)='08:30'--上班時間
+declare @bwtime2 nvarchar(10)='09:00'--上班時間
+declare @rtime nvarchar(10)='12:30'--中午休息時間
+declare @rtime2 nvarchar(10)='13:30'--中午休息時間
+declare @ewtime nvarchar(10)='17:30'--下班時間
+declare @ewtime2 nvarchar(10)='18:00'--下班時間
+-------------------------------------------------------
+declare @tmp table(
+	datea nvarchar(100),
+	timea nvarchar(100),
+	sssno nvarchar(100),
+	namea nvarchar(100)
+)
+
+insert @tmp
+select dbo.AD2ChineseEraName(dbo.split(a.a,',',0)),dbo.split(a.a,',',1),dbo.split(a.a,',',4),b.namea
+from ztmpxls a left join sss b on dbo.split(a.a,',',4)=b.noa
+
+--bbm
+declare @bbm table(
+		noa nvarchar(20),
+		w133 decimal(10,1),
+		w166 decimal(10,1),
+		w100 decimal(10,1),
+		mount float,
+		holiday bit
+)
+
+--bbs
+declare @bbs table(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		sssno nvarchar(20),
+		namea nvarchar(50),
+		clockin nvarchar(50),
+		clockout nvarchar(50),
+		w133 decimal(10,1),
+		w166 decimal(10,1),
+		w100 decimal(10,1),
+		hr_special decimal(10,1),
+		memo nvarchar(MAX),
+		work nvarchar(1),--1總部+北部 2各地區
+		job nvarchar(50)--1主任級主管 不須打卡 4公共資源部 每週工時40小時
+)
+
+declare @datea nvarchar(10)--當天日期
+declare @t_weekday nvarchar(10)--星期
+declare cursor_table cursor for
+select datea from @tmp a group by datea --匯入日期
+open cursor_table
+fetch next from cursor_table
+into @datea
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@datea,3) as int )+1911 as nvarchar(10))+'/'+right(@datea,5))-1
+	insert @bbm(noa,holiday)
+	select @datea,
+	(select case when not((select COUNT(*) from holiday where noa=@datea
+	and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) 
+	or @datea in(select noa from holiday where isnull(iswork,0)=1)
+	then 0 else 1 end)
+	
+	if((select case when not((select COUNT(*) from holiday where noa=@datea
+	and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) 
+	or @datea in(select noa from holiday where isnull(iswork,0)=1)
+	then 0 else 1 end)=0)
+	begin
+		--每個員工都顯示
+		insert @bbs
+		select @datea,(Rank() OVER (ORDER BY a.sssno))
+		,a.sssno,b.namea,isnull(MIN(a.timea),''),isnull(MAX(a.timea),''),0,0,0,0,''
+		,case when b.partno=@npart then '1' else '2'end
+		,case when isnull(b.issales,0)=1 then '1' when b.partno=@nspart then '4' else '0' end
+		from @tmp a right join sss b on a.sssno=b.noa and (isnull(b.outdate,'')='' or isnull(outdate,'')>@datea)
+		where datea=@datea and noa!='Z001' group by a.sssno,b.namea,b.partno,b.issales
+	end
+	else
+	begin
+		--只有加班員工
+		insert @bbs
+		select @datea,(Rank() OVER (ORDER BY a.sssno))
+		,a.sssno,b.namea,isnull(MIN(a.timea),''),isnull(MAX(a.timea),''),0,0,0,0,''
+		,case when b.partno=@npart then '1' else '2'end
+		,case when isnull(b.issales,0)=1 then '1' when b.partno=@nspart then '4' else '0' end
+		from @tmp a left join sss b on a.sssno=b.noa and (isnull(b.outdate,'')='' or isnull(outdate,'')>@datea)
+		where datea=@datea and noa!='Z001' group by a.sssno,b.namea,b.partno,b.issales
+	end
+	
+	--更新排列順序
+	update @bbs set noq='XX'+noq
+		
+	update a
+	set noq=b.noq2
+	from @bbs a left join (select noa,sssno,(Rank() OVER (ORDER BY sssno))noq2 from @bbs where noa=@datea)b
+	on a.noa+'_'+a.sssno=b.noa+'_'+b.sssno
+	where a.noa=@datea
+	
+	update @bbs set noq=right('000'+noq,3)
+	
+	if((select case when not((select COUNT(*) from holiday where noa=@datea
+	and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) 
+	or @datea in(select noa from holiday where isnull(iswork,0)=1)
+	then 0 else 1 end)=0)--正常日
+	begin
+		--主管不處理不須打卡
+		update a
+		set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+		from @bbs a	where job='1' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+		--公共資源部(不用判斷甚麼時候上班 但檢查每周是否滿40小時 後面處理)
+		update a
+		set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+		from @bbs a	where job='4' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+		
+		--處理總部+北部
+		--其他
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'遲到'
+		where clockin>@nbwtime2 and work='1' and job='0'
+		
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'早退'
+		where clockout<@newtime and work='1' and job='0'
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='1' and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and btime between @nbwtime and @nbwtime2 and hname!='曠工')>0	
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='1'and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and etime between @newtime and @newtime2 and hname!='曠工')>0
+		
+		--update a
+		--set memo=memo+(case when len(memo)>0 then ',' else '' end)+'上班時數不足8小時'
+		--from @bbs a
+		--where clockin!='' and clockout!='' and work='1' and job='0' 
+		--and round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+		----中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		--< (case when clockin<@nrtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+		
+		
+		--各區域
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'遲到'
+		where clockin>@bwtime2 and work='2' and job='0'
+		
+		update @bbs
+		set memo=memo+(case when len(memo)>0 then ',' else '' end)+'早退'
+		where clockout<@ewtime and work='2' and job='0'
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='2' and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and btime between @bwtime and @bwtime2 and hname!='曠工')>0	
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假','')+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''),',請假',''),'請假,',''),'請假',''))>0 then ',' else '' end)+'請假'
+		from @bbs a	where work='2'and job='0' 
+		and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+		and etime between @ewtime and @ewtime2 and hname!='曠工')>0
+		
+		--update a
+		--set memo=memo+(case when len(memo)>0 then ',' else '' end)+'上班時數不足8小時'
+		--from @bbs a
+		--where clockin!='' and clockout!='' and work='2' and job='0' 
+		--and round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+		----中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		--< (case when clockin<@rtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+		
+		--更新加班時數>>>以加班單salovertime為主
+		update a
+		set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		,w133=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		from @bbs a
+		--更新加班超過兩小時
+		update @bbs set w133=0 where w133<0 and noa=@datea
+				
+		update @bbs	set w166=round(w133-2,1),w133=2	where w133>2 and noa=@datea
+	end
+	else --假日加班>>>以加班單salovertime為主
+	begin
+		update a
+		set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		,w100=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+		from @bbs a
+	end
+	
+	--寫入資料庫內容
+	BEGIN TRY
+		--判斷當天有沒有寫入
+		if((select COUNT(*) from salpresent where noa=@datea)=0)
+		begin
+			--寫入表頭
+			insert salpresent(noa,w133,w166,w100,mount,holiday)
+			select * from @bbm where noa=@datea
+			
+			--預防寫入失敗的bbs 清除
+			delete salpresents where noa=@datea
+			
+			--總部+北部(不含主管)
+			insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,addwork)
+			select noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo
+			+(case when work='1' and job!='1' and (select COUNT(*) from salvacause s where sssno=bbs.sssno 
+			and (@datea between bdate and edate) and (btime between @nbwtime and @nbwtime2) and (etime between @newtime and @newtime2))=0 and (clockin='' or clockout='') 
+			and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6)	or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+			then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end),work
+			from @bbs bbs where noa=@datea
+			--各區域
+			insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,addwork)
+			select noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo
+			+(case when work='2' and job!='1' and (select COUNT(*) from salvacause s where sssno=bbs.sssno 
+			and (@datea between bdate and edate) and (btime between @bwtime and @bwtime2) and (etime between @ewtime and @ewtime2))=0 and (clockin='' or clockout='') 
+			and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6)	or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+			then (case when len(memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end),work
+			from @bbs bbs where noa=@datea
+			
+		end
+		else
+		begin
+			--更新bbs 
+			--目前有的上班時間比更新時間早
+			update b set b.clockin=a.clockin,b.addwork=a.work
+			from @bbs a left join salpresents b on a.noa=b.noa and a.sssno=b.sssno
+			where b.noa!='' and b.sssno!='' and a.clockin!='' 
+			and a.clockin<=(case when isnull(b.clockin,'99:99:99')='' then '99:99:99' else isnull(b.clockin,'99:99:99') end)
+			--目前有的下班時間比更新時間晚
+			update b set b.clockout=a.clockout,b.addwork=a.work
+			from @bbs a left join salpresents b on a.noa=b.noa and a.sssno=b.sssno
+			where b.noa!='' and b.sssno!='' and a.clockout!=''
+			and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
+			
+			--更新遲到與早退
+			--主管不處理不須打卡
+			update a
+			set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+			from salpresents a left join sss b on a.sssno=b.noa where isnull(b.issales,0)=1 
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+			
+			--公共資源部(不用判斷甚麼時候上班 但檢查每周是否滿40小時 後面處理)
+			update a
+			set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+'請假'
+			from salpresents a left join sss b on a.sssno=b.noa where b.partno=@nspart and isnull(b.issales,0)=0
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) and hname!='曠工')>0	
+		
+			--處理總部+北部
+			--其他
+			update a
+			set memo=a.memo+(case when CHARINDEX('遲到',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'遲到') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockin>@nbwtime2 and a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=a.memo+(case when CHARINDEX('早退',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'早退') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockout<@newtime and a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and btime between @nbwtime and @nbwtime2 and hname!='曠工')>0	
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and etime between @newtime and @newtime2 and hname!='曠工')>0
+			
+			--各區域
+			update a
+			set memo=a.memo+(case when CHARINDEX('遲到',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'遲到') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockin>@bwtime2 and a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=a.memo+(case when CHARINDEX('早退',a.memo)>0 then '' else (case when len(a.memo)>0 then ',' else '' end+'早退') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where clockout<@ewtime and a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',遲到',''),'遲到,',''),'遲到',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and btime between @bwtime and @bwtime2 and hname!='曠工')>0	
+			
+			update a
+			set memo=REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退','')+(case when CHARINDEX('請假',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',早退',''),'早退,',''),'早退',''))>0 then ',' else '' end+'請假') end)
+			from salpresents a left join sss b on a.sssno=b.noa
+			where a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+			and (select COUNT(*) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate) 
+			and etime between @ewtime and @ewtime2 and hname!='曠工')>0
+			
+			
+			--更新加班時數>>>以加班單salovertime為主
+			--正常日
+			if((select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0)
+			begin
+				update a
+				set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				,w133=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				from salpresents a where noa=@datea
+				
+				update salpresents set w133=0 where w133<0 and noa=@datea
+				update salpresents	set w166=round(w133-2,1),w133=2	where w133>2 and noa=@datea and noa=@datea
+			end
+			else
+			begin
+				update a
+				set hr_special=isnull((select SUM(comphr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				,w100=ISNULL((select SUM(salaryhr) from salovertime where datea=@datea and sssno=a.sssno),0)
+				from salpresents a where noa=@datea
+			end
+			
+			--新增bbs(不存在的)
+			insert salpresents(noa,noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,addwork)
+			select noa,'x'+noq,sssno,namea,clockin,clockout,w133,w166,w100,hr_special,memo,work from @bbs
+			where noa+'_'+sssno not in (select noa+'_'+sssno from salpresents)
+			
+			update salpresents
+			set memo=REPLACE(REPLACE(REPLACE(memo,',打卡資料錯誤',''),'打卡資料錯誤,',''),'打卡資料錯誤','')
+			where noa=@datea
+			
+			--總部+北部(不含主管)
+			update a
+			set memo=a.memo+(case when 
+			(select COUNT(*) from salvacause s where sssno=a.sssno
+			and (@datea between bdate and edate) and (btime between @nbwtime and @nbwtime2) and (etime between @newtime and @newtime2))=0 and (clockin='' or clockout='') 
+			and ((select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0) 
+			and CHARINDEX('打卡資料錯誤',a.memo)=0 then (case when len(a.memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			from salpresents a left join sss b on a.sssno=b.noa where a.noa=@datea and addwork='1' and isnull(b.issales,0)=0
+			--各區域
+			update a
+			set memo=a.memo+(case when 
+			(select COUNT(*) from salvacause s where sssno=a.sssno
+			and (@datea between bdate and edate) and (btime between @bwtime and @bwtime2) and (etime between @ewtime and @ewtime2))=0 and (clockin='' or clockout='') 
+			and ((select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0) 
+			and CHARINDEX('打卡資料錯誤',a.memo)=0 then (case when len(a.memo)>0 then ',' else '' end)+'打卡資料錯誤' else '' end)
+			from salpresents a left join sss b on a.sssno=b.noa where a.noa=@datea and addwork='2' and isnull(b.issales,0)=0
+			
+			--更新bbs排序
+			update a
+			set noq=b.noq2
+			from salpresents a left join (select noa,sssno,(Rank() OVER (ORDER BY sssno))noq2 from salpresents where noa=@datea)b
+			on a.noa+'_'+a.sssno=b.noa+'_'+b.sssno
+			where a.noa=@datea
+			
+			update salpresents
+			set noq=right('000'+noq,3)
+			where noa=@datea
+			
+		end
+		
+		update a
+		set w133=isnull((select sum(w133) from salpresents where noa=a.noa),0)
+		,w166=isnull((select sum(w166) from salpresents where noa=a.noa),0)
+		,w100=isnull((select sum(w100) from salpresents where noa=a.noa),0)
+		,hr_special=isnull((select sum(hr_special) from salpresents where noa=a.noa),0)
+		,mount=isnull((select COUNT(*) from salpresents where noa=a.noa),0)
+		,holiday=(select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)
+		from salpresent a where noa=@datea
+		
+	END TRY
+	BEGIN CATCH
+		SELECT ERROR_NUMBER() as ErrorNumber,ERROR_MESSAGE() as ErrorMessage
+	END CATCH
+	
+	delete @bbm
+	delete @bbs
+	--******************************************************************************************
+	--寫入曠工資料
+	delete salvacause where datea=@datea and rank='1'
+	update salpresents set memo=REPLACE(REPLACE(REPLACE(memo,',曠工',''),'曠工,',''),'曠工','')
+	where CHARINDEX('曠工',memo)>0 and noa=@datea
+	
+	--總部+北部(不含主管)
+		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@nbwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((cast(left(clockin,2)as float)-cast(LEFT(@nbwtime2,2) as float))*60.0)+(cast(right(left(clockin,5),2) as float))-cast(right(LEFT(@nbwtime2,5),2) as float))/60.0,2)  hr_used
+		,@nbwtime2 btime ,left(clockin,5) etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@nbwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@newtime and clockout!='' and clockout>@nbwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((CAST(left(@newtime,2) as float)-cast(left(clockout,2)as float))*60.0)+(cast(right(left(clockout,5),2) as float)-cast(right(left(@newtime,5),2) as float)))/60.0,2)  hr_used
+		,left(clockout,5) btime ,@newtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@newtime and clockout!='' and clockout>@nbwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime) and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,8  hr_used	,@nbwtime btime ,@newtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @nbwtime and @nbwtime) and (etime between @newtime and @newtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時','')+(case when CHARINDEX('上班時數不足8小時',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時',''))>0 then ',' else '' end+'上班時數不足8小時') end)
+		from salpresents a left join sss b on a.sssno=b.noa
+		where clockin!='' and clockout!='' and a.addwork='1' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockout) as float)/60),1)
+		--中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		< (case when a.clockin<@nrtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+	
+	--各區域
+		--上班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@bwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((cast(left(clockin,2)as float)-cast(LEFT(@bwtime2,2) as float))*60.0)+(cast(right(left(clockin,5),2) as float))-cast(right(LEFT(@bwtime2,5),2) as float))/60.0,2)  hr_used
+		,@bwtime2 btime ,left(clockin,5) etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockin>@bwtime2 and clockin!=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--下班曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@ewtime and clockout!='' and clockout>@bwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,round((((CAST(left(@ewtime,2) as float)-cast(left(clockout,2)as float))*60.0)+(cast(right(left(clockout,5),2) as float)-cast(right(left(@ewtime,5),2) as float)))/60.0,2)  hr_used
+		,left(clockout,5) btime ,@ewtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and clockout<@ewtime and clockout!='' and clockout>@bwtime
+		and (select COUNT(*) from salvacause s where a.noa between bdate and edate and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		--整天曠職
+		update a
+		set memo=case when CHARINDEX('曠工',a.memo)>0 then a.memo when len(a.memo)>0 then a.memo+',曠工' else '曠工' end
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime) and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+		
+		insert salvacause(noa,datea,sssno,namea,id,htype,hname,bdate,edate,memo,hr_used,btime,etime,partno,part,jobno,job,rank)
+		select replace(a.noa,'/','')+right('000'+cast( cast(isnull((select right(MAX(noa),3) from salvacause where noa like replace(a.noa,'/','')+'%'),0)as int)+ROW_NUMBER() over( order by a.sssno) as nvarchar(50)),3)
+		,a.noa datea,a.sssno,a.namea,b.id,'008' htype,'曠工' hname,a.noa bdate,a.noa edate,'曠工' memo
+		,8  hr_used	,@bwtime btime ,@ewtime etime,b.partno,b.part,b.jobno,b.job,'1' rank
+		from salpresents a left join sss b on a.sssno=b.noa
+		where addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and isnull(clockin,'')='' and isnull(clockout,'')=''
+		and (select COUNT(*) from salvacause s where (a.noa between bdate and edate) and (btime between @bwtime and @bwtime) and (etime between @ewtime and @ewtime2) and sssno=a.sssno)=0
+		and (select case when not((select COUNT(*) from holiday where noa=@datea and isnull(iswork,0)=0)>0 or @t_weekday=0 or @t_weekday=6) or @datea in(select noa from holiday where isnull(iswork,0)=1) then 0 else 1 end)=0
+		and a.noa=@datea
+	
+		update a
+		set memo=REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時','')+(case when CHARINDEX('上班時數不足8小時',a.memo)>0 then '' else (case when len(REPLACE(REPLACE(REPLACE(a.memo,',上班時數不足8小時',''),'上班時數不足8小時,',''),'上班時數不足8小時',''))>0 then ',' else '' end+'上班時數不足8小時') end)
+		from salpresents a left join sss b on a.sssno=b.noa
+		where clockin!='' and clockout!='' and a.addwork='2' and isnull(b.issales,0)=0 and b.partno!=@nspart
+		and round((cast(datediff(MINUTE,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockin,cast(cast(left(a.noa,3)as int)+1911 as nvarchar(10))+right(a.noa,6)+' '+a.clockout) as float)/60),1)
+		--中午後才進來 上班只有8小時 --並扣掉當天有請假的時數
+		< (case when a.clockin<@rtime then 9 else 8 end) -(select sum(hr_used) from salvacause s where sssno=a.sssno and (a.noa between bdate and edate))
+	
+	--清除addwork
+	update salpresents
+	set addwork=''
+	where noa=@datea
+	
+	fetch next from cursor_table
+	into @datea
+end
+close cursor_table
+deallocate cursor_table
+
+
+--判斷公共資源部 每周是否滿40小時
+--取得每周上班日
+declare @tmpa table(
+	sssno nvarchar(100),
+	bdate nvarchar(10),
+	edate nvarchar(10),
+	datea nvarchar(10),
+	xhours float
+)
+insert @tmpa(sssno,bdate,edate)
+select sssno,dbo.q_cdn(datea,1-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+,dbo.q_cdn(datea,7-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+from @tmp a group by sssno
+,dbo.q_cdn(datea,1-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+,dbo.q_cdn(datea,7-case when (DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) =0 then 7 else 
+(DATEPART(WEEKDAY,cast(cast(left(datea,3) as int )+1911 as nvarchar(10))+'/'+right(datea,5))-1) end)
+
+update a
+set datea=isnull((select MAX(noa) from salpresents where noa between a.bdate and a.edate and sssno=a.sssno),'')
+,xhours=isnull((select SUM(round((cast(datediff(MINUTE,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockin,cast(cast(left(noa,3)as int)+1911 as nvarchar(10))+right(noa,6)+' '+clockout) as float)/60),1)
+-(case when clockin<@rtime then 1 else 0 end)) from salpresents where noa between a.bdate and a.edate and sssno=a.sssno),0)
+from @tmpa a
+
+update a
+set memo=REPLACE(REPLACE(REPLACE(memo,',當周上班時數不足40小時',''),'當周上班時數不足40小時,',''),'當周上班時數不足40小時','')
+from salpresents a left join @tmpa b on a.noa between b.bdate and b.edate and a.sssno=b.sssno 
+where b.sssno!='' and charindex('當周上班時數不足40小時',memo)>0
+
+update a
+set memo=memo+(case when len(memo)>0 then ',' else '' end)+'當周上班時數不足40小時'
+from salpresents a left join @tmpa b on a.noa=b.datea and a.sssno=b.sssno 
+where b.sssno!='' and xhours<40
+;

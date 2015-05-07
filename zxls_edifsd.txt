@@ -1,13 +1,18 @@
 ﻿zxls_edifsd:--zxls_edifsd
 	SET QUOTED_IDENTIFIER OFF
-	declare @custno nvarchar(MAX)=[1] --客戶變號
+	declare @custno nvarchar(MAX)=[1] --客戶編號
+	declare @comp nvarchar(MAX)=[2] --客戶名稱
+	declare @filename nvarchar(MAX)=[3] --上傳檔名--寫入vcc
 	declare @accy nvarchar(10)--現在年度
 	declare @oaccy nvarchar(10)--tranorde年度
 	declare @datea nvarchar(10)--現在日期
+	declare @timea nvarchar(10)--現在時間
 	set @datea=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
 	set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+	set @timea=left(convert(varchar(10), GETDATE(), 108),5)
 	set @accy=left(@datea,3)
-		
+	set @filename=replace(@filename,'EDIFSD_','')
+	
 	declare @a nvarchar(MAX),@b nvarchar(MAX),@c nvarchar(MAX),@d nvarchar(MAX)
 	,@e nvarchar(MAX),@f nvarchar(MAX),@g nvarchar(MAX),@h nvarchar(MAX),@i nvarchar(MAX),@j nvarchar(MAX)
 	
@@ -17,8 +22,27 @@
 	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 	declare @n int
 	declare @tranordeno nvarchar(30)
+	declare @zip3a nvarchar(30)
+	declare @vccnoa nvarchar(30)
+	declare @carno nvarchar(30)
 	
+	--寫入vcc
+	set @key='D'
+	set @vccnoa = case when @key+REPLACE(@datea,'/','')+'000' >
+	isnull((select MAX(noa) from view_vcc where LEFT(noa,8)=@key+replace(@datea,'/','')),'')
+	then @key+REPLACE(@datea,'/','')+'000' else (select MAX(noa) from view_vcc where LEFT(noa,8)=@key+replace(@datea,'/','')) end
+	set @n =  cast((charindex(left(RIGHT(@vccnoa,3),1),@string)-1)*100+cast(RIGHT(@vccnoa,2) as int)+1 as nvarchar)	
+	set @noq = SUBSTRING(@string,floor(@n/100)+1,1)+right('00'+cast(@n%100 as nvarchar),2)
+	set @vccnoa = @key+REPLACE(@datea,'/','')+@noq
+	set @n=(select count(*)	from ztmpxls where a!='來源表單編號' and isnull(a,'')!='')
+	set @noq= cast(@n as nvarchar(10))
+	
+	EXEC("insert vcc"+@accy+" (noa,datea,mon,custno,comp,mount,memo)
+	select '"+@vccnoa+"','"+@datea+"','"+@timea+"','"+@custno+"','"+@comp+"',"+@noq+",'"+@filename+"'")
+	
+	--transef
 	--取當天最大NOA
+	set @key='BA'
 	set @noa = case when @key+REPLACE(@datea,'/','')+'000' >
 	isnull((select MAX(noa) from view_transef where LEFT(noa,9)=@key+replace(@datea,'/','')),'')
 	then @key+REPLACE(@datea,'/','')+'000' else (select MAX(noa) from view_transef where LEFT(noa,9)=@key+replace(@datea,'/','')) end
@@ -31,7 +55,8 @@
 	declare @ecode97 nvarchar(30)
 	
 	declare cursor_table cursor for
-	select a,b,c,d,e,f,g,h,i,j from ztmpxls where a!='來源表單編號' and a!='' order by noa
+	select isnull(a,''),isnull(b,''),isnull(c,''),isnull(d,''),isnull(e,''),isnull(f,''),isnull(g,''),isnull(h,''),isnull(i,'0'),isnull(j,'') 
+	from ztmpxls where a!='來源表單編號' and isnull(a,'')!='' order by noa
 	open cursor_table
 	fetch next from cursor_table
 	into @a,@b,@c,@d,@e,@f,@g,@h,@i,@j
@@ -41,43 +66,47 @@
 		set @noq = SUBSTRING(@string,floor(@n/100)+1,1)+right('00'+cast(@n%100 as nvarchar),2)
 		set @noa = @key+REPLACE(@datea,'/','')+@noq
 		
+		set @i=case when @i='' then '0' else @i end
+		
 		--判斷96code要不要產生
-		if((select isnull(siteno,'')from addr2 where noa=@c)='')
-		begin
-			--取得最大96碼(96+流水號7碼+檢查碼)
-			select @max_code96=MAX(po) from view_transef
-			if (@max_code96 is null)--沒有最大96碼
-			begin
-				set @code96='9600000011'
-			end
-			else
-			begin
-				set @code96='96'+
-				right('00000000'+cast(cast(left(right(@max_code96,8),7) as int)+1 as nvarchar(10)),7)+--流水號
-				cast((cast(left(right(@max_code96,8),7) as int)+1)%7 as nvarchar(10))--檢查碼
-			end
-		end
-		else
-		begin
-			set @code96=''
-		end
+		--if((select isnull(siteno,'')from addr2 where noa=@c)='')
+		--begin
+			----取得最大96碼(96+流水號7碼+檢查碼)
+			--select @max_code96=MAX(po) from view_transef
+			--if (@max_code96 is null)--沒有最大96碼
+			--begin
+				--set @code96='9600000011'
+			--end
+			--else
+			--begin
+				--set @code96='96'+
+				--right('00000000'+cast(cast(left(right(@max_code96,8),7) as int)+1 as nvarchar(10)),7)+--流水號
+				--cast((cast(left(right(@max_code96,8),7) as int)+1)%7 as nvarchar(10))--檢查碼
+			--end
+		--end
+		--else
+		--begin
+			--set @code96=''
+		--end
 		
 		--產生code97
-		select top 1 @tranordeno=noa,@bcode97=docketno1,@ecode97=docketno2 from view_tranorde where enda!=1 and left(containertype,3)='edi' and custno=@custno order by noa
+		select top 1 @tranordeno=noa,@bcode97=docketno1,@ecode97=docketno2,@carno=deliveryno from view_tranorde where enda!=1 and left(containertype,3)='edi' and custno=@custno order by noa
 		if(@bcode97 is null) set @bcode97='0000000000'
 		if(@ecode97 is null) set @ecode97='0000000000'
 		if(@tranordeno is null) set @tranordeno=''
 		
 		select @max_code97=MAX(boatname) from view_transef where (boatname between @bcode97 and @ecode97)
 		 
-		--預設格式97+流水號8碼(可能有檢查碼暫不考慮)
+		--預設格式97+流水號7碼+檢查碼mod 6
 		if (@max_code97 is null and @bcode97!='0000000000')--沒有最大97碼
 		begin
 			set @code97=@bcode97
 		end
 		else if ( @max_code97 is not null and @bcode97!='0000000000')
 		begin
-			set @code97='97'+right('00000000'+cast(cast(right(@max_code97,8) as int)+1 as nvarchar(10)),8)--流水號
+			set @code97='97'+right('00000000'+cast(cast(left(right(@max_code97,8),7) as int)+1 as nvarchar(10)),7)
+			set @code97=@code97+cast(CAST(@code97 as int)%7 as nvarchar(10))
+			
 			if(@code97 not between @bcode97 and @ecode97) --在97碼區間範圍內
 			begin
 				set @code97=''
@@ -88,9 +117,21 @@
 			set @code97=''
 		end
 		
-		EXEC("insert transef"+@accy+" (noa,noq,datea,so,addressee,caseend,aaddr,boat,atel,endaddr,straddr,unit,price,po,boatname,traceno,custno,comp,nick)
-		select '"+@noa+"','001','"+@datea+"','"+@a+"','"+@b+"','"+@c+"','"+@d+"','"+@e+"','"+@f+"','"+@g+"','"+@h+"','"+@i+"','"+@j+"','"+@code96+"','"+@code97
-		+"','"+@tranordeno+"','"+@custno+"',(select top 1 comp from cust where noa='"+@custno+"'),(select top 1 nick from cust where noa='"+@custno+"')")
+		set @zip3a=isnull((select top 1 zip3a from road where charindex(city,@d)>0 and charindex(area,@d)>0 and charindex(road,@d)>0),'')
+		if(@zip3a='')
+			set @zip3a=isnull((select top 1 zip3a from road where charindex(city,@d)>0 and charindex(area,@d)>0),'')
+		if(@zip3a='')
+			set @zip3a=isnull((select top 1 zip3a from road where charindex(city,@d)>0 and charindex(road,@d)>0),'')
+		if(@zip3a='')
+			set @zip3a=isnull((select top 1 zip3a from road where charindex(city,@d)>0),'')
+		if(@zip3a='')
+			set @zip3a=isnull((select top 1 zip3a from road where charindex(area,@d)>0),'')
+		if(@zip3a='')
+			set @zip3a=isnull((select top 1 zip3a from road where charindex(road,@d)>0),'')
+		
+		EXEC("insert transef"+@accy+" (noa,noq,datea,so,addressee,caseend,aaddr,atel,boat,straddr,unit,price,endaddr,po,boatname,traceno,custno,comp,nick,caseuse,third,treno,carno)
+		select '"+@noa+"','001','"+@datea+"','"+@a+"','"+@b+"','"+@c+"','"+@d+"','"+@e+"','"+@f+"','"+@g+"','"+@h+"',"+@i+",'"+@j+"','"+@code96+"','"+@code97
+		+"','"+@tranordeno+"','"+@custno+"',(select top 1 comp from cust where noa='"+@custno+"'),(select top 1 nick from cust where noa='"+@custno+"'),'"+@zip3a+"','"+@filename+"','"+@vccnoa+"','"+@carno+"'")
 		
 		select @oaccy=isnull(accy,'') from view_tranorde where noa=@tranordeno
 	
@@ -108,5 +149,5 @@
 	end
 	close cursor_table
 	deallocate cursor_table
-; 
+	
 ; 
