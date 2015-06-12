@@ -5,6 +5,7 @@ declare @year nvarchar(20)=[1]--年度[1]
 declare @noa nvarchar(20)=[2]--單據編號[2]
 declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增[3]
 declare @project nvarchar(20)=[4] --客戶專案
+declare @t_err nvarchar(200)=''
 -----------------------------------------------------------------------
 declare @nowdate nvarchar(30) --今天日期
 set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
@@ -13,8 +14,10 @@ set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
 declare @cmd nvarchar(max)
 declare @accy nvarchar(20)
 declare @vccno nvarchar(50)
+declare @invono nvarchar(50)
 set @accy=isnull((select accy from view_orde where noa=@noa),@year)
 set @vccno=isnull((select vccno from view_orde where noa=@noa),'')
+set @invono=isnull((select invono from view_vcc where noa=@vccno),'')
 
 if(@condition='0')
 begin
@@ -23,9 +26,24 @@ begin
 	EXECUTE sp_executesql @cmd
 	set @cmd="delete vccs"+@accy+" where noa='"+@vccno+"'"
 	EXECUTE sp_executesql @cmd
+	set @cmd="delete vcca where noa='"+@invono+"'"
+	EXECUTE sp_executesql @cmd
+	set @cmd="delete vccas where noa='"+@invono+"'"
+	EXECUTE sp_executesql @cmd
 end
 
 declare @n_vccno nvarchar(50) --新的vccno
+declare @kind nvarchar(50) --ordekind
+
+--可開立發票
+declare @cvcca table(
+	noa nvarchar(20),
+	vccano nvarchar(20)
+)
+declare @vccarno nvarchar(20)
+declare @bvccano nvarchar(20)
+declare @evccano nvarchar(20)
+declare @xvccano nvarchar(20)
 
 if(@condition='1')
 begin
@@ -44,13 +62,68 @@ begin
 	
 	if(@project="RB")
 	begin
-		--將orde的內容轉至vcc(通用)
+		--產生發票
+		set @kind=isnull((select kind from view_orde where noa=@noa),'')
+		if(@kind='隨貨單張')
+		begin
+			--抓取可開立的發票
+			declare cursor_table cursor for
+			select a.noa,b.binvono,b.einvono from vccar a left join vccars b on a.noa=b.noa 
+			where (@nowdate between a.bdate and a.edate) and isnull(a.iselectric,0)=1 order by a.noa,a.binvono
+			open cursor_table
+			fetch next from cursor_table
+			into @vccarno,@bvccano,@evccano
+			while(@@FETCH_STATUS <> -1)
+			begin
+				set @xvccano=@bvccano
+				while (@xvccano<=@evccano and (@xvccano between @bvccano and @evccano))
+				begin
+					if((select count(*) from vcca where noa=@xvccano)=0)
+					begin
+						insert @cvcca
+						select @vccarno,@xvccano
+					end
+					set @xvccano=LEFT(@xvccano,2)
+					+RIGHT('00000000'+cast(cast(RIGHT(@xvccano,8) as int)+1 as nvarchar(10)),8)
+				end
+	
+				fetch next from cursor_table
+				into @vccarno,@bvccano,@evccano
+			end
+			close cursor_table
+			deallocate cursor_table
+		
+			if((select count(*) from @cvcca)=0) 
+			begin
+				set @t_err='當期無可用發票'
+			end
+			
+			if(len(@t_err)=0)
+			begin
+				set @invono=(select top 1 vccano from @cvcca order by noa,vccano )
+				
+				insert vcca(noa,custno,comp,nick,serial,buyerno,buyer,datea,mon,cno,acomp,zip,address,taxtype,money,tax,total,trdno,worker,vccno)
+				select @invono,b.custno,b.comp,b.nick,b.coin,'',''
+				,@nowdate,case when isnull(b.mon,'')!='' then b.mon else left(@nowdate,6) end
+				,case when isnull(b.cno,'')!='' then b.cno else (select top 1 noa from acomp order by noa) end
+				,case when isnull(b.cno,'')!='' then b.acomp else (select top 1 acomp from acomp order by noa) end
+				,isnull((select top 1 zip_invo from cust where noa=b.custno),'')
+				,isnull((select top 1 addr_invo from cust where noa=b.custno),'')
+				,b.taxtype,b.money,b.tax,b.total
+				,b.noa,case when b.worker2!='' then b.worker2 else b.worker end,@n_vccno from view_orde b where noa=@noa
+				
+				insert vccas(noa,noq,custno,productno,product,unit,mount,price,money,datea)
+				select @invono,a.no2,a.custno,a.productno,a.product,a.unit,a.mount,a.price,a.total,@nowdate
+				from view_ordes a where a.noa=@noa
+			end
+		end
+		--將orde的內容轉至vcc
 		set @cmd="insert vcc"+@accy+"(noa,ordeno,typea,stype,datea,custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
 		,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,unpay,payed,memo,mon
-		,zipcode,zipname,storeno,store)
+		,zipcode,zipname,storeno,store,invono)
 		select '"+@n_vccno+"' noa,noa ordeno,'1' typea,stype,'"+@nowdate+"',custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
 		,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,total unpay,0 payed,memo,mon
-		,gdate,gtime,postname,conform
+		,gdate,gtime,postname,conform,'"+@invono+"'
 		from orde"+@accy+" where noa='"+@noa+"'"
 		EXECUTE sp_executesql @cmd
 		
@@ -95,7 +168,7 @@ begin
 	
 end
 
-	select @vccno vccno
+	select @vccno vccno,@invono invono,@t_err t_err
 ;
 -------------------------------------------------------------------------------------------------------------------------------------------------------
 orde2ordb:--ordb2ordb
