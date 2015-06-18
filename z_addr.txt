@@ -1,0 +1,120 @@
+z_addr01:--z_addr01	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_namea nvarchar(20)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_addr nvarchar(max)
+	declare @option01 nvarchar(max)
+	
+	set @t_accy = '[1]'
+	set @t_namea = '[2]'
+	set @t_bcustno = case when '#non'=[3] then '' else [3] end
+	set @t_ecustno = case when '#non'=[4] then CHAR(255) else [4] end
+	set @t_addr = case when '#non'=[5] then '' else [5] end
+	set @option01 = case when '#non'=[6] then '' else [6] end
+	
+	--------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		recno int,
+		custno nvarchar(20),
+		nick nvarchar(20),
+		addrno nvarchar(20),
+		addr nvarchar(50),
+		productno nvarchar(20),
+		product nvarchar(50),
+		miles float,
+		
+		datea nvarchar(10),
+		custprice decimal(10,3),
+		driverprice decimal(10,3),
+		driverprice2 decimal(10,3),
+		memos nvarchar(max),
+		discount1 float,
+		discount2 float,
+		
+		xdate nvarchar(20),
+		inprice1 float,
+		inprice2 float,
+		outprice1 float,
+		outprice2 float
+	)
+	if(charindex('detail',@option01)>0)
+	begin
+		insert into @tmp(gno,recno,custno,nick,addrno,addr,productno,product,miles
+			,datea,custprice,driverprice,driverprice2,memos)
+		select case when ISNULL(b.recno,0)>1 then '2' else '1' end 
+			,ROW_NUMBER()over(partition by replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-','') order by a.noa) 
+			,replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-',''),c.nick
+			,a.noa,a.addr,a.productno,a.product,a.miles
+			,b.datea,cast(b.custprice as decimal(10,3)),b.driverprice,b.driverprice2,b.memo
+		from addr a
+		outer apply (select ROW_NUMBER()over(order by datea desc) recno
+			,datea,custprice,driverprice,driverprice2,memo from addrs where noa=a.noa) b
+		left join cust c on replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-','')=c.noa
+		where (replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-','') between @t_bcustno and @t_ecustno)
+		and (charindex('err01',@option01)=0 or (isnull(b.driverprice,0)>isnull(b.driverprice2,0)))
+		and (charindex('err02',@option01)=0 or (isnull(b.driverprice,0)>isnull(b.custprice,0) or isnull(b.driverprice2,0)>isnull(b.custprice,0)))
+		and (len(@t_addr)=0 or charindex(','+a.noa+',',','+@t_addr+',')>0 or charindex(@t_addr,a.addr)>0)	
+	end
+	else
+	begin
+		insert into @tmp(gno,recno,custno,nick,addrno,addr,productno,product,miles
+			,datea,custprice,driverprice,driverprice2,memos)
+		select '1' 
+			,ROW_NUMBER()over(partition by replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-','') order by a.noa) 
+			,replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-',''),c.nick
+			,a.noa,a.addr,a.productno,a.product,a.miles
+			,b.datea,b.custprice,b.driverprice,b.driverprice2,b.memo
+		from addr a
+		outer apply (select top(1) datea,custprice,driverprice,driverprice2,memo from addrs where noa=a.noa order by datea desc) b
+		left join cust c on replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-','')=c.noa
+		where (replace(SUBSTRING(a.noa,1,CHARINDEX('-',a.noa)),'-','') between @t_bcustno and @t_ecustno)
+		and (charindex('err01',@option01)=0 or (isnull(b.driverprice,0)>isnull(b.driverprice2,0)))
+		and (charindex('err02',@option01)=0 or (isnull(b.driverprice,0)>isnull(b.custprice,0) or isnull(b.driverprice2,0)>isnull(b.custprice,0)))
+		and (len(@t_addr)=0 or charindex(','+a.noa+',',','+@t_addr+',')>0 or charindex(@t_addr,a.addr)>0)	
+	end
+	
+	update @tmp set addr = replace(addr,'~#$',"'"),product = replace(product,'~#$',"'")
+	
+	--公司車扣％
+	update @tmp set discount1 = b.discount
+	from @tmp a
+	left join (select row_number()over(partition by a.straddrno order by a.trandate desc,a.noa desc) recno,a.straddrno,a.discount 
+		from view_trans a 
+		left join calctypes b on a.calctype=b.noa+b.noq
+		where isnull(a.discount,0)!=0 and ISNULL(b.isoutside,0)=0) b 
+	on a.addrno=b.straddrno and b.recno=1
+	where a.gno='1'
+	--外車扣％
+	update @tmp set discount2 = b.discount
+	from @tmp a
+	left join (select row_number()over(partition by a.straddrno order by a.trandate desc,a.noa desc) recno,a.straddrno,b.discount 
+		from view_trans a 
+		outer apply(select a.discount from calctypes where ISNULL(isoutside,0)=1 and noa+noq=a.calctype) b
+		where isnull(a.discount,0)!=0 
+		) b 
+	on a.addrno=b.straddrno and b.recno=1
+	where a.gno='1'
+	------------------------------------------------------------------------------------
+	--佣金
+	update @tmp set inprice1=c.inprice1,inprice2=c.inprice2,outprice1=c.outprice1,outprice2=c.outprice2
+	from @tmp a
+	left join trancommi b on a.addrno=b.addrno
+	outer apply(select top 1 * from trancommis where noa=b.noa order by datea desc) c
+	
+	select * 
+	,@t_namea worker
+	,recno rr
+	,"addr?noa=\'"+addrno+"\' and "+cast(recno as nvarchar)+"=$rr?" ghref 
+	,addrno ano
+	,product pp
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,miles),1)),4,12)) a01
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(custprice)),1)),4,12))+'.'+RIGHT(CAST(custprice as nvarchar),3) a02
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(driverprice)),1)),4,12))+'.'+RIGHT(CAST(driverprice as nvarchar),3) a03
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,floor(driverprice2)),1)),4,12))+'.'+RIGHT(CAST(driverprice2 as nvarchar),3) a04
+	,case when ISNULL(discount1,0)=0 or ISNULL(discount1,0)=1 then '' else cast(cast((1-discount1)*100 as decimal(10,1)) as nvarchar) end dd1
+	,case when ISNULL(discount2,0)=0 or ISNULL(discount2,0)=1 then '' else cast(cast((1-discount2)*100 as decimal(10,1)) as nvarchar) end dd2
+	from @tmp;

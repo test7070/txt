@@ -1,0 +1,151 @@
+z_salpresent1:--z_salpresent1
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xperson nvarchar(20) 
+declare @t_bsssno nvarchar(20)
+declare @t_esssno nvarchar(20)
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then CHAR(255) else [2] end
+set @t_xperson = case when '#non' = [3] then '' else [3] end 
+set @t_bsssno = case when '#non' = [4] then '' else [4] end
+set @t_esssno = case when '#non' = [5] then CHAR(255) else [5] end
+
+declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(50),
+		sssno nvarchar(50),
+		namea nvarchar(50),
+		clockin nvarchar(50),
+		clockout nvarchar(50),
+		w133 float,
+		w166 float,
+		w100 float,
+		spec float,
+		memo nvarchar(MAX),
+		day1 float,
+		day2 float,
+		tmemo varchar(MAX),
+		vmemo varchar(MAX)
+)
+
+declare @day1 float=0
+declare @datea nvarchar(MAX)=@t_bdate
+declare @t_weekday nvarchar(10)--星期
+while (@datea<=@t_edate)
+begin
+	set @datea=cast(cast(left(@datea,3) as int)+1911 as nvarchar(10))
+		+RIGHT(@datea,6)
+	set @t_weekday=DATEPART(WEEKDAY, @datea)-1
+	
+	if((@t_weekday!=6 and @t_weekday!=0
+		and (right('000'+cast(cast(left(@datea,4) as int)-1911 as nvarchar(10)),3)+RIGHT(@datea,6)) not in (select noa from holiday where isnull(iswork,0)=0)
+		)or (right('000'+cast(cast(left(@datea,4) as int)-1911 as nvarchar(10)),3)+RIGHT(@datea,6)) in (select noa from holiday where isnull(iswork,0)=1) )
+		set @day1=@day1+1
+		
+	set @datea= CONVERT (VARCHAR(7), DATEADD(d, DATEDIFF(d,0,@datea)+1,0),12 )+0890000
+	set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+end
+
+
+--insert into @tmp 
+--select '0' gno,a.noa,a.sssno,a.namea,a.clockin,a.clockout,a.w133,a.w166,a.w100,a.hr_special,a.memo,@day1,0
+--,STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa FOR XML PATH('')),1,1,'')
+--,STUFF((select ','+ hname from salvacause where sssno=a.sssno and a.noa between bdate and edate  FOR XML PATH('')),1,1,'')
+--from salpresents a left join sss b on a.sssno = b.noa
+--where (a.noa between @t_bdate and @t_edate)
+--and (LEN(@t_xperson) = 0 or @t_xperson = b.person)  
+--and (a.sssno between @t_bsssno and @t_esssno)
+
+--1030303如果上下班沒時間抓抓出勤時間且只抓第一筆(上班)和最後一筆(下班)出勤
+insert into @tmp 
+select '0' gno,a.noa,a.sssno,a.namea
+
+,case when isnull(a.clockin,'')='' and isnull(a.clockout,'')='' and (select count(*) from trips where sssno=a.sssno and datea=a.noa and btime!='' )>0 
+then (select top 1 btime from trips where sssno=a.sssno and datea=a.noa and btime!='' order by noq) 
+when isnull(a.clockin,'')='' and isnull(a.clockout,'')='' and (select count(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and btime='08:00')>0 
+then (select top 1 btime from salvacause where sssno=a.sssno and a.noa between bdate and edate and btime='08:00')
+when isnull(a.clockin,'')='' 
+then (select top 1 btime from trips where sssno=a.sssno and datea=a.noa and etime!='' order by noq) 
+else a.clockin end 
+,
+--一整天出勤
+case when isnull(a.clockin,'')='' and isnull(a.clockout,'')='' and (select COUNT(*) etime from trips where sssno=a.sssno and datea=a.noa and etime!='' ) >0 
+then (select top 1 etime from trips where sssno=a.sssno and datea=a.noa and etime!='' order by noq desc) 
+--有請假 且請到下班
+when (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and etime='17:30')>0  and isnull(a.clockout,'')=''
+then (select top 1 etime from salvacause where sssno=a.sssno and a.noa between bdate and edate and etime='17:30') 
+--有外勤 且下班時間在正常下班之前 取外勤
+when(select COUNT(*) etime from trips where sssno=a.sssno and datea=a.noa and etime!='' ) >0 and isnull(a.clockout,'')<'17:30' and isnull(a.clockout,'')=''
+then (select top 1 etime from trips where sssno=a.sssno and datea=a.noa and etime!='' order by noq desc) 
+--有請假 且沒有請到下班
+when (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and etime<'17:30')>0  and isnull(a.clockout,'')=''
+then (select top 1 etime from salvacause where sssno=a.sssno and a.noa between bdate and edate and etime<'17:30') 
+else a.clockout end 
+,a.w133,a.w166,a.w100,a.hr_special,a.memo,@day1,0 
+,case when isnull(a.clockin,'')='' and isnull(a.clockout,'')='' then STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa FOR XML PATH('')),1,1,'')
+else 
+case when charindex('外勤-晚 進',a.memo)>0 or isnull(a.clockin,'')='' then STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa and noq=(select top 1 noq from trips where sssno=a.sssno and datea=a.noa and etime!='' order by noq )FOR XML PATH('')),1,1,'')else '' end 
++case when charindex('外勤-晚 進',a.memo)>0 or isnull(a.clockin,'')='' then ',' else '' end
++case when charindex('外勤-早 退',a.memo)>0 or isnull(a.clockout,'')='' then STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa and noq=(select top 1 noq from trips where sssno=a.sssno and datea=a.noa and btime!='' order by noq desc)FOR XML PATH('')),1,1,'') else '' end 
+end
+,STUFF((select ','+ hname from salvacause where sssno=a.sssno and a.noa between bdate and edate FOR XML PATH('')),1,1,'') 
+from salpresents a left join sss b on a.sssno = b.noa 
+where (a.noa between @t_bdate and @t_edate) 
+and (LEN(@t_xperson) = 0 or @t_xperson = b.person) 
+and (a.sssno between @t_bsssno and @t_esssno) 
+
+
+update a 
+set day2=(select count(*) from @tmp where sssno=a.sssno and (isnull(clockin,'')!='' or isnull(clockout,'')!='' ))
+from @tmp a
+
+insert into @tmp (gno,noa,sssno) 
+select '1','999/99/99',sssno from @tmp group by sssno 
+
+--select gno,right(noa,5)noa,sssno,namea,clockin,clockout,w133,w166,w100,spec,day1,day2,
+--		dbo.charbr(memo,22)memo,case when len(memo)>0 then dbo.charbr(tmemo,30) else '' end tmemo,vmemo 
+--from @tmp order by sssno,noa,gno 
+
+--1030303
+select gno,right(noa,5)noa,sssno,namea,clockin,clockout,w133,w166,w100,spec,day1,day2, 
+	dbo.charbr(memo,17)memo,case when len(tmemo)>0 then dbo.charbr(tmemo,39) else '' end tmemo,vmemo 
+from @tmp order by sssno,noa,gno 
+
+;
+--*****************************************************************
+z_salpresent2:--z_salpresent2
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xperson nvarchar(20) 
+declare @t_bsssno nvarchar(20)
+declare @t_esssno nvarchar(20)
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then CHAR(255) else [2] end
+set @t_xperson = case when '#non' = [3] then '' else [3] end 
+set @t_bsssno = case when '#non' = [4] then '' else [4] end
+set @t_esssno = case when '#non' = [5] then CHAR(255) else [5] end
+
+declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(50),
+		sssno nvarchar(50),
+		namea nvarchar(50),
+		clockin nvarchar(50),
+		clockout nvarchar(50),
+		w133 float,
+		w166 float,
+		w100 float,
+		spec float,
+		memo nvarchar(MAX)
+)
+insert into @tmp 
+select '0' gno,a.noa,a.sssno,a.namea,a.clockin,a.clockout,a.w133,a.w166,a.w100,a.hr_special,a.memo 
+from salpresents a left join sss b on a.sssno = b.noa
+where (a.noa between @t_bdate and @t_edate)
+and (LEN(@t_xperson) = 0 or @t_xperson = b.person)  
+and (a.sssno between @t_bsssno and @t_esssno)
+
+insert into @tmp (gno,noa,w133,w166,w100,spec) 
+select '1',noa,sum(w133),sum(w166),sum(w100),sum(spec) from @tmp group by noa
+select * from @tmp order by noa,gno,sssno
+;

@@ -1,0 +1,756 @@
+z_ucca1:--z_ucca1
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	declare @t_cno nvarchar(50)
+	declare @t_enddate nvarchar(50)
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[6] then '' else [6] end
+	set @t_cno = case when '#non'=[7] then '' else [7] end
+	set @t_enddate = case when '#non'=[8] then '' else [8] end
+--*************************************************************************************************
+	
+	declare @result table(
+		gno nvarchar(1),
+		recno int identity(1,1),
+		cno nvarchar(50),
+		datea nvarchar(10),
+		noa nvarchar(50),
+		productno nvarchar(50),
+		products nvarchar(100),
+		unit nvarchar(20),
+		typea nvarchar(10),
+		custno nvarchar(50),
+		comp nvarchar(100),
+		mount float,
+		totmount float
+	)
+
+	insert @result
+	select * from (
+		select '0'gno,va.cno,va.datea,va.noa,vb.productno,vb.product,vb.unit,'銷貨'typea,va.custno,va.comp,vb.mount,0 totmount
+		from vcca va left join vccas vb on va.noa=vb.noa
+		where (len(@t_cno)=0 or va.cno=@t_cno) and (va.datea between @t_bdate and @t_edate ) and (vb.productno between @t_bproductno and @t_eproductno)
+		union all
+		select '0'gno,ra.cno,ra.datea,ra.noa,rb.productno,rb.product,rb.unit,'進貨'typea ,ra.tggno,ra.comp,rb.mount,0 totmount
+		from rc2a ra left join rc2as rb on ra.noa=rb.noa
+		where (len(@t_cno)=0 or ra.cno=@t_cno) and (ra.datea between @t_bdate and @t_edate ) and (rb.productno between @t_bproductno and @t_eproductno)
+		
+		union all 
+		select '0'gno,ba.cno,ba.datea,ba.noa,bb.productno,bb.product,bb.unit,'銷貨退回'typea ,ba.tggno,ba.comp,bb.mount,0 totmount 
+		from vccb ba left join vccbs bb on ba.noa=bb.noa 
+		where (len(@t_cno)=0 or ba.cno=@t_cno) and (ba.datea between @t_bdate and @t_edate ) and (bb.productno between @t_bproductno and @t_eproductno) 
+		and ba.typea='1'
+		union all 
+		select '0'gno,ba.cno,ba.datea,ba.noa,bb.productno,bb.product,bb.unit,'進貨退回'typea ,ba.tggno,ba.comp,bb.mount,0 totmount 
+		from vccb ba left join vccbs bb on ba.noa=bb.noa 
+		where (len(@t_cno)=0 or ba.cno=@t_cno) and (ba.datea between @t_bdate and @t_edate ) and (bb.productno between @t_bproductno and @t_eproductno) 
+		and ba.typea='3'
+		
+		union all 
+		select '0'gno,ub.cno,ub.mon+'/00','',ua.noa,ub.product,ua.unit,'盤點'typea ,'','',ub.beginmount,0 totmount 
+		from ucca ua left join uccas ub on ua.noa=ub.noa 
+		where (len(@t_cno)=0 or ub.cno=@t_cno) and (ub.mon+'/00' between @t_bdate and @t_edate ) and (ua.noa between @t_bproductno and @t_eproductno) 
+
+		
+	)tmp order by cno,productno,datea,noa,typea
+
+	declare @recno int
+	declare @cno nvarchar(50)
+	declare @t_xcno nvarchar(50)='ZZZZ#ZZZZ'
+	declare @productno nvarchar(50)
+	declare @t_productno nvarchar(50)='ZZZZ#ZZZZ'
+	declare @typea nvarchar(50)
+	declare @mount float
+	declare @t_mount float =0
+	declare @totmount float=0
+	
+	declare @tmpa table( 
+		tablea nvarchar(50),
+		datea nvarchar(10),
+		pno nvarchar(50),
+		cno nvarchar(50),
+		mount float
+	) 
+	
+	--期初抓ucca 
+	insert into @tmpa
+	select 'ucce',b.mon+'/00',a.noa,b.cno,b.beginmount
+	from ucca a right join uccas b on a.noa=b.noa 
+	where b.mon!='' and b.mon+'/00'<=@t_bdate and b.mon+'_'+a.noa+'_'+b.cno in(
+	select MAX(b.mon)+'_'+a.noa+'_'+b.cno
+	from ucca a right join uccas b on a.noa=b.noa where b.mon!='' and b.mon+'/00'<=@t_bdate
+	group by a.noa,b.cno) and (len(@t_cno)=0 or b.cno=@t_cno)
+	
+	
+	--有期初-插入期初之後且資料起始日之前的資料
+	insert @tmpa
+	select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount
+	from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+	where ra.cno+'_'+rb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
+	and ra.datea<@t_bdate
+	and ra.datea>=(select datea from @tmpa where pno=rb.productno and cno=ra.cno and tablea='ucce')
+	and rb.productno!='' and (len(@t_cno)=0 or ra.cno=@t_cno)
+	
+	insert @tmpa
+	select 'vcca',va.datea,vb.productno,va.cno,-1*vb.mount
+	from vcca va left join vccas vb on va.noa=vb.noa 
+	where va.cno+'_'+vb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
+	and va.datea<@t_bdate
+	and va.datea>=(select datea from @tmpa where pno=vb.productno and cno=va.cno and tablea='ucce')
+	and vb.productno!='' and (len(@t_cno)=0 or va.cno=@t_cno)
+	
+	insert @tmpa
+	select 'vccb',va.datea,vb.productno,va.cno,(case when va.typea='3' then 1 else -1 end)*vb.mount
+	from vccb va left join vccbs vb on va.noa=vb.noa 
+	where va.cno+'_'+vb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
+	and va.datea<@t_bdate
+	and va.datea>=(select datea from @tmpa where pno=vb.productno and cno=va.cno and tablea='ucce')
+	and vb.productno!='' and (va.typea='1' or va.typea='3') and (len(@t_cno)=0 or va.cno=@t_cno)
+	
+	insert @tmpa
+	select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount
+	from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+	where ra.cno+'_'+rb.productno not in(select cno+'_'+pno from @tmpa where tablea='ucce')
+	and ra.datea<@t_bdate and rb.productno!='' and (len(@t_cno)=0 or ra.cno=@t_cno)
+	
+	insert @tmpa
+	select 'vcca',va.datea,vb.productno,va.cno,-1*vb.mount
+	from vcca va left join vccas vb on va.noa=vb.noa 
+	where va.cno+'_'+vb.productno not in(select cno+'_'+pno from @tmpa where tablea='ucce')
+	and va.datea<@t_bdate and vb.productno!='' and (len(@t_cno)=0 or va.cno=@t_cno)
+	
+	insert @tmpa
+	select 'vccb',va.datea,vb.productno,va.cno,(case when va.typea='3' then 1 else -1 end)*vb.mount
+	from vccb va left join vccbs vb on va.noa=vb.noa 
+	where va.cno+'_'+vb.productno not in(select cno+'_'+pno from @tmpa where tablea='ucce')
+	and va.datea<@t_bdate and vb.productno!='' and (va.typea='1' or va.typea='3') and (len(@t_cno)=0 or va.cno=@t_cno)
+
+
+	declare cursor_table cursor for
+	select recno,cno,productno,typea,mount from @result order by recno
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@cno,@productno,@typea,@mount
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if (@t_productno='ZZZZ#ZZZZ') 
+		begin
+			set @t_mount=0
+		
+			set @totmount=isnull((select sum(mount) from @tmpa where cno=@cno and pno=@productno),0)
+		end
+		
+		if(@cno!=@t_xcno or @productno!=@t_productno) and  @t_productno!='ZZZZ#ZZZZ' 
+		begin
+			insert @result(gno,cno,productno,mount,totmount)
+			select '1',@t_xcno,@t_productno,@t_mount,@totmount
+			
+			set @t_mount=0
+		
+			set @totmount= isnull((select sum(mount) from @tmpa where cno=@cno and pno=@productno),0)
+			
+		end
+		
+		if @typea='盤點' 
+		begin 
+			set @t_mount=@mount 
+			set @totmount=@mount 
+		end 
+		
+		if @typea='銷貨'
+		begin
+			set @t_mount=@t_mount-@mount
+			set @totmount=@totmount-@mount
+		end
+		if @typea='進貨'
+		begin
+			set @t_mount=@t_mount+@mount
+			set @totmount=@totmount+@mount
+		end
+		if @typea='銷貨退回' 
+		begin 
+			set @t_mount=@t_mount+@mount
+			set @totmount=@totmount+@mount 
+		end 
+		if @typea='進貨退回' 
+		begin 
+			set @t_mount=@t_mount-@mount
+			set @totmount=@totmount-@mount 
+		end 
+		
+		update @result
+		set totmount=@totmount
+		where recno=@recno
+		
+		
+		set @t_xcno=@cno
+		set @t_productno=@productno
+		
+		fetch next from cursor_table
+		into @recno,@cno,@productno,@typea,@mount
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	if (@t_productno!='ZZZZ#ZZZZ') 
+	begin
+		insert @result(gno,cno,productno,mount,totmount)
+		select '1',@t_xcno,@t_productno,@t_mount,@totmount
+	end
+
+	select gno,recno,cno,datea,noa,productno,products,unit,typea,custno,comp
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,totmount),1)),0,30)) totmount
+	,(select nick from acomp where noa=a.cno) acomp
+	from @result a order by cno,productno,gno,recno;
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+z_ucca2:--z_ucca2
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	declare @t_cno nvarchar(50)
+	declare @t_enddate nvarchar(50)
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[6] then '' else [6] end
+	set @t_cno = case when '#non'=[7] then '' else [7] end
+	set @t_enddate = case when '#non'=[8] then '' else [8] end
+--*****************************************************************************************	
+declare @cmd nvarchar(max) 
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+declare @tmp table( 
+	gno nvarchar(1), 
+	cno nvarchar(50), 
+	pno nvarchar(50), 
+	product nvarchar(50), 
+	unit nvarchar(10), 
+	bmount float, 
+	bmoney float, 
+	rcmount float, 
+	rcmoney float, 
+	vcmount float, 
+	vcmoney float, 
+	vccost float, 
+	profit float, 
+	lmount float, 
+	lprice float, 
+	lmoney float 
+) 
+
+create table #tmpa(
+	tablea nvarchar(50),
+	datea nvarchar(10),
+	pno nvarchar(50),
+	cno nvarchar(50),
+	mount float,
+	money float
+) 
+
+--期初抓ucca 
+insert into #tmpa
+select 'ucce',b.mon+'/00',a.noa,b.cno,b.beginmount,b.beginmoney 
+from ucca a right join uccas b on a.noa=b.noa 
+where b.mon!='' and b.mon+'/00'<@t_edate and b.mon+'_'+a.noa+'_'+b.cno in(
+select MAX(b.mon)+'_'+a.noa+'_'+b.cno
+from ucca a right join uccas b on a.noa=b.noa where b.mon!='' and b.mon+'/00'<@t_edate
+group by a.noa,b.cno) and (len(@t_cno)=0 or b.cno=@t_cno)
+and a.noa between @t_bproductno and @t_eproductno
+
+--有期初-插入期初之後且資料起始日之前的資料
+insert #tmpa
+select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount,rb.money
+from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+where ra.cno+'_'+rb.productno in(select cno+'_'+pno from #tmpa where tablea='ucce')
+and ra.datea<@t_bdate 
+and ra.datea>=(select datea from #tmpa where pno=rb.productno and cno=ra.cno and tablea='ucce')
+and rb.productno!='' and (len(@t_cno)=0 or ra.cno=@t_cno)
+and rb.productno between @t_bproductno and @t_eproductno
+
+insert #tmpa
+select 'vcca',va.datea,vb.productno,va.cno,-1*vb.mount
+,-1*vb.mount*isnull((select price from uccacosts where productno=vb.productno and cno=va.cno and mon=left(va.datea,6)),0) 
+from vcca va left join vccas vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno in(select cno+'_'+pno from #tmpa where tablea='ucce')
+and va.datea<@t_bdate 
+and va.datea>=(select datea from #tmpa where pno=vb.productno and cno=va.cno and tablea='ucce')
+and vb.productno!='' and (len(@t_cno)=0 or va.cno=@t_cno)
+and vb.productno between @t_bproductno and @t_eproductno
+
+insert #tmpa
+select 'vccb',va.datea,vb.productno,va.cno
+,(case when va.typea='3' then -1 else 1 end)*vb.mount
+,(case when va.typea='3' then -1 else 1 end)*vb.total
+from vccb va left join vccbs vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno in(select cno+'_'+pno from #tmpa where tablea='ucce')
+and va.datea<@t_bdate 
+and va.datea>=(select datea from #tmpa where pno=vb.productno and cno=va.cno and tablea='ucce')
+and vb.productno!='' and (va.typea='1' or va.typea='3') and (len(@t_cno)=0 or va.cno=@t_cno)
+and vb.productno between @t_bproductno and @t_eproductno
+
+--無期初-插入資料起始日之前的資料
+insert #tmpa
+select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount,rb.money
+from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+where ra.cno+'_'+rb.productno not in(select cno+'_'+pno from #tmpa where tablea='ucce')
+and ra.datea<@t_bdate and rb.productno!='' and (len(@t_cno)=0 or ra.cno=@t_cno)
+and rb.productno between @t_bproductno and @t_eproductno
+
+insert #tmpa
+select 'vcca',va.datea,vb.productno,va.cno,-1*vb.mount
+,-1*vb.mount*isnull((select price from uccacosts where productno=vb.productno and cno=va.cno and mon=left(va.datea,6)),0) 
+from vcca va left join vccas vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno not in(select cno+'_'+pno from #tmpa where tablea='ucce')
+and va.datea<@t_bdate and vb.productno!='' and (len(@t_cno)=0 or va.cno=@t_cno)
+and vb.productno between @t_bproductno and @t_eproductno
+
+insert #tmpa
+select 'vccb',va.datea,vb.productno,va.cno
+,(case when va.typea='3' then -1 else 1 end)*vb.mount
+,(case when va.typea='3' then -1 else 1 end)*vb.total
+from vccb va left join vccbs vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno not in(select cno+'_'+pno from #tmpa where tablea='ucce')
+and va.datea<@t_bdate and vb.productno!='' and (va.typea='1' or va.typea='3') and (len(@t_cno)=0 or va.cno=@t_cno)
+and vb.productno between @t_bproductno and @t_eproductno
+------------------------------- 
+declare @pno nvarchar(90)
+declare @MAXMON nvarchar(50)
+declare @MINMON nvarchar(50)
+declare cursor_table cursor for
+--檢查每個月數量為0 則清空金額
+select pno,MAX(LEFT(datea,6)),MIN(LEFT(datea,6)) from #tmpa group by pno
+open cursor_table
+fetch next from cursor_table
+into @pno,@MAXMON,@MINMON
+while(@@FETCH_STATUS <> -1)
+begin
+	while (@MINMON<=@MAXMON)
+	begin
+		if(select sum(mount) mount from #tmpa where pno=@pno and left(datea,6)<=@MINMON)<=0
+		begin
+			update #tmpa
+			set money=0
+			where pno=@pno and left(datea,6)<=@MINMON
+		end
+		
+		set @MINMON=cast(cast(LEFT(@MINMON,3)as int)+1911 as nvarchar(20))+'/'+right(@MINMON,2)+'/01'
+		set @MINMON=CONVERT (VARCHAR(7),DATEADD(m,+1,@MINMON),12 )+0890000
+		set @MINMON=left(@MINMON,3)+'/'+substring(@MINMON,4,2)
+		
+	end
+	
+	fetch next from cursor_table
+	into @pno,@MAXMON,@MINMON
+end
+close cursor_table
+deallocate cursor_table
+--------------------------------
+--插入期初庫存
+insert into @tmp(gno,cno,pno,product,unit,bmount,bmoney)
+select '0',a.cno,a.pno,MAX(b.product),MAX(b.unit),sum(a.mount),sum(a.money) 
+from #tmpa a left join ucca b on a.pno=b.noa
+where (a.pno between @t_bproductno and @t_eproductno) 
+group by a.pno,a.cno
+---------------------------------
+declare @tmpr table( 
+	cno nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(50),
+	rmount float, 
+	rmoney float
+) 
+--插入有期初的進貨數量
+insert into @tmpr
+select ra.cno,rb.productno,MAX(a.product),MAX(a.unit),sum(rb.mount),sum(rb.money)
+from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+left join ucca a on rb.productno=a.noa
+where rb.productno in (select pno from #tmpa where tablea='ucce')
+and ra.datea>(select MAX(datea) from #tmpa where pno=rb.productno) and ra.datea<=@t_edate
+and (rb.productno between @t_bproductno and @t_eproductno) and rb.productno!=''
+and (len(@t_cno)=0 or ra.cno=@t_cno)
+group by ra.cno,rb.productno
+
+insert into @tmpr
+select ra.cno,rb.productno,MAX(a.product),MAX(a.unit),-1*sum(rb.mount),-1*sum(rb.total)
+from vccb ra left join vccbs rb on ra.noa=rb.noa 
+left join ucca a on rb.productno=a.noa
+where rb.productno in (select pno from #tmpa where tablea='ucce')
+and ra.datea>(select MAX(datea) from #tmpa where pno=rb.productno)and ra.datea<=@t_edate
+and (rb.productno between @t_bproductno and @t_eproductno) and rb.productno!=''
+and (len(@t_cno)=0 or ra.cno=@t_cno) and ra.typea='3'
+group by ra.cno,rb.productno
+
+--插入沒有期初的進貨數量
+insert into @tmpr
+select ra.cno,rb.productno,MAX(a.product),MAX(a.unit),sum(rb.mount),sum(rb.money)
+from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+left join ucca a on rb.productno=a.noa
+where rb.productno not in(select pno from #tmpa where tablea='ucce')
+and (ra.datea between @t_bdate and @t_edate) 
+and (rb.productno between @t_bproductno and @t_eproductno)  and rb.productno!=''
+and (len(@t_cno)=0 or ra.cno=@t_cno)
+group by ra.cno,rb.productno
+
+insert into @tmpr
+select ra.cno,rb.productno,MAX(a.product),MAX(a.unit),-1*sum(rb.mount),-1*sum(rb.total)
+from vccb ra left join vccbs rb on ra.noa=rb.noa 
+left join ucca a on rb.productno=a.noa
+where rb.productno not in(select pno from #tmpa where tablea='ucce')
+and (ra.datea between @t_bdate and @t_edate) 
+and (rb.productno between @t_bproductno and @t_eproductno)  and rb.productno!=''
+and (len(@t_cno)=0 or ra.cno=@t_cno) and ra.typea='3'
+group by ra.cno,rb.productno
+-----------------------------------------------------------------------
+declare @tmpv table( 
+	cno nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(50),
+	vmount float, 
+	vmoney float
+)
+--插入有期初的出貨數量
+insert into @tmpv
+select va.cno,vb.productno,MAX(a.product),MAX(a.unit),sum(vb.mount),sum(vb.money)
+from vcca va left join vccas vb on va.noa=vb.noa 
+left join ucca a on vb.productno=a.noa
+where vb.productno in(select pno from #tmpa where tablea='ucce')
+and va.datea>(select MAX(datea) from #tmpa where pno=vb.productno)and va.datea<=@t_edate
+and (vb.productno between @t_bproductno and @t_eproductno) and vb.productno!=''
+and (len(@t_cno)=0 or va.cno=@t_cno)
+group by va.cno,vb.productno
+
+insert into @tmpv
+select va.cno,vb.productno,MAX(a.product),MAX(a.unit),-1*sum(vb.mount),-1*sum(vb.total)
+from vccb va left join vccbs vb on va.noa=vb.noa 
+left join ucca a on vb.productno=a.noa
+where vb.productno in(select pno from #tmpa where tablea='ucce')
+and va.datea>(select MAX(datea) from #tmpa where pno=vb.productno)and va.datea<=@t_edate
+and (vb.productno between @t_bproductno and @t_eproductno) and vb.productno!=''
+and (len(@t_cno)=0 or va.cno=@t_cno)and va.typea='1'
+group by va.cno,vb.productno
+
+--插入沒有期初的出貨數量
+insert into @tmpv
+select va.cno,vb.productno,MAX(a.product),MAX(a.unit),sum(vb.mount),sum(vb.money)
+from vcca va left join vccas vb on va.noa=vb.noa 
+left join ucca a on vb.productno=a.noa
+where vb.productno not in(select pno from #tmpa where tablea='ucce')
+and (va.datea between @t_bdate and @t_edate)
+and (vb.productno between @t_bproductno and @t_eproductno)  and vb.productno!=''
+and (len(@t_cno)=0 or va.cno=@t_cno)
+group by va.cno,vb.productno
+
+insert into @tmpv
+select va.cno,vb.productno,MAX(a.product),MAX(a.unit),-1*sum(vb.mount),-1*sum(vb.total)
+from vccb va left join vccbs vb on va.noa=vb.noa 
+left join ucca a on vb.productno=a.noa
+where vb.productno not in(select pno from #tmpa where tablea='ucce')
+and (va.datea between @t_bdate and @t_edate)
+and (vb.productno between @t_bproductno and @t_eproductno)  and vb.productno!=''
+and (len(@t_cno)=0 or va.cno=@t_cno) and va.typea='1'
+group by va.cno,vb.productno
+
+
+--插入沒有期初的資料
+insert into @tmp(gno,cno,pno,product,unit,bmount,bmoney)
+select '0',*,0,0 from 
+(select cno,pno,product,unit from @tmpr union select cno,pno,product,unit from @tmpv)tmps 
+where cno+'_'+pno not in (select cno+'_'+pno from @tmp)
+
+--更新資料
+update a
+set a.rcmount=isnull((select sum(rmount) from @tmpr where pno=a.pno and cno=a.cno),0)
+,a.rcmoney=isnull((select sum(rmoney) from @tmpr where pno=a.pno and cno=a.cno),0)
+,a.vcmount=isnull((select sum(vmount) from @tmpv where pno=a.pno and cno=a.cno),0)
+,a.vcmoney=isnull((select sum(vmoney) from @tmpv where pno=a.pno and cno=a.cno),0)
+from @tmp a
+
+update @tmp set bmoney=0 where bmount<=0
+update @tmp set bmoney=0 where bmoney<=0
+
+
+--計算成本 
+update @tmp 
+set vccost= case when bmount+rcmount=0 then 0 else round((bmoney+rcmoney)/(bmount+rcmount),2)*vcmount end
+
+--毛利率 
+update @tmp 
+set profit=case when vcmoney=0 then 0 else ((vcmoney-vccost)/vcmoney)*100 end
+
+--期末 
+update @tmp 
+set lmount=bmount+rcmount-vcmount 
+,lmoney=case when (bmount+rcmount-vcmount)<=0 then 0 else bmoney+rcmoney-vccost end
+
+update @tmp set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+update @tmp set lmoney=0 where lprice<=0
+
+update @tmp set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+update @tmp set lmoney=0 where lprice<=0 
+
+delete @tmp where bmount=0 and bmoney=0 and rcmount=0 and rcmoney=0 and vcmount=0 and vcmoney=0 and vccost=0 
+
+insert into @tmp 
+select '1',cno,'','','',sum(bmount),sum(bmoney) 
+,sum(rcmount),sum(rcmoney) 
+,sum(vcmount),sum(vcmoney),sum(vccost),case when sum(vcmoney)=0 then 0 else ((sum(vcmoney)-sum(vccost))/sum(vcmoney))*100 end 
+,sum(lmount),0,sum(lmoney) 
+from @tmp group by cno 
+
+select 
+gno,cno,(select nick from acomp where noa=a.cno) acomp,pno,product,unit 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bmount),1)),0,30)) bmount 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(bmoney,0)),1)),4,30)) bmoney 
+
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,rcmount),1)),0,30)) rcmount 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(rcmoney,0)),1)),4,30)) rcmoney 
+
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,vcmount),1)),0,30)) vcmount 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vcmoney,0)),1)),4,30)) vcmoney 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vccost,0)),1)),4,30)) vccost 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(profit,2)),1)),0,30)) profit 
+
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,lmount),1)),0,30)) lmount 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lprice,2)),1)),0,30)) lprice 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lmoney,0)),1)),4,30)) lmoney 
+
+from @tmp a order by cno,gno,pno
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+;
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+z_ucca3:--z_ucca3
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	declare @t_cno nvarchar(50)
+	declare @t_enddate nvarchar(50)
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[6] then '' else [6] end
+	set @t_cno = case when '#non'=[7] then '' else [7] end
+	set @t_enddate = case when '#non'=[8] then '' else [8] end
+	
+	if(len(@t_enddate)=0)--今天日期
+	begin
+		set @t_enddate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+		set @t_enddate=left(@t_enddate,3)+'/'+substring(@t_enddate,4,2)+'/'+right(@t_enddate,2)
+	end
+	--*****************************************************************************************	
+declare @tmp table( 
+	gno nvarchar(1), 
+	cno nvarchar(50), 
+	pno nvarchar(50), 
+	product nvarchar(50), 
+	unit nvarchar(10), 
+	mount float 
+) 
+declare @tmpa table( 
+	tablea nvarchar(50),
+	datea nvarchar(10),
+	pno nvarchar(50),
+	cno nvarchar(50),
+	mount float
+) 
+
+--期初抓ucca 
+insert into @tmpa
+select 'ucce',b.mon+'/00',a.noa,b.cno,b.beginmount
+from ucca a right join uccas b on a.noa=b.noa 
+where b.mon!='' and b.mon+'/00'<=@t_enddate and b.mon+'_'+a.noa+'_'+b.cno in(
+select MAX(b.mon)+'_'+a.noa+'_'+b.cno
+from ucca a right join uccas b on a.noa=b.noa where b.mon!='' and b.mon+'/00'<=@t_enddate
+group by a.noa,b.cno) and (len(@t_cno)=0 or b.cno=@t_cno)
+
+
+--有期初-插入期初之後且資料起始日之前的資料
+insert @tmpa
+select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount
+from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+where ra.cno+'_'+rb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
+and ra.datea<=@t_enddate
+and ra.datea>=(select datea from @tmpa where pno=rb.productno and cno=ra.cno and tablea='ucce')
+and rb.productno!='' and (len(@t_cno)=0 or ra.cno=@t_cno)
+
+insert @tmpa
+select 'vcca',va.datea,vb.productno,va.cno,-1*vb.mount
+from vcca va left join vccas vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
+and va.datea<=@t_enddate
+and va.datea>=(select datea from @tmpa where pno=vb.productno and cno=va.cno and tablea='ucce')
+and vb.productno!='' and (len(@t_cno)=0 or va.cno=@t_cno)
+
+insert @tmpa
+select 'vccb',va.datea,vb.productno,va.cno,(case when va.typea='3' then -1 else 1 end)*vb.mount
+from vccb va left join vccbs vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
+and va.datea<=@t_enddate
+and va.datea>=(select datea from @tmpa where pno=vb.productno and cno=va.cno and tablea='ucce')
+and vb.productno!='' and (va.typea='1' or va.typea='3') and (len(@t_cno)=0 or va.cno=@t_cno)
+
+insert @tmpa
+select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount
+from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+where ra.cno+'_'+rb.productno not in(select cno+'_'+pno from @tmpa where tablea='ucce')
+and ra.datea<@t_enddate and rb.productno!='' and (len(@t_cno)=0 or ra.cno=@t_cno)
+
+insert @tmpa
+select 'vcca',va.datea,vb.productno,va.cno,-1*vb.mount
+from vcca va left join vccas vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno not in(select cno+'_'+pno from @tmpa where tablea='ucce')
+and va.datea<@t_enddate and vb.productno!='' and (len(@t_cno)=0 or va.cno=@t_cno)
+
+insert @tmpa
+select 'vccb',va.datea,vb.productno,va.cno,(case when va.typea='3' then -1 else 1 end)*vb.mount
+from vccb va left join vccbs vb on va.noa=vb.noa 
+where va.cno+'_'+vb.productno not in(select cno+'_'+pno from @tmpa where tablea='ucce')
+and va.datea<@t_enddate and vb.productno!='' and (va.typea='1' or va.typea='3') and (len(@t_cno)=0 or va.cno=@t_cno)
+
+------------------------------- 
+
+insert into @tmp (gno,cno,pno,product,unit,mount) 
+select '0'gno,cno,pno
+,(select product from ucca where noa=a.pno)
+,(select unit from ucca where noa=a.pno)
+,SUM(mount) 
+from @tmpa a 
+where pno between @t_bproductno and @t_eproductno
+group by cno,pno 
+
+delete @tmp where gno='9' 
+
+insert into @tmp (gno,cno,mount) 
+select '1',cno,sum(mount) from @tmp group by cno 
+
+insert into @tmp (gno,cno) 
+select '2',cno from @tmp group by cno 
+
+select 
+gno,cno,(select nick from acomp where noa=a.cno) acomp,pno,product,unit 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount 
+from @tmp a order by cno,gno,pno ;
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+z_ucca4:--z_ucca4
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	declare @t_cno nvarchar(50)
+	declare @t_enddate nvarchar(50)
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[6] then '' else [6] end
+	set @t_cno = case when '#non'=[7] then '' else [7] end
+	set @t_enddate = case when '#non'=[8] then '' else [8] end
+	
+	--*****************************************************************************************	
+declare @tmp table( 
+	gno nvarchar(1),
+	cno nvarchar(50),
+	pno nvarchar(50),
+	vcc_mount float,
+	vcc_money float,
+	invo_mount float,
+	invo_money float,
+	uninvo_mount float,
+	uninvo_money float,
+	vcc4_mount float
+) 
+
+insert @tmp(gno,cno,pno,vcc_mount,vcc_money)
+select '9',a.cno,b.productno,sum((case when a.typea='1' then 1 else -1 end)*b.mount)
+,sum(round((case when a.typea='1' then 1 else -1 end)*b.total/(case when a.taxtype='3' then 1.05 else 1 end),0))
+from view_vcc a left join view_vccs b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate 
+and b.productno between @t_bproductno and @t_eproductno
+and (len(@t_cno)=0 or a.cno=@t_cno) and taxtype!='6'
+group by a.cno,b.productno
+
+insert @tmp(gno,cno,pno,vcc4_mount)
+select '9',a.cno,b.productno,sum((case when a.typea='1' then 1 else -1 end)*b.mount)
+from view_vcc a left join view_vccs b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate 
+and b.productno between @t_bproductno and @t_eproductno
+and (len(@t_cno)=0 or a.cno=@t_cno) and a.stype='4' and taxtype!='6'
+group by a.cno,b.productno
+
+insert @tmp(gno,cno,pno,invo_mount,invo_money) 
+select '9',a.cno,case when isnull(c.nou,'')!='' then isnull(c.nou,'') else isnull(c.noa,'') end,sum(b.mount),sum(b.money) 
+from vcca a left join vccas b on a.noa=b.noa 
+left join ucca c on b.productno=c.noa 
+where (b.productno between @t_bproductno and @t_eproductno )
+ and a.datea between @t_bdate and @t_edate 
+and (len(@t_cno)=0 or a.cno=@t_cno) --and left(a.noa,2)!='00' 排除虛擬發票
+and case when isnull(c.nou,'')!='' then isnull(c.nou,'') else isnull(c.noa,'') end!=''
+group by a.cno,case when isnull(c.nou,'')!='' then isnull(c.nou,'') else isnull(c.noa,'') end
+
+insert @tmp(gno,cno,pno,invo_mount,invo_money) 
+select '9',a.cno,c.nou,-1*sum(b.mount),-1*sum(b.total) 
+from vccb a left join vccbs b on a.noa=b.noa 
+left join ucca c on b.productno=c.noa 
+where (b.productno between @t_bproductno and @t_eproductno )
+and a.datea between @t_bdate and @t_edate and (a.typea='1' or a.typea='2')
+and case when isnull(c.nou,'')!='' then isnull(c.nou,'') else isnull(c.noa,'') end!=''
+and (len(@t_cno)=0 or a.cno=@t_cno) group by a.cno,c.nou 
+
+insert @tmp(gno,cno,pno,vcc_mount,vcc_money,invo_mount,invo_money,vcc4_mount)
+select '0',cno,pno,sum(vcc_mount),sum(vcc_money),sum(invo_mount),sum(invo_money),sum(vcc4_mount)
+from @tmp
+group by cno,pno
+
+delete @tmp where gno='9'
+
+update @tmp
+set uninvo_money=isnull(vcc_money,0)-isnull(invo_money,0),
+uninvo_mount=isnull(vcc_mount,0)-isnull(invo_mount,0)
+
+insert @tmp
+select '1',cno,'',sum(round(vcc_mount,0)),sum(round(vcc_money,0))
+,sum(round(invo_mount,0)),sum(round(invo_money,0))
+,sum(round(uninvo_mount,0)),sum(round(uninvo_money,0)),sum(round(vcc4_mount,0)) from @tmp
+group by cno
+
+
+select gno,cno,(select nick from acomp where noa=a.cno)acomp,
+pno,(select product from (select noa,product from ucc union all select noa,product from ucca where isnull(nou,'')='')tmp where noa=a.pno)product 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,vcc_mount),1)),0,30)) vcc_mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vcc_money,0)),1)),4,30)) vcc_money
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,invo_mount),1)),0,30)) invo_mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(invo_money,0)),1)),4,30)) invo_money
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,uninvo_mount),1)),0,30)) uninvo_mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(uninvo_money,0)),1)),4,30)) uninvo_money
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,vcc4_mount),1)),0,30)) vcc4_mount
+from @tmp a order by cno,gno,pno;

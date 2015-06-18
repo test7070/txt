@@ -1,0 +1,1761 @@
+z_work16:--z_work16
+	declare @t_bdate nvarchar(20) = case when '#non' = [22] then '' else [22] end
+	declare @t_edate nvarchar(20) = case when '#non' = [23] then CHAR(255) else [23] end
+	declare @t_bstationno nvarchar(20)=case when '#non' = [24] then '' else [24] end
+	declare @t_estationno nvarchar(20)=case when '#non' = [25] then CHAR(255) else [25] end
+	declare @t_diff nvarchar(20)=case when '#non' = [20] then '' else [20] end
+	declare @t_detail nvarchar(20)=case when '#non' = [26] then '' else [26] end
+	--------------------------------------------------------------------------------------
+	declare @tmp table(
+		noa nvarchar(20),
+		cuadate nvarchar(20),
+		uindate nvarchar(20),
+		wtime1 float,
+		wtime2 float,
+		stationno nvarchar(20),
+		productno nvarchar(20),
+		processno nvarchar(20)
+	)
+	insert into @tmp(noa,cuadate,uindate,wtime1,wtime2,stationno,productno,processno)
+	select noa,cuadate,uindate,wtime1,wtime2,stationno,productno,processno from view_work
+		where not(wtime1=0 and wtime2=0)
+	and (cuadate between @t_bdate and @t_edate or uindate between @t_bdate and @t_edate)
+	order by stationno
+	-------------------------------------------------------------------------------------
+	declare @n int = 0
+	begin try
+		declare @bdate date = cast(cast(cast(left(@t_bdate,3) as int)+1911 as nvarchar)+right(@t_bdate,6) as date)
+		declare @edate date = cast(cast(cast(left(@t_edate,3) as int)+1911 as nvarchar)+right(@t_edate,6) as date)
+		set @n  = datediff(dd,@bdate,@edate)+1
+	end try
+	begin catch
+	end catch
+	-------------------------------------------------------------------------------------
+	declare @tmpa table(
+		gno nvarchar(20),
+		recno int,
+		pno int,
+		stationno nvarchar(20),
+		station nvarchar(50),
+		bdate nvarchar(20),
+		edate nvarchar(20),
+		hrs float,
+		gen float,
+		diff float		,
+
+		productno nvarchar(20),
+		processno nvarchar(20),
+		process nvarchar(50)
+	)
+	--工作中心  get區間日期  需工時小計  產能160hr  負荷差異
+	insert into @tmpa(gno,pno,recno,stationno,hrs)
+	select '1',1,ROW_NUMBER()over(order by stationno),stationno
+	,sum(case when cuadate>=@t_bdate then wtime1 else 0 end+case when uindate<=@t_edate then wtime2 else 0 end)
+	from @tmp group by stationno
+
+	update @tmpa set station=b.station,bdate=@t_bdate,edate=@t_edate,gen=b.gen*@n,diff=b.gen*@n-a.hrs
+	from @tmpa a
+	left join station b on a.stationno=b.noa
+
+	if len(@t_detail)>0
+	begin
+		update @tmpa set gno='3'
+		insert into @tmpa(gno,pno,recno,bdate,edate,productno,processno,process,hrs)
+		select '2',ROW_NUMBER()over(partition by a.stationno order by a.cuadate)+1
+		,b.recno,a.cuadate,a.uindate,a.productno,a.processno,c.process
+		,case when cuadate>=@t_bdate then wtime1 else 0 end+case when uindate<=@t_edate then wtime2 else 0 end
+		from @tmp a
+		left join @tmpa b on a.stationno=b.stationno
+		left join process c on a.processno=c.noa
+	end
+
+	if len(@t_diff)>0
+		delete @tmpa where abs(diff)<0.5
+	select *
+	,stationno a1
+	,station a2
+	,bdate a3
+	,edate a4
+	,hrs a5
+	,gen a6
+	,diff a7
+
+	,productno b1
+	,processno b2
+	,process b3
+	from @tmpa order by recno,pno;
+-----------------------------------------------------------------------------------*
+z_work3:--z_work3
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_isenda nvarchar(10)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_isenda = case when '#non' = [21] then '' else [21] end
+
+declare @t_bstationno nvarchar(20)=case when '#non' = [7] then '' else [7] end
+declare @t_estationno nvarchar(20)=case when '#non' = [8] then CHAR(255) else [8] end
+declare @t_bstationgno nvarchar(20)=case when '#non' = [28] then '' else [28] end
+declare @t_estationgno nvarchar(20)=case when '#non' = [29] then CHAR(255) else [29] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(50),
+	datea nvarchar(10),
+	station nvarchar(90),
+	productno nvarchar(max),
+	products nvarchar(max),
+	unit nvarchar(12),
+	amount float,
+	ainmount float,
+	p_inmount float,
+	armount float,
+	p_rmount float,
+	aoutmount float,
+	p_outmount float,
+	cuadate nvarchar(10),
+	workdate nvarchar(10),
+	uindate nvarchar(10),
+	enddate nvarchar(10),
+	ordeno nvarchar(MAX)
+)
+insert into @tmp
+	select
+		'0',a.noa,a.kdate,a.station,a.productno,a.product,a.unit,a.mount,
+		a.inmount,case when a.mount >0 then round((a.inmount/a.mount)*100,2) else 0 end,
+		a.rmount,case when a.mount >0 then round((a.rmount/a.mount)*100,2) else 0 end,
+		isnull(a.rmount,0)+isnull(a.wmount,0),case when a.mount >0 then round((isnull(a.rmount,0)+isnull(a.wmount,0)/a.mount)*100,2) else 0 end,
+		a.cuadate,a.workdate,a.uindate,a.enddate,
+		case when len(a.no2)>0 then a.ordeno + '-' + a.no2 else a.ordeno end
+	from view_work a
+	left join uca b on a.productno=b.noa
+	left join station c on a.stationno=c.noa
+	where (len(@t_noa) = 0 or a.noa = @t_noa) and
+		  (a.cuadate between @t_bdate and @t_edate) and
+		  (len(@t_xgroupano)=0 or isnull(b.groupano,'')=@t_xgroupano) and
+		  (isnull(a.enda,'0')=@t_isenda) 
+		  and (a.stationno between @t_bstationno and @t_estationno)
+		  and (c.stationgno between @t_bstationgno and @t_estationgno)
+select * from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_work4:--z_work4
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+declare @tmp table(
+	gno nvarchar(1),
+	bnoa nvarchar(30),
+	bdatea nvarchar(10),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	bprocess nvarchar(50),
+	bmount float,
+	bunit nvarchar(12),
+	anoq nvarchar(10),
+	aproduct nvarchar(90),
+	amount float,
+	agmount float,
+	acuadate nvarchar(10),
+	aworkdate nvarchar(10),
+	auindate nvarchar(10),
+	aenddate nvarchar(10)
+)
+insert into @tmp
+select
+	'0',b.noa,b.kdate,b.productno,b.product,b.process,b.mount,b.unit,
+	a.noq,a.product,a.mount,a.gmount,b.cuadate,b.workdate,b.uindate,b.enddate
+from view_works a
+left join view_work b on a.noa = b.noa
+left join uca c on b.productno=c.noa
+where (len(@t_noa) = 0 or b.noa = @t_noa) and (b.cuadate between @t_bdate and @t_edate) and
+	  (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+order by b.process,a.noq,b.cuadate,b.product
+select * from @tmp;
+------------------------------------------------------------------------------------------------------
+z_work5:--z_work5
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstoreno nvarchar(20)
+declare @t_estoreno nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+set @t_bstationno = case when '#non' = [7] then '' else [7] end
+set @t_estationno = case when '#non' = [8] then CHAR(255) else [8] end
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstoreno = case when '#non' = [9] then '' else [9] end
+set @t_estoreno = case when '#non' = [10] then CHAR(255) else [10] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then CHAR(255) else [12] end
+declare @t_bstationgno nvarchar(20)=case when '#non' = [28] then '' else [28] end
+declare @t_estationgno nvarchar(20)=case when '#non' = [29] then CHAR(255) else [29] end
+
+declare @tmp table(
+		gno nvarchar(1),
+		n nvarchar(10),
+		noa nvarchar(20),
+		noq nvarchar(30),
+		datea nvarchar(20),
+		storeno nvarchar(30),
+		store nvarchar(40),
+		stationno nvarchar(50),
+		stations nvarchar(90),
+		workno nvarchar(60),
+		productno nvarchar(20),
+		product nvarchar(50),
+		unit nvarchar(20),
+		mount float,
+		weightb float,
+		wmount float,
+		bweight float
+)
+insert into @tmp
+	select
+		'0' gno,'0',a.noa,b.noq,a.datea,a.storeno,a.store,a.stationno,a.station,b.workno,b.productno,b.product,
+		b.unit,b.mount,b.theory,b.wmount,b.bweight
+	from view_workb a
+	left join view_workbs b on a.noa = b.noa
+	left join uca c on b.productno=c.noa
+	left join station d on a.stationno=d.noa
+	where (a.datea between @t_bdate and @t_edate) and
+		  (a.storeno between @t_bstoreno and @t_estoreno) and
+		  (b.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano) and
+		  (a.stationno between @t_bstationno and @t_estationno)
+		  and (d.stationgno between @t_bstationgno and @t_estationgno)
+insert into @tmp(gno,n,datea,stationno,stations,productno,product,mount,weightb,wmount,bweight)
+	select
+		'1' gno,'1',datea,stationno,stations,productno,product,SUM(mount),SUM(weightb),SUM(wmount),SUM(bweight)
+	from @tmp
+	group by stationno,stations,datea,productno,product
+insert into @tmp(gno,n,datea,stationno,stations,productno,product,mount,weightb,wmount,bweight)
+	select
+		'2' gno,'2',CHAR(255),stationno,stations,productno,product,SUM(mount),SUM(weightb),SUM(wmount),SUM(bweight)
+	from @tmp
+	where gno = '1'
+	group by stationno,stations,productno,product
+insert into @tmp(gno,n,stationno,stations,datea)
+	select
+		'3' gno,'3',stationno,stations,char(255)
+	from @tmp
+	group by stationno,stations
+select
+	gno,n,noa,noq,datea,stationno,stations,storeno,store,productno,product,unit,workno,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,weightb),1)),4,12)) weightb,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmount),1)),4,12)) wmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bweight),1)),4,12)) bweight
+from @tmp
+order by stationno,stations,n,datea,productno,product;
+--------------------------------------------------------------------------------------------------------
+z_work6:--z_work6
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+set @t_bstationno = case when '#non' = [7] then '' else [7] end
+set @t_estationno = case when '#non' = [8] then CHAR(255) else [8] end
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then char(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+declare @t_bstationgno nvarchar(20)=case when '#non' = [28] then '' else [28] end
+declare @t_estationgno nvarchar(20)=case when '#non' = [29] then CHAR(255) else [29] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	stationno nvarchar(50),
+	stations nvarchar(90),
+	productno nvarchar(20),
+	product nvarchar(50),
+	amount float,
+	unit nvarchar(20),
+	inmount float,
+	rmount float,
+	wmount float,
+	p_mount float,
+	p_outmount float
+)
+
+insert into @tmp
+	select '0' gno,a.stationno,a.station,a.productno,a.product,SUM(a.mount),MAX(a.unit),SUM(a.inmount),
+		SUM(a.rmount),SUM(a.wmount),0,0
+	from view_work a
+	left join uca b on a.productno=b.noa
+	left join station c on a.stationno=c.noa
+	where (a.cuadate between @t_bdate and @t_edate) and
+		  (a.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_xgroupano)=0 or isnull(b.groupano,'')=@t_xgroupano) and
+		  (a.stationno between @t_bstationno and @t_estationno)
+		  and (c.stationgno between @t_bstationgno and @t_estationgno)
+	group by a.stationno,a.station,a.productno,a.product
+update @tmp set p_mount = case when amount >0 then round((inmount/amount)*100,2) else 0 end,
+				p_outmount = case when amount >0 then round(((isnull(rmount,0)+isnull(wmount,0))/amount)*100,2) else 0 end
+select
+	gno,stationno,stations,productno,product,p_mount,p_outmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,amount),1)),4,12)) amount,unit,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,rmount),1)),4,12)) rmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,wmount),1)),4,12)) wmount
+from @tmp order by stationno,stations,productno,product;
+--------------------------------------------------------------------------------------------------------
+z_work7:--z_work7
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+set @t_bstationno = case when '#non' = [7] then '' else [7] end
+set @t_estationno = case when '#non' = [8] then CHAR(255) else [8] end
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then char(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+declare @t_bstationgno nvarchar(20)=case when '#non' = [28] then '' else [28] end
+declare @t_estationgno nvarchar(20)=case when '#non' = [29] then CHAR(255) else [29] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(35),
+	datea nvarchar(10),
+	stationno nvarchar(50),
+	stations nvarchar(90),
+	productno nvarchar(50),
+	products nvarchar(90),
+	mount float,
+	unit nvarchar(15),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	ordeno nvarchar(MAX),
+	nick nvarchar(90)
+)
+
+insert into @tmp
+	select
+		'0',a.noa,a.kdate,a.stationno,a.station,a.productno,a.product,a.mount,a.unit,a.cuadate,a.uindate,a.ordeno,c.nick
+	from view_work a
+	left join view_orde b on a.ordeno = b.noa
+	left join cust c on b.custno = c.noa
+	left join uca d on a.productno=d.noa
+	left join station e on a.stationno=e.noa
+	where (a.cuadate between @t_bdate and @t_edate) and
+		  (a.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_xgroupano)=0 or isnull(d.groupano,'')=@t_xgroupano) and
+		  (a.stationno between @t_bstationno and @t_estationno)
+		  and (e.stationgno between @t_bstationgno and @t_estationgno)
+select
+	gno,noa,datea,stationno,stations,productno,products,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+	unit,cuadate,uindate,ordeno,nick
+from @tmp order by cuadate;
+
+--------------------------------------------------------------------------------------------------------
+z_work8:--z_work8
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(90)
+declare @t_eproductno nvarchar(90)
+declare @t_aberrant nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_bbproductno nvarchar(90)
+declare @t_eeproductno nvarchar(90)
+
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then char(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+set @t_aberrant = case when '#non' = [13] then '' else [13] end
+set @t_bbproductno = case when '#non' = [30] then '' else [30] end
+set @t_eeproductno = case when '#non' = [31] then char(255) else [31] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	noq nvarchar(10),
+	aproductno nvarchar(30),
+	aproducts nvarchar(90),
+	amount float,
+	ainmount float,
+	aunit nvarchar(12),
+	uindate nvarchar(10),
+	enddate nvarchar(10),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	bunit nvarchar(12),
+	bmount float,
+	binmount float,
+	s_total float,
+	price float,
+	wmount float
+)
+insert into @tmp
+	select
+		'0',b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,b.uindate,
+		b.enddate,a.productno,a.product,a.unit,isnull(a.mount,0),isnull(c.mount,0),0,isnull(c.price,0),isnull(b.wmount,0)
+	from view_works a
+	left join view_work b on a.noa = b.noa
+	left join (
+		select
+			a.workno,a.productno,a.product,a.unit,a.mount,
+			(c.costa + c.costb + c.costc + c.costd) price
+		from view_workas a
+		left join view_wcost c on (a.workno = c.workno) and (a.productno = c.productno) and (a.noa = c.noa)
+		union all
+		select
+			a.workno,a.productno,a.product,a.unit,a.mount,
+			(c.costa + c.costb + c.costc + c.costd) price
+		from view_workcs a
+		left join view_wcost c on (a.workno = c.workno) and (a.productno = c.productno) and (a.noa = c.noa)
+	) c on b.noa = c.workno and (a.productno = c.productno)
+	left join uca d on b.productno = d.noa
+	where isnull(b.noa ,'') != '' and
+	(b.cuadate between @t_bdate and @t_edate) and
+	(b.productno between @t_bproductno and @t_eproductno) and
+	(len(@t_xgroupano)=0 or isnull(d.groupano,'')=@t_xgroupano)
+	and (a.productno between @t_bbproductno and @t_eeproductno)
+	order by b.noa,a.noq,b.productno,a.productno
+update @tmp set s_total = (binmount-bmount) where (binmount-bmount) > 0
+
+
+if(len(@t_aberrant)>0)
+begin
+	declare @ucanoa nvarchar(90)
+	declare @ucabadperc float
+	declare cursor_table cursor for
+		select noa,isnull(badperc,0) from uca a
+		union
+		select productno,loss from ucas b
+		union
+		select b.productno,a.badperc from ucat b
+		left join uca a on a.noa = b.noa
+	open cursor_table
+	fetch next from cursor_table
+	into @ucanoa,@ucabadperc
+	while(@@FETCH_STATUS <> -1)
+	begin
+		--delete @tmp where (aproductno = @ucanoa) and (s_total <= @ucabadperc)
+
+		delete @tmp where (aproductno = @ucanoa) and (case when binmount=0 then 0 else (1-(bmount/binmount))*100 end <= @ucabadperc)
+
+		fetch next from cursor_table
+		into @ucanoa,@ucabadperc
+	end
+	close cursor_table
+	deallocate cursor_table
+end
+
+
+select * from @tmp order by noa,noq,aproductno,bproductno;
+---------------------------------------------------------------------------------------------
+z_work9:--z_work9
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(30),
+		noq nvarchar(20),
+		datea nvarchar(10),
+		aproductno nvarchar(20),
+		axproduct nvarchar(50),
+		bproductno nvarchar(30),
+		bxproduct nvarchar(50),
+		typea nvarchar(20),
+		tproductno nvarchar(20),
+		txproduct nvarchar(20)
+)
+insert into @tmp
+select '0' gno,a.noa,b.noq,a.datea,a.productno,a.product,b.productno,b.product,
+'替換',b.tproductno,b.tproduct
+from view_work a
+left join view_works b on a.noa = b.noa
+left join uca c on a.productno=c.noa
+where (b.istd = '1')
+and (a.datea between @t_bdate and @t_edate)
+and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+select gno,noa,noq,datea,aproductno,axproduct,
+bproductno,bxproduct,typea,tproductno,txproduct
+from @tmp;
+---------------------------------------------------------------------------------------------
+z_work10:--z_work10
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_bproductno nvarchar(90)
+declare @t_eproductno nvarchar(90)
+declare @t_bbproductno nvarchar(90)
+declare @t_eeproductno nvarchar(90)
+
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then char(255) else [12] end
+set @t_bbproductno = case when '#non' = [30] then '' else [30] end
+set @t_eeproductno = case when '#non' = [31] then char(255) else [31] end
+--****************************************************************************
+declare @tmp table(
+	gno nvarchar(1),
+	uindate nvarchar(10),
+	anoa nvarchar(30),
+	anoq nvarchar(10),
+	aproductno nvarchar(30),
+	aproducts nvarchar(90),
+	amount float,
+	ainmount float,
+	aunit nvarchar(12),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	bmount float,
+	bgmount float,
+	bunit nvarchar(12),
+	bemount float,
+	bstkmount float,
+	buinmount float,
+	buoutmount float,
+	y_mount float,
+	n_mount float
+)
+declare @pev_date nvarchar(10)--取前一天庫存量
+set @pev_date=CONVERT (VARCHAR(7), dateadd (day,-1,cast( cast(cast(left(@t_bdate,3) as int)+1911 as nvarchar(10))+right(@t_bdate,6) as datetime)),12 )+0890000
+set @pev_date=left(@pev_date,3)+'/'+substring(@pev_date,4,2)+'/'+right(@pev_date,2)
+
+insert into @tmp
+	select
+		'0',b.uindate,b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,
+		a.productno,a.product,a.mount,a.gmount,a.unit,a.emount,isnull(
+		(select sum(mount) from stkucc(@pev_date,'','') where productno=a.productno)
+		,0),
+		sum(isnull(d.mount,0)),sum(isnull(e.mount,0)),0,0
+	from view_works a
+	left join view_work b on a.noa = b.noa
+	left join (
+		select b.odate,a.productno,a.mount mount from view_ordcs a
+		left join view_ordc b on a.noa = b.noa
+		union
+		select datea,productno,mount from view_workbs
+		union
+		select datea,productno,mount from view_workds
+
+	) d on (d.productno = a.productno) and a.cuadate <= d.odate
+	left join (
+		select b.odate,a.productno,a.mount mount from view_ordes a
+		left join view_orde b on a.noa = b.noa
+		union
+		select datea,productno,mount from view_workas
+		union
+		select datea,productno,mount from view_workcs
+	) e on (e.productno = a.productno) and a.cuadate <= e.odate
+	left join uca f on b.productno=f.noa
+	where b.noa is not null and
+		(b.cuadate between @t_bdate and @t_edate) and
+		(len(@t_xgroupano)=0 or isnull(f.groupano,'')=@t_xgroupano)
+		and (b.productno between @t_bproductno  and @t_eproductno)
+		and (a.productno between @t_bbproductno and @t_eeproductno)
+	group by b.uindate,b.noa,a.noq,b.productno,b.product,b.mount,b.inmount,b.unit,
+				a.productno,a.product,a.mount,a.gmount,a.unit,a.emount
+update @tmp set y_mount = (bstkmount+buinmount-buoutmount)
+update @tmp set n_mount = case when (bmount-y_mount) > 0 then (bmount-y_mount) else 0 end
+
+select gno,uindate,anoa,anoq,aproductno,aproducts
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,amount),1)),0,30)) amount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ainmount),1)),0,30)) ainmount
+,aunit,bproductno,bproducts
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bmount),1)),0,30)) bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bgmount),1)),0,30)) bgmount
+,bunit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bemount),1)),0,30)) bemount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bstkmount),1)),0,30)) bstkmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,buinmount),1)),0,30)) buinmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,buoutmount),1)),0,30)) buoutmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,y_mount),1)),0,30)) y_mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,n_mount),1)),0,30)) n_mount
+from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_work11:--z_work11
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bprocessno nvarchar(20)
+declare @t_eprocessno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bprocessno = case when '#non' = [14] then '' else [14] end
+set @t_eprocessno = case when '#non' = [15] then CHAR(255) else [15] end
+----------------------------------------------------------------------------------------------------------
+declare @tmp table(
+	gno nvarchar(1),
+	processno nvarchar(10),
+	processs nvarchar(90),
+	datea nvarchar(10),
+	udate nvarchar(10),
+	noa nvarchar(30),
+	productno nvarchar(30),
+	products nvarchar(90),
+	mount float,
+	unit nvarchar(10),
+	hours float,
+	diffdate int, ---實際開工日與應完工日的差
+	dayhtotal float, ---日小計
+	dayhs float, ---標準日工時
+	difftime float --負荷差異
+)
+insert into @tmp
+select
+	'0',a.processno,a.process,a.cuadate,a.uindate,a.noa,a.productno,a.product,a.mount,a.unit,a.hours,
+	DATEDIFF(day,CONVERT(datetime,(cast((left(a.cuadate,3)+1911) as nvarchar)+right(a.cuadate,6))),
+				case when a.uindate!='' or a.cuadate>a.uindate then
+					CONVERT(datetime,(cast((left(a.uindate,3)+1911) as nvarchar)+right(a.uindate,6)))
+				else
+					CONVERT(datetime,(cast((left(a.cuadate,3)+1911) as nvarchar)+right(a.cuadate,6)))
+				end
+	) diffdate,
+	0,b.hours,0
+from view_work a
+left join process b on a.processno = b.noa
+left join uca c on a.productno=c.noa
+where (a.cuadate between @t_bdate and @t_edate) and
+	  (a.processno between @t_bprocessno and @t_eprocessno) and
+	  (a.processno!='') and
+	  (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+
+update @tmp set dayhtotal = ceiling((hours/diffdate)*100)/100 where diffdate != 0
+
+insert into @tmp(gno,processno,processs,mount,hours,diffdate,dayhtotal,dayhs,difftime)
+select '1',processno,MAX(processs),sum(mount),sum(hours),sum(diffdate),sum(dayhtotal),max(dayhs),0 from @tmp
+group by processno
+
+update @tmp set difftime = dayhs-dayhtotal
+
+select * from @tmp order by processno,gno,processs,datea,noa;
+--------------------------------------------------------------------------------------------------------
+z_work12:--z_work12
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_bprocessno nvarchar(20)
+declare @t_eprocessno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bprocessno = case when '#non' = [14] then '' else [14] end
+set @t_eprocessno = case when '#non' = [15] then CHAR(255) else [15] end
+----------------------------------------------------------------------------------------------------------
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	noa  nvarchar(20),
+	workno  nvarchar(50),
+	productno nvarchar(50),
+	products nvarchar(90),
+	unit nvarchar(10),
+	cmount float,
+	dmount float,
+	memo nvarchar(MAX)
+)
+
+insert into @tmp
+select
+	'0'gno,a.trandatea,a.noa,a.workno,a.productno,a.product,a.unit,a.checkmount,a.discardmount,a.memo
+from view_workx a
+left join uca b on a.productno=b.noa
+where (a.trandatea between @t_bdate and @t_edate) and
+	  (a.productno between @t_bproductno and @t_eproductno) and
+	  (len(@t_xgroupano)=0 or isnull(b.groupano,'')=@t_xgroupano)
+
+insert into @tmp
+select '1'gno,'999/99/99','','', productno,max(products),MAX(unit),sum(cmount),sum(dmount),''
+from @tmp group by productno
+
+select gno,datea,noa,workno,productno,products,unit,memo
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(cmount,0)),1)),0,15)) cmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(dmount,0)),1)),0,15)) dmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(round((dmount/cmount)*100,2),0)),1)),0,15)) rate
+,@t_bdate bdxate,@t_edate edxate from @tmp order by productno,datea,gno;
+--------------------------------------------------------------------------------------------------------
+z_work13:--z_work13
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_bprocessno nvarchar(20)
+declare @t_eprocessno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bprocessno = case when '#non' = [14] then '' else [14] end
+set @t_eprocessno = case when '#non' = [15] then CHAR(255) else [15] end
+----------------------------------------------------------------------------------------------------------
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	noa  nvarchar(20),
+	workno  nvarchar(50),
+	processno nvarchar(50),
+	processs nvarchar(90),
+	productno nvarchar(50),
+	products nvarchar(90),
+	unit nvarchar(10),
+	cmount float,
+	dmount float,
+	memo nvarchar(MAX)
+)
+
+insert into @tmp
+select
+	'0' gno,a.trandatea,a.noa,a.workno,a.siprocessno,a.siprocess,
+	a.productno,a.product,a.unit,a.checkmount,a.discardmount,a.memo
+from view_workx a
+left join uca b on a.productno=b.noa
+where (a.trandatea between @t_bdate and @t_edate) and (a.productno between @t_bproductno and @t_eproductno)
+and (a.siprocessno between @t_bprocessno and @t_eprocessno)
+and (len(@t_xgroupano)=0 or isnull(b.groupano,'')=@t_xgroupano)
+
+insert into @tmp
+select '1'gno,'999/99/99','','',processno,MAX(processs),productno,max(products),MAX(unit),sum(cmount),sum(dmount),''
+from @tmp group by processno,productno
+
+select gno,datea,noa,workno,processno,processs,productno,products,unit,memo
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(cmount,0)),1)),0,15)) cmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(dmount,0)),1)),0,15)) dmount
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,isnull(round((dmount/cmount)*100,2),0)),1)),0,15)) rate
+,@t_bdate bdxate,@t_edate edxate from @tmp order by processno,productno,datea,gno;
+--------------------------------------------------------------------------------------------------------
+z_work14:--z_work14
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_xcuano nvarchar(20)
+declare @t_xworkno nvarchar(20)
+declare @t_xorder nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+set @t_xgroupano = case when '#non' = [19] then '' else [19] end
+set @t_bproductno = case when '#non' = [11] then '' else [11] end
+set @t_eproductno = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_xcuano = case when '#non' = [16] then '' else [16] end
+set @t_xworkno = case when '#non' = [17] then '' else [17] end
+set @t_xorder = case when '#non' = [18] then '1' else [18] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	recno int,
+	xnoa  nvarchar(90),
+	workno nvarchar(90),
+	levels nvarchar(10),
+	cuano nvarchar(90),
+	cuanoq nvarchar(10),
+	bpno nvarchar(90),
+	bps nvarchar(90),
+	bunit nvarchar(10),
+	bmount float,
+	bgmount float,
+	mpno nvarchar(90),
+	mps nvarchar(90),
+	munit nvarchar(10),
+	mmount float,
+	mimount float,
+	tpno nvarchar(90),
+	tps nvarchar(90),
+	tunit nvarchar(10),
+	tmount float,
+	timount float,
+	ordeno nvarchar(MAX),
+	tworkno nvarchar(90)
+)
+
+insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,ordeno)
+	select
+		'9' gno,1,b.productno+'__'+a.noa,a.noa,a.rank+1,a.cuano,a.cuanoq,b.productno,
+		b.product,b.unit,b.mount,b.gmount,a.ordeno
+	from view_work a
+	left join view_works b on a.noa=b.noa
+	left join view_ucaucc c on b.productno=c.noa
+	where a.enda!='1' and  (b.productno between @t_bproductno and @t_eproductno)
+	and (len(@t_xcuano)=0 or  a.cuano=@t_xcuano) and (len(@t_xworkno)=0 or  a.noa=@t_xworkno)
+	and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+
+insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,mpno,mps,munit,mmount,mimount,ordeno)
+	select
+		'9' gno,2,b.productno+'__'+a.noa,a.noa,a.rank,a.cuano,a.cuanoq,a.productno,
+		a.product,a.unit,a.mount,a.inmount,a.ordeno
+	from view_work a
+	left join view_works b on a.noa=b.noa
+	left join view_ucaucc c on b.productno=c.noa
+	where a.enda!='1' and (b.productno between @t_bproductno and @t_eproductno)
+	and (len(@t_xcuano)=0 or  a.cuano=@t_xcuano) and (len(@t_xworkno)=0 or  a.noa=@t_xworkno)
+	and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+declare @t_xnoa nvarchar(90)
+declare @t_cuano nvarchar(90)
+declare @t_cuanoq nvarchar(10)
+
+declare cursor_table cursor for
+select xnoa,cuano,cuanoq from @tmp where recno=1
+open cursor_table
+fetch next from cursor_table
+into @t_xnoa,@t_cuano,@t_cuanoq
+while(@@FETCH_STATUS <> -1)
+begin
+
+	insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,tpno,tps,tunit,tmount,timount,ordeno)
+	select top 1 '9',3,@t_xnoa,noa,rank,cuano,cuanoq,productno,product,unit,mount,inmount,ordeno 
+	from view_work 
+	where --rank=(select MIN(rank) from view_work where cuano=@t_cuano and cuanoq=@t_cuanoq) and 
+	cuano=@t_cuano and cuanoq=@t_cuanoq 
+	order by rank
+	
+		--select '9',3,@t_xnoa,noa,rank,cuano,cuanoq,productno,product,unit,mount,inmount,ordeno
+		--from view_work
+		--where rank=(select MIN(rank) from view_work where cuano=@t_cuano and cuanoq=@t_cuanoq)
+		--and cuano=@t_cuano and cuanoq=@t_cuanoq
+
+	fetch next from cursor_table
+	into @t_xnoa,@t_cuano,@t_cuanoq
+end
+close cursor_table
+deallocate cursor_table
+
+insert @tmp(gno,recno,xnoa,workno,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,mpno,mps,munit,mmount,mimount,tpno,tps,tunit,tmount,timount,ordeno,tworkno)
+	select
+	'0' gno,0 recno,a.xnoa,a.workno,a.cuano,a.cuanoq,a.bpno,a.bps,a.bunit,a.bmount,a.bgmount
+	,b.mpno,b.mps,b.munit,b.mmount,b.mimount,c.tpno,c.tps,c.tunit,c.tmount,c.timount,c.ordeno,c.workno
+	from(select xnoa,workno,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,ordeno from @tmp where recno='1') a
+	left join (select xnoa,workno,cuano,cuanoq,mpno,mps,munit,mmount,mimount,ordeno from @tmp where recno='2') b on a.xnoa=b.xnoa
+	left join (select xnoa,workno,cuano,cuanoq,tpno,tps,tunit,tmount,timount,ordeno from @tmp where recno='3')c on a.xnoa=c.xnoa
+
+if(@t_xorder='1')
+begin
+	insert @tmp(gno,recno,xnoa,bpno,bps,bunit,bmount,bgmount,mmount,mimount,tmount,timount)
+	select '1',1,bpno+'__'+CHAR(255),bpno,MAX(bps),MAX(bunit),sum(bmount),SUM(bgmount),sum(mmount),SUM(mimount),sum(tmount),SUM(timount)
+	from @tmp where gno='0'
+	group by bpno
+
+	select gno,recno,xnoa,workno,cuano,cuanoq,bpno,bps,bunit,mpno,mps,munit,tpno,tps,ordeno,tworkno,tunit
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmount),1)),0,12)) bmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bgmount),1)),0,12)) bgmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mmount),1)),0,12)) mmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mimount),1)),0,12)) mimount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmount),1)),0,12)) tmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,timount),1)),0,12)) timount
+	from @tmp where gno!='9' order by xnoa,cuano,cuanoq,recno
+end
+
+if(@t_xorder='2')
+begin
+	insert @tmp(gno,recno,xnoa,mpno,mps,munit,bmount,bgmount,mmount,mimount,tmount,timount)
+	select '2',1,mpno+'__'+CHAR(255),mpno,MAX(mps),MAX(munit),sum(bmount),SUM(bgmount),sum(mmount),SUM(mimount),sum(tmount),SUM(timount)
+	from @tmp where gno='0'
+	group by mpno
+
+	select gno,recno,xnoa,workno,cuano,cuanoq,bpno,bps,bunit,mpno,mps,munit,tpno,tps,ordeno,tworkno,tunit
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmount),1)),0,12)) bmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bgmount),1)),0,12)) bgmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mmount),1)),0,12)) mmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mimount),1)),0,12)) mimount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmount),1)),0,12)) tmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,timount),1)),0,12)) timount
+	from @tmp where gno!='9' order by mpno,recno
+end
+
+if(@t_xorder='3')
+begin
+	insert @tmp(gno,recno,xnoa,tpno,tps,tunit,bmount,bgmount,mmount,mimount,tmount,timount)
+	select '3',1,tpno+'__'+CHAR(255),tpno,MAX(tps),MAX(tunit),sum(bmount),SUM(bgmount),sum(mmount),SUM(mimount),sum(tmount),SUM(timount)
+	from @tmp where gno='0'
+	group by tpno
+
+	select gno,recno,xnoa,workno,cuano,cuanoq,bpno,bps,bunit,mpno,mps,munit,tpno,tps,ordeno,tworkno,tunit
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmount),1)),0,12)) bmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bgmount),1)),0,12)) bgmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mmount),1)),0,12)) mmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mimount),1)),0,12)) mimount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmount),1)),0,12)) tmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,timount),1)),0,12)) timount
+	from @tmp where gno!='9' order by tpno,recno
+end;
+-------------------------------------------------------------------------------------------------------
+z_work15:--z_work15
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_bstationno = case when '#non' = [7] then '' else [7] end
+set @t_estationno = case when '#non' = [8] then CHAR(255) else [8] end
+declare @t_bstationgno nvarchar(20)=case when '#non' = [28] then '' else [28] end
+declare @t_estationgno nvarchar(20)=case when '#non' = [29] then CHAR(255) else [29] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	stationno nvarchar(30),
+	stations nvarchar(50),
+	activation float,
+	borntime float,
+	inmount float,
+	errmount float,
+	chgmo float,
+	fault float,
+	delay float,
+	waittime float,
+	waitfedtime float,
+	lacksss float
+)
+
+insert into @tmp(gno,datea,stationno,stations,borntime,inmount,errmount,chgmo,fault,delay,waittime,waitfedtime,lacksss)
+	select '0',b.datea,a.noa,a.station,isnull(c.borntime,0),isnull(b.inmount,0),isnull(b.errmount,0),
+		isnull(c.chgtime,0),isnull(c.faulttime,0),isnull(c.delaytime,0),isnull(c.waittime,0),
+		isnull(c.waitfedtime,0),isnull(c.lacksss,0)
+	from station a
+	left join (
+		select datea,stationno,sum(inmount) inmount,sum(errmount)errmount from (
+			select b.datea,b.stationno,b.station,a.mount inmount,0 errmount
+			from view_workbs a
+			left join view_workb b on a.noa = b.noa
+			left join view_work c on a.workno=c.noa
+			where c.isrework=0 or c.isrework is null and b.datea between @t_bdate and @t_edate
+			union all
+			select b.datea,b.stationno,b.station,0 inmount,a.mount errmount
+			from view_workbs a
+			left join view_workb b on a.noa = b.noa
+			left join view_work c on a.workno=c.noa
+			where c.isrework=1 and b.datea between @t_bdate and @t_edate
+		)tmp group by datea,stationno
+	) b on (a.noa = b.stationno)
+	left join (
+		select b.datea,a.mechno,sum(a.borntime) borntime,sum(a.chgtime) chgtime,sum(a.faulttime) faulttime,
+				 sum(a.delaytime) delaytime,sum(a.waittime) waittime,sum(a.waitfedtime) waitfedtime,
+				 sum(a.lacksss) lacksss
+		from view_cuws a
+		left join view_cuw b on a.noa = b.noa
+		where b.datea between @t_bdate and @t_edate
+		group by b.datea,a.mechno
+	) c on (a.noa = c.mechno) and (c.datea = b.datea)
+	where (b.datea between @t_bdate and @t_edate) and (a.noa between @t_bstationno and @t_estationno)
+	and (a.stationgno between @t_bstationgno and @t_estationgno)
+	order by b.datea
+update @tmp set activation = case when borntime > 0 then (borntime-(chgmo+fault+delay+waittime+waitfedtime+lacksss))/borntime
+										 else 0 end
+update @tmp set activation = round(activation,4)
+insert into @tmp
+	select '1',datea,'','',sum(activation),sum(borntime),sum(inmount),sum(errmount),
+			 sum(chgmo),sum(fault),sum(delay),sum(waittime),sum(waitfedtime),sum(lacksss)
+	from @tmp
+	group by datea
+select
+	gno,datea,stationno,stations,activation,@t_bdate bdate,@t_edate edate,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,borntime),1)),4,12)) borntime,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),4,12)) errmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgmo),1)),4,12)) chgmo,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,fault),1)),4,12)) fault,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,delay),1)),4,12)) delay,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,waittime),1)),4,12)) waittime,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,waitfedtime),1)),4,12)) waitfedtime,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lacksss),1)),4,12)) lacksss
+from @tmp order by datea,gno,stationno;
+--------------------------------------------------------------------------------------------------------
+z_work17:--z_work17
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+set @t_bdate = case when '#non' = [22] then '' else [22] end
+set @t_edate = case when '#non' = [23] then @t_bdate else [23] end
+	declare @tmp table(
+		gno nvarchar(10),
+		stationno nvarchar(50),
+		stations nvarchar(90),
+		v01 float,
+		v02 float,
+		v03 float,
+		v04 float,
+		v05 float,
+		v06 float,
+		v07 float,
+		v08 float,
+		v09 float,
+		v10 float,
+		v11 float,
+		v12 float,
+		v13 float,
+		v14 float,
+		v15 float,
+		v16 float,
+		v17 float,
+		v18 float,
+		v19 float,
+		v20 float,
+		v21 float,
+		v22 float,
+		v23 float,
+		v24 float,
+		v25 float,
+		v26 float,
+		v27 float,
+		v28 float,
+		v29 float,
+		v30 float,
+		v31 float,
+		v32 float,
+		v33 float,
+		v34 float,
+		v35 float,
+		v36 float,
+		v37 float,
+		v38 float,
+		v39 float,
+		v40 float,
+		v41 float,
+		v42 float,
+		v43 float,
+		v44 float,
+		v45 float,
+		v46 float,
+		v47 float,
+		v48 float,
+		v49 float,
+		v50 float,
+		v51 float,
+		v52 float,
+		v53 float,
+		v54 float,
+		v55 float,
+		v56 float,
+		v57 float,
+		v58 float,
+		v59 float,
+		v60 float,
+		v61 float,
+		v62 float,
+		v63 float,
+		v64 float,
+		v65 float,
+		v66 float,
+		v67 float,
+		v68 float,
+		v69 float,
+		v70 float,
+		v71 float,
+		v72 float,
+		v73 float,
+		v74 float,
+		v75 float,
+		v76 float,
+		v77 float,
+		v78 float,
+		v79 float,
+		v80 float,
+		v81 float,
+		v82 float,
+		v83 float,
+		v84 float,
+		v85 float,
+		v86 float,
+		v87 float,
+		v88 float,
+		v89 float,
+		v90 float,
+		v91 float,
+		v92 float,
+		v93 float,
+		v94 float
+	)
+if(@t_edate!='')
+begin
+	declare @t_adbdate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_bdate,3))+1911)+'/'+SUBSTRING(@t_bdate,5,2)+'/'+RIGHT(@t_bdate,2)
+	declare @t_adedate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_edate,3))+1911)+'/'+SUBSTRING(@t_edate,5,2)+'/'+RIGHT(@t_edate,2)
+	declare @dateList table(
+		idno int identity(1,1),
+		datea nvarchar(10)
+	)
+	declare @CountAdDate nvarchar(15) = @t_adbdate
+	while(1=1)
+	begin
+		if(isdate(@CountAdDate)=1)
+		begin
+			-------將日期轉為民國年
+			declare @now_date nvarchar(15)
+			set @now_date=CONVERT (nvarchar(15), cast(@CountAdDate as datetime),12 )+0890000
+			set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+			insert into @dateList(datea) values(@now_date)
+		end
+		set @CountAdDate = convert(nvarchar,dateadd(day,1,@CountAdDate),111)
+		if(@CountAdDate > @t_adedate)
+		begin
+			break
+		end
+	end
+	insert into @tmp(gno,stationno,stations)
+		select
+			'0' gno,a.stationno,a.station
+		from view_work a
+		group by a.stationno,a.station
+	declare @cuadate nvarchar(10)
+	declare @uindate nvarchar(10)
+	declare @stationno nvarchar(50)
+	declare @station nvarchar(90)
+	declare @wtime1 float
+	declare @wtime2 float
+	declare cursor_table cursor for
+		select
+			a.cuadate,a.uindate,a.stationno,a.station,a.wtime1,a.wtime2
+		from view_work a
+		where ((a.cuadate between @t_bdate and @t_edate) or (a.uindate between @t_bdate and @t_edate))
+	open cursor_table
+	fetch next from cursor_table
+	into @cuadate,@uindate,@stationno,@station,@wtime1,@wtime2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		declare @nowdays nvarchar(15) = @cuadate
+		declare @nowdays_AD nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@cuadate,3))+1911)+'/'+SUBSTRING(@cuadate,5,2)+'/'+RIGHT(@cuadate,2)
+		declare @value float = 0
+		if(@cuadate=@uindate)
+		begin
+			set @value = @wtime1
+			set @nowdays = @cuadate
+		end
+		else
+		begin
+			while(@nowdays <= @uindate)
+			begin
+				if(@nowdays = @cuadate)
+				begin
+					set @value = @wtime1
+				end
+				else if(@nowdays = @uindate)
+				begin
+					set @value = @wtime2
+				end
+				else
+				begin
+					set @value = (select gen from station where (noa=@stationno) and (station=@station))
+				end
+				set @nowdays_AD = convert(nvarchar,dateadd(day,1,@nowdays_AD),111)
+				set @now_date=CONVERT (nvarchar(15), cast(@nowdays_AD as datetime),12 )+0890000
+				set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+				set @nowdays = @now_date
+			end
+		end
+		if(1=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v01 = @value where (stationno=@stationno) and (stations=@station)
+		else if(2=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v02 = isnull(v02,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(3=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v03 = isnull(v03,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(4=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v04 = isnull(v04,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(5=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v05 = isnull(v05,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(6=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v06 = isnull(v06,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(7=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v07 = isnull(v07,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(8=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v08 = isnull(v08,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(9=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v09 = isnull(v09,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(10=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v10 = isnull(v10,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(11=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v11 = isnull(v11,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(12=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v12 = isnull(v12,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(13=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v13 = isnull(v13,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(14=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v14 = isnull(v14,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(15=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v15 = isnull(v15,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(16=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v16 = isnull(v16,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(17=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v17 = isnull(v17,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(18=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v18 = isnull(v18,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(19=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v19 = isnull(v19,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(20=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v20 = isnull(v20,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(21=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v21 = isnull(v21,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(22=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v22 = isnull(v22,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(23=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v23 = isnull(v23,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(24=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v24 = isnull(v24,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(25=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v25 = isnull(v25,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(26=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v26 = isnull(v26,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(27=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v27 = isnull(v27,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(28=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v28 = isnull(v28,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(29=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v29 = isnull(v29,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(30=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v30 = isnull(v30,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(31=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v31 = isnull(v31,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(32=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v32 = isnull(v32,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(33=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v33 = isnull(v33,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(34=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v34 = isnull(v34,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(35=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v35 = isnull(v35,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(36=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v36 = isnull(v36,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(37=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v37 = isnull(v37,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(38=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v38 = isnull(v38,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(39=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v39 = isnull(v39,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(40=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v40 = isnull(v40,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(41=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v41 = isnull(v41,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(42=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v42 = isnull(v42,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(43=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v43 = isnull(v43,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(44=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v44 = isnull(v44,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(45=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v45 = isnull(v45,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(46=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v46 = isnull(v46,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(47=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v47 = isnull(v47,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(48=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v48 = isnull(v48,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(49=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v49 = isnull(v49,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(50=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v50 = isnull(v50,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(51=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v51 = isnull(v51,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(52=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v52 = isnull(v52,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(53=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v53 = isnull(v53,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(54=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v54 = isnull(v54,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(55=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v55 = isnull(v55,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(56=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v56 = isnull(v56,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(57=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v57 = isnull(v57,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(58=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v58 = isnull(v58,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(59=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v59 = isnull(v59,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(60=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v60 = isnull(v60,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(61=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v61 = isnull(v61,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(62=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v62 = isnull(v62,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(63=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v63 = isnull(v63,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(64=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v64 = isnull(v64,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(65=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v65 = isnull(v65,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(66=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v66 = isnull(v66,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(67=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v67 = isnull(v67,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(68=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v68 = isnull(v68,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(69=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v69 = isnull(v69,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(70=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v70 = isnull(v70,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(71=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v71 = isnull(v71,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(72=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v72 = isnull(v72,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(73=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v73 = isnull(v73,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(74=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v74 = isnull(v74,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(75=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v75 = isnull(v75,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(76=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v76 = isnull(v76,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(77=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v77 = isnull(v77,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(78=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v78 = isnull(v78,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(79=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v79 = isnull(v79,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(80=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v80 = isnull(v80,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(81=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v81 = isnull(v81,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(82=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v82 = isnull(v82,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(83=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v83 = isnull(v83,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(84=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v84 = isnull(v84,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(85=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v85 = isnull(v85,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(86=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v86 = isnull(v86,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(87=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v87 = isnull(v87,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(88=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v88 = isnull(v88,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(89=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v89 = isnull(v89,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(90=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v90 = isnull(v90,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(91=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v91 = isnull(v91,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(92=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v92 = isnull(v92,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		else if(93=(select a.idno from @dateList a where a.datea=@nowdays))
+			update @tmp set v93 = isnull(v93,0) + isnull(@value,0) where (stationno=@stationno) and (stations=@station)
+		fetch next from cursor_table
+		into @cuadate,@uindate,@stationno,@station,@wtime1,@wtime2
+	end
+	close cursor_table
+	deallocate cursor_table
+	declare @maxCount int = (select max(idno) from @dateList)
+	insert into @tmp
+		select
+			'1' gno,'' stationno,'' stations,
+			isnull(sum(v01),0),isnull(sum(v02),0),isnull(sum(v03),0),isnull(sum(v04),0),isnull(sum(v05),0),
+			isnull(sum(v06),0),isnull(sum(v07),0),isnull(sum(v08),0),isnull(sum(v09),0),isnull(sum(v10),0),
+			isnull(sum(v11),0),isnull(sum(v12),0),isnull(sum(v13),0),isnull(sum(v14),0),isnull(sum(v15),0),
+			isnull(sum(v16),0),isnull(sum(v17),0),isnull(sum(v18),0),isnull(sum(v19),0),isnull(sum(v20),0),
+			isnull(sum(v21),0),isnull(sum(v22),0),isnull(sum(v23),0),isnull(sum(v24),0),isnull(sum(v25),0),
+			isnull(sum(v26),0),isnull(sum(v27),0),isnull(sum(v28),0),isnull(sum(v29),0),isnull(sum(v30),0),
+			isnull(sum(v31),0),isnull(sum(v32),0),isnull(sum(v33),0),isnull(sum(v34),0),isnull(sum(v35),0),
+			isnull(sum(v36),0),isnull(sum(v37),0),isnull(sum(v38),0),isnull(sum(v39),0),isnull(sum(v40),0),
+			isnull(sum(v41),0),isnull(sum(v42),0),isnull(sum(v43),0),isnull(sum(v44),0),isnull(sum(v45),0),
+			isnull(sum(v46),0),isnull(sum(v47),0),isnull(sum(v48),0),isnull(sum(v49),0),isnull(sum(v50),0),
+			isnull(sum(v51),0),isnull(sum(v52),0),isnull(sum(v53),0),isnull(sum(v54),0),isnull(sum(v55),0),
+			isnull(sum(v56),0),isnull(sum(v57),0),isnull(sum(v58),0),isnull(sum(v59),0),isnull(sum(v60),0),
+			isnull(sum(v61),0),isnull(sum(v62),0),isnull(sum(v63),0),isnull(sum(v64),0),isnull(sum(v65),0),
+			isnull(sum(v66),0),isnull(sum(v67),0),isnull(sum(v68),0),isnull(sum(v69),0),isnull(sum(v70),0),
+			isnull(sum(v71),0),isnull(sum(v72),0),isnull(sum(v73),0),isnull(sum(v74),0),isnull(sum(v75),0),
+			isnull(sum(v76),0),isnull(sum(v77),0),isnull(sum(v78),0),isnull(sum(v79),0),isnull(sum(v80),0),
+			isnull(sum(v81),0),isnull(sum(v82),0),isnull(sum(v83),0),isnull(sum(v84),0),isnull(sum(v85),0),
+			isnull(sum(v86),0),isnull(sum(v87),0),isnull(sum(v88),0),isnull(sum(v89),0),isnull(sum(v90),0),
+			isnull(sum(v91),0),isnull(sum(v92),0),isnull(sum(v93),0),isnull(sum(v94),0)
+		from @tmp
+
+	select
+		gno,stationno,stations,
+		case when (@maxCount+1)=1 then 0 else (case when 1 > @maxCount then null else a.v01 end) end v01,
+		case when (@maxCount+1)=2 then (select isnull(a.v01,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 2 > @maxCount then null else a.v02 end) end v02,
+		case when (@maxCount+1)=3 then (select isnull(a.v01,0)+isnull(a.v02,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 3 > @maxCount then null else a.v03 end) end v03,
+		case when (@maxCount+1)=4 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 4 > @maxCount then null else a.v04 end) end v04,
+		case when (@maxCount+1)=5 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 5 > @maxCount then null else a.v05 end) end v05,
+		case when (@maxCount+1)=6 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 6 > @maxCount then null else a.v06 end) end v06,
+		case when (@maxCount+1)=7 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 7 > @maxCount then null else a.v07 end) end v07,
+		case when (@maxCount+1)=8 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 8 > @maxCount then null else a.v08 end) end v08,
+		case when (@maxCount+1)=9 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 9 > @maxCount then null else a.v09 end) end v09,
+		case when (@maxCount+1)=10 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 10 > @maxCount then null else a.v10 end) end v10,
+		case when (@maxCount+1)=11 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 11 > @maxCount then null else a.v11 end) end v11,
+		case when (@maxCount+1)=12 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 12 > @maxCount then null else a.v12 end) end v12,
+		case when (@maxCount+1)=13 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 13 > @maxCount then null else a.v13 end) end v13,
+		case when (@maxCount+1)=14 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 14 > @maxCount then null else a.v14 end) end v14,
+		case when (@maxCount+1)=15 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 15 > @maxCount then null else a.v15 end) end v15,
+		case when (@maxCount+1)=16 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 16 > @maxCount then null else a.v16 end) end v16,
+		case when (@maxCount+1)=17 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 17 > @maxCount then null else a.v17 end) end v17,
+		case when (@maxCount+1)=18 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 18 > @maxCount then null else a.v18 end) end v18,
+		case when (@maxCount+1)=19 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 19 > @maxCount then null else a.v19 end) end v19,
+		case when (@maxCount+1)=20 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 20 > @maxCount then null else a.v20 end) end v20,
+		case when (@maxCount+1)=21 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 21 > @maxCount then null else a.v21 end) end v21,
+		case when (@maxCount+1)=22 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 22 > @maxCount then null else a.v22 end) end v22,
+		case when (@maxCount+1)=23 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 23 > @maxCount then null else a.v23 end) end v23,
+		case when (@maxCount+1)=24 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 24 > @maxCount then null else a.v24 end) end v24,
+		case when (@maxCount+1)=25 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 25 > @maxCount then null else a.v25 end) end v25,
+		case when (@maxCount+1)=26 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 26 > @maxCount then null else a.v26 end) end v26,
+		case when (@maxCount+1)=27 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 27 > @maxCount then null else a.v27 end) end v27,
+		case when (@maxCount+1)=28 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 28 > @maxCount then null else a.v28 end) end v28,
+		case when (@maxCount+1)=29 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 29 > @maxCount then null else a.v29 end) end v29,
+		case when (@maxCount+1)=30 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 30 > @maxCount then null else a.v30 end) end v30,
+		case when (@maxCount+1)=31 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 31 > @maxCount then null else a.v31 end) end v31,
+		case when (@maxCount+1)=32 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 32 > @maxCount then null else a.v32 end) end v32,
+		case when (@maxCount+1)=33 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 33 > @maxCount then null else a.v33 end) end v33,
+		case when (@maxCount+1)=34 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 34 > @maxCount then null else a.v34 end) end v34,
+		case when (@maxCount+1)=35 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 35 > @maxCount then null else a.v35 end) end v35,
+		case when (@maxCount+1)=36 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 36 > @maxCount then null else a.v36 end) end v36,
+		case when (@maxCount+1)=37 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 37 > @maxCount then null else a.v37 end) end v37,
+		case when (@maxCount+1)=38 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 38 > @maxCount then null else a.v38 end) end v38,
+		case when (@maxCount+1)=39 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 39 > @maxCount then null else a.v39 end) end v39,
+		case when (@maxCount+1)=40 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 40 > @maxCount then null else a.v40 end) end v40,
+		case when (@maxCount+1)=41 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 41 > @maxCount then null else a.v41 end) end v41,
+		case when (@maxCount+1)=42 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 42 > @maxCount then null else a.v42 end) end v42,
+		case when (@maxCount+1)=43 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 43 > @maxCount then null else a.v43 end) end v43,
+		case when (@maxCount+1)=44 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 44 > @maxCount then null else a.v44 end) end v44,
+		case when (@maxCount+1)=45 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 45 > @maxCount then null else a.v45 end) end v45,
+		case when (@maxCount+1)=46 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 46 > @maxCount then null else a.v46 end) end v46,
+		case when (@maxCount+1)=47 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 47 > @maxCount then null else a.v47 end) end v47,
+		case when (@maxCount+1)=48 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 48 > @maxCount then null else a.v48 end) end v48,
+		case when (@maxCount+1)=49 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 49 > @maxCount then null else a.v49 end) end v49,
+		case when (@maxCount+1)=50 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 50 > @maxCount then null else a.v50 end) end v50,
+		case when (@maxCount+1)=51 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 51 > @maxCount then null else a.v51 end) end v51,
+		case when (@maxCount+1)=52 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 52 > @maxCount then null else a.v52 end) end v52,
+		case when (@maxCount+1)=53 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 53 > @maxCount then null else a.v53 end) end v53,
+		case when (@maxCount+1)=54 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 54 > @maxCount then null else a.v54 end) end v54,
+		case when (@maxCount+1)=55 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 55 > @maxCount then null else a.v55 end) end v55,
+		case when (@maxCount+1)=56 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 56 > @maxCount then null else a.v56 end) end v56,
+		case when (@maxCount+1)=57 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 57 > @maxCount then null else a.v57 end) end v57,
+		case when (@maxCount+1)=58 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 58 > @maxCount then null else a.v58 end) end v58,
+		case when (@maxCount+1)=59 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 59 > @maxCount then null else a.v59 end) end v59,
+		case when (@maxCount+1)=60 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 60 > @maxCount then null else a.v60 end) end v60,
+		case when (@maxCount+1)=61 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 61 > @maxCount then null else a.v61 end) end v61,
+		case when (@maxCount+1)=62 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 62 > @maxCount then null else a.v62 end) end v62,
+		case when (@maxCount+1)=63 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 63 > @maxCount then null else a.v63 end) end v63,
+		case when (@maxCount+1)=64 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 64 > @maxCount then null else a.v64 end) end v64,
+		case when (@maxCount+1)=65 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 65 > @maxCount then null else a.v65 end) end v65,
+		case when (@maxCount+1)=66 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 66 > @maxCount then null else a.v66 end) end v66,
+		case when (@maxCount+1)=67 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 67 > @maxCount then null else a.v67 end) end v67,
+		case when (@maxCount+1)=68 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 68 > @maxCount then null else a.v68 end) end v68,
+		case when (@maxCount+1)=69 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 69 > @maxCount then null else a.v69 end) end v69,
+		case when (@maxCount+1)=70 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 70 > @maxCount then null else a.v70 end) end v70,
+		case when (@maxCount+1)=71 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 71 > @maxCount then null else a.v71 end) end v71,
+		case when (@maxCount+1)=72 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 72 > @maxCount then null else a.v72 end) end v72,
+		case when (@maxCount+1)=73 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 73 > @maxCount then null else a.v73 end) end v73,
+		case when (@maxCount+1)=74 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 74 > @maxCount then null else a.v74 end) end v74,
+		case when (@maxCount+1)=75 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 75 > @maxCount then null else a.v75 end) end v75,
+		case when (@maxCount+1)=76 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 76 > @maxCount then null else a.v76 end) end v76,
+		case when (@maxCount+1)=77 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 77 > @maxCount then null else a.v77 end) end v77,
+		case when (@maxCount+1)=78 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 78 > @maxCount then null else a.v78 end) end v78,
+		case when (@maxCount+1)=79 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 79 > @maxCount then null else a.v79 end) end v79,
+		case when (@maxCount+1)=80 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 80 > @maxCount then null else a.v80 end) end v80,
+		case when (@maxCount+1)=81 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 81 > @maxCount then null else a.v81 end) end v81,
+		case when (@maxCount+1)=82 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 82 > @maxCount then null else a.v82 end) end v82,
+		case when (@maxCount+1)=83 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 83 > @maxCount then null else a.v83 end) end v83,
+		case when (@maxCount+1)=84 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 84 > @maxCount then null else a.v84 end) end v84,
+		case when (@maxCount+1)=85 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 85 > @maxCount then null else a.v85 end) end v85,
+		case when (@maxCount+1)=86 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 86 > @maxCount then null else a.v86 end) end v86,
+		case when (@maxCount+1)=87 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 87 > @maxCount then null else a.v87 end) end v87,
+		case when (@maxCount+1)=88 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 88 > @maxCount then null else a.v88 end) end v88,
+		case when (@maxCount+1)=89 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0)+isnull(a.v88,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 89 > @maxCount then null else a.v89 end) end v89,
+		case when (@maxCount+1)=90 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0)+isnull(a.v88,0)+isnull(a.v89,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 90 > @maxCount then null else a.v90 end) end v90,
+		case when (@maxCount+1)=91 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0)+isnull(a.v88,0)+isnull(a.v89,0)+isnull(a.v90,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 91 > @maxCount then null else a.v91 end) end v91,
+		case when (@maxCount+1)=92 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0)+isnull(a.v88,0)+isnull(a.v89,0)+isnull(a.v90,0)+isnull(a.v91,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 92 > @maxCount then null else a.v92 end) end v92,
+		case when (@maxCount+1)=93 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0)+isnull(a.v88,0)+isnull(a.v89,0)+isnull(a.v90,0)+isnull(a.v91,0)+isnull(a.v92,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 93 > @maxCount then null else a.v93 end) end v93,
+		case when (@maxCount+1)=94 then (select isnull(a.v01,0)+isnull(a.v02,0)+isnull(a.v03,0)+isnull(a.v04,0)+isnull(a.v05,0)+isnull(a.v06,0)+isnull(a.v07,0)+isnull(a.v08,0)+isnull(a.v09,0)+isnull(a.v10,0)+isnull(a.v11,0)+isnull(a.v12,0)+isnull(a.v13,0)+isnull(a.v14,0)+isnull(a.v15,0)+isnull(a.v16,0)+isnull(a.v17,0)+isnull(a.v18,0)+isnull(a.v19,0)+isnull(a.v20,0)+isnull(a.v21,0)+isnull(a.v22,0)+isnull(a.v23,0)+isnull(a.v24,0)+isnull(a.v25,0)+isnull(a.v26,0)+isnull(a.v27,0)+isnull(a.v28,0)+isnull(a.v29,0)+isnull(a.v30,0)+isnull(a.v31,0)+isnull(a.v32,0)+isnull(a.v33,0)+isnull(a.v34,0)+isnull(a.v35,0)+isnull(a.v36,0)+isnull(a.v37,0)+isnull(a.v38,0)+isnull(a.v39,0)+isnull(a.v40,0)+isnull(a.v41,0)+isnull(a.v42,0)+isnull(a.v43,0)+isnull(a.v44,0)+isnull(a.v45,0)+isnull(a.v46,0)+isnull(a.v47,0)+isnull(a.v48,0)+isnull(a.v49,0)+isnull(a.v50,0)+isnull(a.v51,0)+isnull(a.v52,0)+isnull(a.v53,0)+isnull(a.v54,0)+isnull(a.v55,0)+isnull(a.v56,0)+isnull(a.v57,0)+isnull(a.v58,0)+isnull(a.v59,0)+isnull(a.v60,0)+isnull(a.v61,0)+isnull(a.v62,0)+isnull(a.v63,0)+isnull(a.v64,0)+isnull(a.v65,0)+isnull(a.v66,0)+isnull(a.v67,0)+isnull(a.v68,0)+isnull(a.v69,0)+isnull(a.v70,0)+isnull(a.v71,0)+isnull(a.v72,0)+isnull(a.v73,0)+isnull(a.v74,0)+isnull(a.v75,0)+isnull(a.v76,0)+isnull(a.v77,0)+isnull(a.v78,0)+isnull(a.v79,0)+isnull(a.v80,0)+isnull(a.v81,0)+isnull(a.v82,0)+isnull(a.v83,0)+isnull(a.v84,0)+isnull(a.v85,0)+isnull(a.v86,0)+isnull(a.v87,0)+isnull(a.v88,0)+isnull(a.v89,0)+isnull(a.v90,0)+isnull(a.v91,0)+isnull(a.v92,0)+isnull(a.v93,0) from @tmp b where (b.stationno=a.stationno) and (b.stations=a.stations) and (b.gno='0')) else (case when 94 > @maxCount then null else a.v94 end) end v94,
+		case when (@maxCount+1)=1 then '總計' else (case when 1 > @maxCount then null else '1' end) end m01,
+		case when (@maxCount+1)=2 then '總計' else (case when 2 > @maxCount then null else '2' end) end m02,
+		case when (@maxCount+1)=3 then '總計' else (case when 3 > @maxCount then null else '3' end) end m03,
+		case when (@maxCount+1)=4 then '總計' else (case when 4 > @maxCount then null else '4' end) end m04,
+		case when (@maxCount+1)=5 then '總計' else (case when 5 > @maxCount then null else '5' end) end m05,
+		case when (@maxCount+1)=6 then '總計' else (case when 6 > @maxCount then null else '6' end) end m06,
+		case when (@maxCount+1)=7 then '總計' else (case when 7 > @maxCount then null else '7' end) end m07,
+		case when (@maxCount+1)=8 then '總計' else (case when 8 > @maxCount then null else '8' end) end m08,
+		case when (@maxCount+1)=9 then '總計' else (case when 9 > @maxCount then null else '9' end) end m09,
+		case when (@maxCount+1)=10 then '總計' else (case when 10 > @maxCount then null else '10' end) end m10,
+		case when (@maxCount+1)=11 then '總計' else (case when 11 > @maxCount then null else '11' end) end m11,
+		case when (@maxCount+1)=12 then '總計' else (case when 12 > @maxCount then null else '12' end) end m12,
+		case when (@maxCount+1)=13 then '總計' else (case when 13 > @maxCount then null else '13' end) end m13,
+		case when (@maxCount+1)=14 then '總計' else (case when 14 > @maxCount then null else '14' end) end m14,
+		case when (@maxCount+1)=15 then '總計' else (case when 15 > @maxCount then null else '15' end) end m15,
+		case when (@maxCount+1)=16 then '總計' else (case when 16 > @maxCount then null else '16' end) end m16,
+		case when (@maxCount+1)=17 then '總計' else (case when 17 > @maxCount then null else '17' end) end m17,
+		case when (@maxCount+1)=18 then '總計' else (case when 18 > @maxCount then null else '18' end) end m18,
+		case when (@maxCount+1)=19 then '總計' else (case when 19 > @maxCount then null else '19' end) end m19,
+		case when (@maxCount+1)=20 then '總計' else (case when 20 > @maxCount then null else '20' end) end m20,
+		case when (@maxCount+1)=21 then '總計' else (case when 21 > @maxCount then null else '21' end) end m21,
+		case when (@maxCount+1)=22 then '總計' else (case when 22 > @maxCount then null else '22' end) end m22,
+		case when (@maxCount+1)=23 then '總計' else (case when 23 > @maxCount then null else '23' end) end m23,
+		case when (@maxCount+1)=24 then '總計' else (case when 24 > @maxCount then null else '24' end) end m24,
+		case when (@maxCount+1)=25 then '總計' else (case when 25 > @maxCount then null else '25' end) end m25,
+		case when (@maxCount+1)=26 then '總計' else (case when 26 > @maxCount then null else '26' end) end m26,
+		case when (@maxCount+1)=27 then '總計' else (case when 27 > @maxCount then null else '27' end) end m27,
+		case when (@maxCount+1)=28 then '總計' else (case when 28 > @maxCount then null else '28' end) end m28,
+		case when (@maxCount+1)=29 then '總計' else (case when 29 > @maxCount then null else '29' end) end m29,
+		case when (@maxCount+1)=30 then '總計' else (case when 30 > @maxCount then null else '30' end) end m30,
+		case when (@maxCount+1)=31 then '總計' else (case when 31 > @maxCount then null else '31' end) end m31,
+		case when (@maxCount+1)=32 then '總計' else (case when 32 > @maxCount then null else '32' end) end m32,
+		case when (@maxCount+1)=33 then '總計' else (case when 33 > @maxCount then null else '33' end) end m33,
+		case when (@maxCount+1)=34 then '總計' else (case when 34 > @maxCount then null else '34' end) end m34,
+		case when (@maxCount+1)=35 then '總計' else (case when 35 > @maxCount then null else '35' end) end m35,
+		case when (@maxCount+1)=36 then '總計' else (case when 36 > @maxCount then null else '36' end) end m36,
+		case when (@maxCount+1)=37 then '總計' else (case when 37 > @maxCount then null else '37' end) end m37,
+		case when (@maxCount+1)=38 then '總計' else (case when 38 > @maxCount then null else '38' end) end m38,
+		case when (@maxCount+1)=39 then '總計' else (case when 39 > @maxCount then null else '39' end) end m39,
+		case when (@maxCount+1)=40 then '總計' else (case when 40 > @maxCount then null else '40' end) end m40,
+		case when (@maxCount+1)=41 then '總計' else (case when 41 > @maxCount then null else '41' end) end m41,
+		case when (@maxCount+1)=42 then '總計' else (case when 42 > @maxCount then null else '42' end) end m42,
+		case when (@maxCount+1)=43 then '總計' else (case when 43 > @maxCount then null else '43' end) end m43,
+		case when (@maxCount+1)=44 then '總計' else (case when 44 > @maxCount then null else '44' end) end m44,
+		case when (@maxCount+1)=45 then '總計' else (case when 45 > @maxCount then null else '45' end) end m45,
+		case when (@maxCount+1)=46 then '總計' else (case when 46 > @maxCount then null else '46' end) end m46,
+		case when (@maxCount+1)=47 then '總計' else (case when 47 > @maxCount then null else '47' end) end m47,
+		case when (@maxCount+1)=48 then '總計' else (case when 48 > @maxCount then null else '48' end) end m48,
+		case when (@maxCount+1)=49 then '總計' else (case when 49 > @maxCount then null else '49' end) end m49,
+		case when (@maxCount+1)=50 then '總計' else (case when 50 > @maxCount then null else '50' end) end m50,
+		case when (@maxCount+1)=51 then '總計' else (case when 51 > @maxCount then null else '51' end) end m51,
+		case when (@maxCount+1)=52 then '總計' else (case when 52 > @maxCount then null else '52' end) end m52,
+		case when (@maxCount+1)=53 then '總計' else (case when 53 > @maxCount then null else '53' end) end m53,
+		case when (@maxCount+1)=54 then '總計' else (case when 54 > @maxCount then null else '54' end) end m54,
+		case when (@maxCount+1)=55 then '總計' else (case when 55 > @maxCount then null else '55' end) end m55,
+		case when (@maxCount+1)=56 then '總計' else (case when 56 > @maxCount then null else '56' end) end m56,
+		case when (@maxCount+1)=57 then '總計' else (case when 57 > @maxCount then null else '57' end) end m57,
+		case when (@maxCount+1)=58 then '總計' else (case when 58 > @maxCount then null else '58' end) end m58,
+		case when (@maxCount+1)=59 then '總計' else (case when 59 > @maxCount then null else '59' end) end m59,
+		case when (@maxCount+1)=60 then '總計' else (case when 60 > @maxCount then null else '60' end) end m60,
+		case when (@maxCount+1)=61 then '總計' else (case when 61 > @maxCount then null else '61' end) end m61,
+		case when (@maxCount+1)=62 then '總計' else (case when 62 > @maxCount then null else '62' end) end m62,
+		case when (@maxCount+1)=63 then '總計' else (case when 63 > @maxCount then null else '63' end) end m63,
+		case when (@maxCount+1)=64 then '總計' else (case when 64 > @maxCount then null else '64' end) end m64,
+		case when (@maxCount+1)=65 then '總計' else (case when 65 > @maxCount then null else '65' end) end m65,
+		case when (@maxCount+1)=66 then '總計' else (case when 66 > @maxCount then null else '66' end) end m66,
+		case when (@maxCount+1)=67 then '總計' else (case when 67 > @maxCount then null else '67' end) end m67,
+		case when (@maxCount+1)=68 then '總計' else (case when 68 > @maxCount then null else '68' end) end m68,
+		case when (@maxCount+1)=69 then '總計' else (case when 69 > @maxCount then null else '69' end) end m69,
+		case when (@maxCount+1)=70 then '總計' else (case when 70 > @maxCount then null else '70' end) end m70,
+		case when (@maxCount+1)=71 then '總計' else (case when 71 > @maxCount then null else '71' end) end m71,
+		case when (@maxCount+1)=72 then '總計' else (case when 72 > @maxCount then null else '72' end) end m72,
+		case when (@maxCount+1)=73 then '總計' else (case when 73 > @maxCount then null else '73' end) end m73,
+		case when (@maxCount+1)=74 then '總計' else (case when 74 > @maxCount then null else '74' end) end m74,
+		case when (@maxCount+1)=75 then '總計' else (case when 75 > @maxCount then null else '75' end) end m75,
+		case when (@maxCount+1)=76 then '總計' else (case when 76 > @maxCount then null else '76' end) end m76,
+		case when (@maxCount+1)=77 then '總計' else (case when 77 > @maxCount then null else '77' end) end m77,
+		case when (@maxCount+1)=78 then '總計' else (case when 78 > @maxCount then null else '78' end) end m78,
+		case when (@maxCount+1)=79 then '總計' else (case when 79 > @maxCount then null else '79' end) end m79,
+		case when (@maxCount+1)=80 then '總計' else (case when 80 > @maxCount then null else '80' end) end m80,
+		case when (@maxCount+1)=81 then '總計' else (case when 81 > @maxCount then null else '81' end) end m81,
+		case when (@maxCount+1)=82 then '總計' else (case when 82 > @maxCount then null else '82' end) end m82,
+		case when (@maxCount+1)=83 then '總計' else (case when 83 > @maxCount then null else '83' end) end m83,
+		case when (@maxCount+1)=84 then '總計' else (case when 84 > @maxCount then null else '84' end) end m84,
+		case when (@maxCount+1)=85 then '總計' else (case when 85 > @maxCount then null else '85' end) end m85,
+		case when (@maxCount+1)=86 then '總計' else (case when 86 > @maxCount then null else '86' end) end m86,
+		case when (@maxCount+1)=87 then '總計' else (case when 87 > @maxCount then null else '87' end) end m87,
+		case when (@maxCount+1)=88 then '總計' else (case when 88 > @maxCount then null else '88' end) end m88,
+		case when (@maxCount+1)=89 then '總計' else (case when 89 > @maxCount then null else '89' end) end m89,
+		case when (@maxCount+1)=90 then '總計' else (case when 90 > @maxCount then null else '90' end) end m90,
+		case when (@maxCount+1)=91 then '總計' else (case when 91 > @maxCount then null else '91' end) end m91,
+		case when (@maxCount+1)=92 then '總計' else (case when 92 > @maxCount then null else '92' end) end m92,
+		case when (@maxCount+1)=93 then '總計' else (case when 93 > @maxCount then null else '93' end) end m93,
+		case when (@maxCount+1)>=94 then '總計' else null end m94,@maxCount maxCount
+	from @tmp a
+	order by a.gno,a.stationno,a.stations
+end
+else
+begin
+	select * from @tmp
+end;
+----------------------------------------------------------------------------------------------------------------*
+z_work18:--z_work18
+declare @now_date nvarchar(15)
+set @now_date=CONVERT (nvarchar(15), cast(getdate() as datetime),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(90)
+declare @t_estationno nvarchar(90)
+set @t_bdate = case when '#non' = [22] then @now_date else [22] end
+set @t_edate = case when '#non' = [23] then @t_bdate else [23] end
+set @t_bstationno = case when '#non' = [24] then '' else [24] end
+set @t_estationno = case when '#non' = [25] then char(255) else [25] end
+declare @t_issaturday int = 1
+declare @dateList table(
+	idno int identity(1,1),
+	datea nvarchar(10)
+)
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	gen float,
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	mount float
+)
+declare @result table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	gen float,
+	usegen float,
+	datea nvarchar(10),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	mount float
+)
+insert into @tmp
+	select
+		'0' gno,a.stationno,b.station,isnull(b.gen,0),a.cuadate,a.uindate,a.noa,a.mount
+	from view_work a
+	left join station b on (a.stationno=b.noa)
+	where (isnull(a.cuadate,'')!='' and isnull(a.uindate,'')!='' ) and (isnull(b.noa,'') != '') and
+		  (a.stationno between @t_bstationno and @t_estationno)
+	order by a.stationno,a.cuadate,a.uindate
+declare @t_adbdate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_bdate,3))+1911)+'/'+SUBSTRING(@t_bdate,5,2)+'/'+RIGHT(@t_bdate,2)
+declare @t_adedate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_edate,3))+1911)+'/'+SUBSTRING(@t_edate,5,2)+'/'+RIGHT(@t_edate,2)
+declare @CountAdDate nvarchar(15) = @t_adbdate
+while(1=1)
+begin
+	if((isdate(@CountAdDate)=1) and (datepart(weekday,@CountAdDate) != 1))
+	begin
+		if(@t_issaturday='1' or (@t_issaturday!='1' and ((datepart (DW,@CountAdDate)) !=7)))
+		begin
+			-------將日期轉為民國年
+			set @now_date=CONVERT (nvarchar(15), cast(@CountAdDate as datetime),12 )+0890000
+			set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+			insert into @dateList(datea) values(@now_date)
+		end
+	end
+	set @CountAdDate = convert(nvarchar,dateadd(day,1,@CountAdDate),111)
+	if(@CountAdDate > @t_adedate)
+	begin
+		break
+	end
+end
+insert into @result(gno,stationno,station,gen,usegen,datea)
+	select
+		'0' gno,a.noa,a.station,a.gen,a.gen,b.datea
+	from station a,@dateList b
+	where (a.noa between @t_bstationno and @t_estationno)
+	order by a.noa,b.datea
+declare @datea nvarchar(10)
+declare @datea2 nvarchar(10)
+declare @stationno nvarchar(max)
+declare @station nvarchar(max)
+declare @stationno2 nvarchar(max)
+declare @station2 nvarchar(max)
+declare @gen float
+declare @gen2 float
+declare @cuadate nvarchar(10)
+declare @uindate nvarchar(10)
+declare @workno nvarchar(max)
+declare @workno2 nvarchar(max)
+declare @mount float
+declare @idno2 int
+declare cursor_table cursor for
+	select
+		a.stationno,a.station,a.gen,a.cuadate,a.uindate,a.workno,a.mount
+	from @tmp a
+	order by a.stationno,a.workno
+open cursor_table
+fetch next from cursor_table
+into @stationno,@station,@gen,@cuadate,@uindate,@workno,@mount
+while(@@FETCH_STATUS <> -1)
+begin
+	declare cursor_table2 cursor for
+		select
+			a.idno,a.stationno,a.station,a.datea,a.usegen,isnull(a.workno,'')
+		from @result a
+		where  (a.datea between @cuadate and @uindate)/*(a.datea >= @cuadate)*/ and (@stationno=a.stationno) and (a.usegen>0)
+		order by a.datea,a.workno
+	open cursor_table2
+	fetch next from cursor_table2
+	into @idno2,@stationno2,@station2,@datea2,@gen2,@workno2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@workno2='')
+		begin
+			if(@gen2 = @mount)
+			begin
+				update @result set usegen=@gen2-@mount,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
+				set @mount = 0
+				break
+			end
+			else if(@gen2 > @mount)
+			begin
+				update @result set usegen=@gen2-@mount,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
+				set @mount = 0
+				break
+			end
+			else if((@gen2 < @mount))
+			begin
+				update @result set usegen=0,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount where idno=@idno2
+				set @mount = @mount-@gen2
+			end
+		end
+		else
+		begin
+			set @gen2 = isnull((select min(usegen) from @result where (stationno=@stationno2) and (datea=@datea2)),0)
+			if(@gen2 = @mount and @gen2>0)
+			begin
+				insert into @result
+					select '0' gno,@stationno2,@station2,@gen,(@gen2-@mount),@datea2,@cuadate,@uindate,@workno,@mount
+				set @mount = 0
+				break
+			end
+			else if(@gen2 > @mount and @gen2>0)
+			begin
+				insert into @result
+					select '0' gno,@stationno2,@station2,@gen,(@gen2-@mount),@datea2,@cuadate,@uindate,@workno,@mount
+				set @mount = 0
+				break
+			end
+			else if((@gen2 < @mount) and @gen2>0)
+			begin
+				insert into @result
+					select '0' gno,@stationno2,@station2,@gen,0,@datea2,@cuadate,@uindate,@workno,@mount
+				set @mount = @mount-@gen2
+			end
+
+		end
+		fetch next from cursor_table2
+		into @idno2,@stationno2,@station2,@datea2,@gen2,@workno2
+	end
+	close cursor_table2
+	deallocate cursor_table2
+	fetch next from cursor_table
+	into @stationno,@station,@gen,@cuadate,@uindate,@workno,@mount
+end
+close cursor_table
+deallocate cursor_table
+insert into @result(gno,stationno,station,gen,datea)
+	select
+		'1' gno,stationno,station,gen,'' datea
+	from @result
+	group by stationno,station,gen
+select
+	a.gno,a.idno,a.stationno,a.station stations,
+	a.gen gena,round(a.usegen,4) usegen,a.datea,a.cuadate,
+	a.uindate,a.workno,round(a.mount,4) mount,
+	ROW_NUMBER()over(partition by a.stationno order by a.stationno,a.gno,a.datea,a.workno) recno,
+	'work?left(noa,'+cast(len(b.noa) as nvarchar)+')=$workno?'+b.accy qhref
+from @result a
+outer apply(select top 1 accy,noa from view_work where noa=a.workno) b
+order by a.stationno,a.gno,a.datea,a.workno;

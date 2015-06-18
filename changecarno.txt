@@ -1,0 +1,175 @@
+﻿changecarno:--changecarno
+declare @oldcarno nvarchar(20)--舊車牌
+set @oldcarno=[1]
+declare @nowcarno nvarchar(20)--新車牌
+set @nowcarno=[2]
+declare @now_date nvarchar(10)--現在日期
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+---------------------------------------
+--更新車籍資料
+--select *
+--from car2 where noa=@oldcarno
+
+update car2
+set noa=@nowcarno,carno=@nowcarno,oldnoa=@oldcarno
+where noa=@oldcarno
+
+---------------------------------------
+--更新/新增車輛異動紀錄
+--select *
+--from carChange
+--where noa=@oldcarno
+
+update carChange
+set noa=@nowcarno
+where noa=@oldcarno
+
+INSERT INTO carChange
+([noa],[noq],[carno],[oldcarno],[chgdate],[datea])
+VALUES(@nowcarno,(select right('000'+cast((cast((isnull((select MAX(noq) from carChange where noa=@nowcarno),0))as int)+1)as nvarchar(10)),3)),@nowcarno,@oldcarno,@now_date,@now_date)
+
+----------------------------------------
+--更新單據資料
+--select @nowcarno+RIGHT(noa,7),* from cara
+--where left(noa,len(@oldcarno))=@oldcarno
+--select @nowcarno+RIGHT(noa,7),* from caras
+--where left(noa,len(@oldcarno))=@oldcarno
+
+update cara
+set noa=@nowcarno+RIGHT(noa,7),carno=@nowcarno
+where left(noa,len(@oldcarno))=@oldcarno
+
+update caras
+set noa=@nowcarno+RIGHT(noa,7),carno=@nowcarno
+where left(noa,len(@oldcarno))=@oldcarno
+
+update cara
+set oldcarno=STUFF(REPLACE((select ','+b.oldcarno from carChange b where cara.carno=b.noa FOR XML PATH('')),' ',''),1,1,'')
+where carno=@nowcarno
+
+--------------------------------------------
+--更新代付立帳
+--select carano=@nowcarno+RIGHT(carano,7),carno=@nowcarno,*
+--from carcs
+--where left(carano,len(@oldcarno))=@oldcarno
+
+update carcs
+set carano=@nowcarno+RIGHT(carano,7),carno=@nowcarno
+where left(carano,len(@oldcarno))=@oldcarno
+
+--------------------------------------------
+--更新貸款紀錄
+--select carno=REPLACE(carnos,@oldcarno,@nowcarno),
+--REPLACE(memo,@oldcarno,@nowcarno+'(原'+@oldcarno+')'),* from carLender
+--where carnos like'%'+@oldcarno+'%' or memo like'%'+@oldcarno+'%'
+
+update carLender
+set carnos=REPLACE(carnos,@oldcarno,@nowcarno),memo=REPLACE(memo,@oldcarno,@nowcarno+'(原'+@oldcarno+')')
+where carnos like'%'+@oldcarno+'%' or memo like'%'+@oldcarno+'%'
+
+-----------------------------------------------
+--更新保單管理,肇事紀錄系列資料
+declare @cmd nvarchar(MAX)
+declare @table nvarchar(20) 
+SET QUOTED_IDENTIFIER OFF
+declare cursor_table cursor for 
+SELECT 'carInsure' union SELECT 'caraccident' 
+open cursor_table 
+fetch next from cursor_table 
+into @table
+while(@@FETCH_STATUS <> -1) 
+	begin 
+	
+	--set @cmd="select noa from "+@table+" where noa='"+@oldcarno+"'"
+	--execute sp_executesql @cmd
+	
+	set @cmd="update "+@table+" set noa='"+@nowcarno+"' where noa='"+@oldcarno+"'"
+	execute sp_executesql @cmd
+	
+	fetch next from cursor_table 
+	into @table
+	end 
+close cursor_table 
+deallocate cursor_table 
+
+------------------------------------------------
+--更新保單管理,肇事紀錄,加油紀錄,司機扣款,trans,tre,trds,etc,tranordes,carborr,cart,traneprice,carcs,fixa,fixb,tire,fixout系列資料 
+--1030226 增加財產目錄更新
+declare @xcolumns int
+declare cursor_table cursor for 
+SELECT 'oil' union SELECT 'carchg'
+union
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE left(TABLE_NAME,len('trans1')) = 'trans1'
+union
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE left(TABLE_NAME,len('tre1')) = 'tre1'
+union
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE left(TABLE_NAME,len('trds1')) = 'trds1'
+union
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE left(TABLE_NAME,len('tranordes')) = 'tranordes'
+union 
+SELECT 'etc' union SELECT 'carborr' union SELECT 'cart' union SELECT 'traneprice'
+union
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE left(TABLE_NAME,len('carcsa')) = 'carcsa'
+union
+SELECT 'carcsb' union SELECT 'carcsc' union SELECT 'fixa' union SELECT 'fixb' union SELECT 'tire' union SELECT 'fixout'
+union
+SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE left(TABLE_NAME,len('accz1')) = 'accz1'
+open cursor_table 
+fetch next from cursor_table 
+into @table
+while(@@FETCH_STATUS <> -1) 
+begin 
+
+	set @cmd="select @xcolumns=count(*) from syscolumns where id=object_id('"+@table+"') and name='carno'"
+	EXEC sp_executeSQL @cmd, N'@xcolumns INT OUTPUT', @xcolumns OUTPUT
+
+	if(@xcolumns>0) --判斷欄位在不在
+	begin
+	
+		--set @cmd="select carno from "+@table+" where carno='"+@oldcarno+"'"
+		--execute sp_executesql @cmd
+		
+		if(left(@table,LEN('accz1'))='accz1')
+		begin
+			set @cmd="update "+@table+" set namea='"+@nowcarno+"' where namea='"+@oldcarno+"'"
+			execute sp_executesql @cmd
+		end
+		else
+		begin
+			set @cmd="update "+@table+" set carno='"+@nowcarno+"' where carno='"+@oldcarno+"'"
+			execute sp_executesql @cmd
+		end
+
+	end
+	
+	fetch next from cursor_table 
+	into @table
+end 
+close cursor_table 
+deallocate cursor_table 
+
+-----------------------------------------------
+--更新未出勤紀錄
+--select carno=REPLACE(carno,@oldcarno,@nowcarno),* from carpresent
+--where carno like'%'+@oldcarno+'%'
+--select carno=REPLACE(carno,@oldcarno,@nowcarno),* from carpresents
+--where carno =@oldcarno
+
+update carpresent
+set carno=REPLACE(carno,@oldcarno,@nowcarno)
+where carno like'%'+@oldcarno+'%'
+update carpresents
+set carno=REPLACE(carno,@oldcarno,@nowcarno)
+where carno =@oldcarno
+
+-----------------------------------------------
+--更新收款作業
+--select vccno=@nowcarno+RIGHT(vccno,7),*from umms
+--where left(vccno,len(@oldcarno))=@oldcarno
+
+update umms
+set vccno=@nowcarno+RIGHT(vccno,7)
+where left(vccno,len(@oldcarno))=@oldcarno;
+
+-----------------------------------------------

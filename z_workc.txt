@@ -1,0 +1,1156 @@
+z_workc1:--z_workc1
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+declare @t_showstk nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_showstk = case when '#non' = [15] then '' else [15] end
+
+--今天日期
+declare @now_date nvarchar(30)
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+
+----------gno-> 0=表身資料,1=該製品於各倉庫庫存,2=該製品總庫存
+declare @tmp table(
+	gno nvarchar(1),
+	tggno nvarchar(30),
+	comp nvarchar(90),
+	wbm float,
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	aproductno nvarchar(30),
+	aproducts nvarchar(90),
+	workmount float,
+	workcmount float,
+	total float
+)
+
+insert into @tmp 
+select '0',b.tggno,b.comp,sum(b.mount),b.productno,b.product,a.productno,a.product
+,round(sum(a.mount),2),round(sum(a.gmount),2),round(sum(a.emount),2)
+from view_works a left join view_work b on a.noa = b.noa 
+where (b.tggno != '') and (b.tggno between @t_btggno and @t_etggno) 
+and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,b.ordeno)>0)
+and b.cuadate between @t_bcdate and @t_ecdate
+and isnull(b.enda,'0')!='1' and ISNULL(b.isfreeze,'0')!='1'
+group by b.tggno,b.comp,b.productno,b.product,a.productno,a.product
+
+--update @tmp set total = workmount-workcmount 
+delete @tmp where total <=0 
+
+if(@t_showstk='1') 
+begin 
+	declare @productno nvarchar(max) 
+	declare @product nvarchar(max) 
+	declare cursor_table cursor for 
+	select distinct bproductno,bproducts from @tmp where gno = '0' 
+	open cursor_table 
+	fetch next from cursor_table 
+	into @productno,@product
+	while(@@FETCH_STATUS <> -1) 
+	begin	
+		insert into @tmp(gno,tggno,comp,bproductno,bproducts,total) 
+		select '1',a.storeno,a.store,a.productno,a.product,a.mount 
+		from stkucc(@now_date,'',@productno) a 
+		where (a.mount != 0) 
+		
+		insert into @tmp(gno,bproductno,bproducts,total) 
+		select '2',@productno,@product,isnull(sum(a.total),0)
+		from @tmp a where gno='1' and bproductno=@productno
+		
+		fetch next from cursor_table 
+		into @productno,@product
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+end 
+
+select gno,tggno,comp,bproductno,bproducts,aproductno,aproducts
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,wbm),1)),0,30)) wbm
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,workmount),1)),0,30)) workmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,workcmount),1)),0,30)) workcmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,total),1)),0,30)) total
+from @tmp a order by a.bproductno,a.bproducts,a.gno,a.tggno,a.comp,a.aproductno,a.aproducts;
+--------------------------------------------------------------------------------------------------------
+z_workc2:--z_workc2
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_noa nvarchar(30)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	datea nvarchar(10),
+	tgg nvarchar(90),
+	productno nvarchar(50),
+	products nvarchar(90),
+	amount float,
+	unit nvarchar(12),
+	ainmount float,
+	p_inmount float,
+	cuadate nvarchar(10),
+	workdate nvarchar(10),
+	uindate nvarchar(10),
+	enddate nvarchar(10),
+	diffdate int,
+	ordeno nvarchar(90),
+	station nvarchar(90)
+)
+
+insert into @tmp 
+select '0',a.noa,a.datea,b.comp,b.productno,b.product,b.mount,b.unit,b.inmount, 
+case when b.mount >0 then round((b.inmount/b.mount)*100,2) else 0 end, 
+b.cuadate,b.workdate,b.uindate,b.enddate, 
+DATEDIFF(day,CONVERT(datetime,(cast((left(b.cuadate,3)+1911) as nvarchar)+right(b.cuadate,6))), 
+CONVERT(datetime,(cast((left(b.workdate,3)+1911) as nvarchar)+right(b.workdate,6)))) diffdate, 
+case when len(b.no2) > 0 then b.ordeno + '-' + b.no2 else b.ordeno end,b.station 
+from ( select distinct a.workno,a.noa,b.datea from view_workcs a 
+left join view_workc b on a.noa = b.noa where isnull(a.workno,'') != '' 
+) a left join view_work b  on a.workno = b.noa 
+where b.tggno!='' and b.tggno between @t_btggno and @t_etggno 
+and (len(@t_noa)=0 or a.noa = @t_noa) 
+and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,b.ordeno)>0)
+and ISNULL(b.isfreeze,'0')!='1' --and isnull(b.enda,'0')!='1'
+and isnull(b.cuadate,'') between @t_bcdate and @t_ecdate
+
+update @tmp set cuadate = '未指定' where isnull(cuadate,'') = '' 
+update @tmp set workdate = '未指定' where isnull(workdate,'') = '' 
+update @tmp set diffdate = '0' where cuadate = '未指定' or workdate = '未指定' 
+
+select gno,noa,datea,tgg,productno,products
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,amount),1)),0,30)) amount,unit 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ainmount),1)),0,30)) ainmount
+,cast(p_inmount as nvarchar) + '%' p_inmount,cuadate,workdate,uindate,enddate,diffdate
+,dbo.charbr(ordeno,16) ordeno,station 
+from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_workc3:--z_workc3
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_noa nvarchar(30)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	anoa nvarchar(30),
+	adatea nvarchar(10),
+	atgg nvarchar(90),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	bunit nvarchar(12),
+	bmount float,
+	binmount float,
+	bpinmount float,
+	brmount float,
+	bprmount float,
+	bcuadate nvarchar(10),
+	bworkdate nvarchar(10),
+	buindate nvarchar(10),
+	benddate nvarchar(10),
+	bordeno nvarchar(90)
+)
+insert into @tmp 
+select '0',a.noa,a.datea,b.comp,b.productno,b.product,b.unit,b.mount,
+b.inmount,case when b.mount >0 then round((b.inmount/b.mount)*100,2) else 0 end,
+b.rmount,case when b.mount >0 then round((b.rmount/b.mount)*100,2) else 0 end,
+b.cuadate,b.workdate,b.uindate,b.enddate,
+case when len(b.no2) > 0 then b.ordeno + '-' + b.no2 else b.ordeno end
+from (
+	select distinct a.workno,a.noa,b.datea from view_workcs a
+	left join view_workc b on a.noa = b.noa
+	where isnull(a.workno,'') != ''
+) a left join view_work b on a.workno = b.noa
+where b.tggno!='' and b.tggno between @t_btggno and @t_etggno and (len(@t_noa)=0 or a.noa = @t_noa)
+and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,b.ordeno)>0)
+and (isnull(a.datea,'') between @t_bdate and @t_edate)
+and ISNULL(b.isfreeze,'0')!='1' --and isnull(b.enda,'0')!='1'
+and isnull(b.cuadate,'') between @t_bcdate and @t_ecdate
+group by a.noa,a.datea,b.comp,b.productno,b.product,b.unit,b.cuadate,b.workdate,b.uindate,
+b.enddate,b.ordeno,b.no2,b.inmount,b.rmount,b.mount
+	
+select gno,anoa,adatea,atgg,bproductno,bproducts,bunit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bmount),1)),0,30)) bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,binmount),1)),0,30)) binmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bpinmount),1)),0,30)) bpinmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,brmount),1)),0,30)) brmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bprmount),1)),0,30)) bprmount
+,bcuadate,bworkdate,buindate,benddate,dbo.charbr(bordeno,16) bordeno from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_workc4:--z_workc4
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	amount float,
+	unit nvarchar(12),
+	inmount float,
+	emount float, --未領料量
+	unmount float,--未入庫量
+	rmount float,
+	wmount float,
+	process nvarchar(30)
+)
+
+insert into @tmp 
+select '0',a.productno,a.product,round(sum(a.mount),2),a.unit,round(sum(a.inmount),2),round(sum(b.emount),2),0,round(sum(a.rmount),2),round(sum(a.wmount),2),a.process 
+from view_work a left join ( select noa,sum(emount) emount from view_works group by noa ) b on a.noa = b.noa 
+where a.tggno != '' and (a.tggno between @t_btggno and @t_etggno) 
+and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,a.ordeno)>0) 
+and ISNULL(a.isfreeze,'0')!='1'--and isnull(a.enda,'0')!='1' 
+group by a.productno,a.product,a.unit,a.process
+
+update @tmp set unmount = amount-inmount 
+
+select gno,productno,products,unit,process
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,amount),1)),0,30)) amount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,emount),1)),0,30)) emount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,unmount),1)),0,30)) unmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,rmount),1)),0,30)) rmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,wmount),1)),0,30)) wmount
+from @tmp;
+--------------------------------------------------------------------------------------------------------
+z_workc5:--z_workc5
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_noa nvarchar(30)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	noq nvarchar(10),
+	tggno nvarchar(30),
+	comp nvarchar(90),
+	cuadate nvarchar(10),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	aproductno nvarchar(30),
+	aproducts nvarchar(90),
+	workmount float,
+	workcmount float,
+	workcno nvarchar(MAX),
+	total float
+)
+
+insert into @tmp 
+select '0',b.noa,a.noq,b.tggno,b.comp,b.cuadate,b.productno,b.product,a.productno,a.product,a.mount
+,isnull((select sum(mount) from view_workcs where b.noa=workno and a.productno=productno),0)
+,stuff((select ','+noa from view_workcs where b.noa=workno and a.productno=productno FOR XML PATH('')),1,1,''),0 
+from view_works a left join view_work b on a.noa = b.noa 
+where (b.tggno != '') and (b.tggno between @t_btggno and @t_etggno) 
+and (len(@t_noa)=0 or b.noa in (select workno from view_workc where noa=@t_noa)) 
+and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,b.ordeno)>0) 
+and ISNULL(b.isfreeze,'0')!='1' --and isnull(b.enda,'0')!='1' 
+and isnull(b.cuadate,'') between @t_bcdate and @t_ecdate 
+
+update @tmp set total = workmount-workcmount 
+
+delete @tmp where total <=0 
+
+insert into @tmp(noa,gno) 
+select distinct noa,'1' from @tmp 
+
+select gno,noa,noq,tggno,comp,cuadate,bproductno,bproducts,aproductno,aproducts,dbo.charbr(workcno,13) workcno
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,workmount),1)),0,30)) workmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,workcmount),1)),0,30)) workcmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,total),1)),0,30)) total
+from @tmp order by noa,gno,noq,aproductno,bproductno ;
+--------------------------------------------------------------------------------------------------------
+z_workc6:--z_workc6
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_noa nvarchar(30)
+
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	workcno nvarchar(30),
+	tggno nvarchar(30),
+	tggs nvarchar(30),
+	productno nvarchar(30),
+	products nvarchar(90),
+	unit nvarchar(12),
+	inmount float,
+	errmount float,
+	memo nvarchar(MAX)
+)
+	insert into @tmp
+	select '0',b.workcno,b.tggno,b.tgg,a.productno,a.product,a.unit,a.mount,isnull(a.errmount,0),a.errmemo
+	from view_workds a 	left join view_workd b on a.noa = b.noa
+	where (b.datea between @t_bdate and @t_edate) and (b.tggno between @t_btggno and @t_etggno) and isnull(a.errmount,0)>0
+	
+	insert into @tmp
+	select '1','',tggno,MAX(tggs),productno,MAX(products),MAX(unit),sum(inmount),sum(errmount),''
+	from @tmp group by tggno,productno
+	
+select gno,workcno,tggno,tggs,productno,products,unit,@t_bdate bxdate,@t_edate exdate,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),0,15)) inmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),0,15)) errmount,memo,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round((case when inmount = 0 then 0 else (errmount/inmount) end) *100,2)),1)),0,15)) rate
+from @tmp order by tggno,productno,gno;
+---------------------------------------------------------------------------------------------------------
+z_workc7:--z_workc7
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_noa nvarchar(30)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+---------------------------------------------------
+declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(20),------委外單號
+		noq nvarchar(20),
+		datea nvarchar(30),----委外日期
+		aproductno nvarchar(20),-----製品編號(bbm)
+		aproduct nvarchar(50),-------製品(bbm)
+		c nvarchar(30),
+		mount float,-----------------生產數量
+		inmount float,--------------已入庫量
+		bproductno nvarchar(20),-----子件編號
+		bproduct nvarchar(50),-------子件名稱
+		cuadatez nvarchar(20),-------需求日期
+		bmount float,----------------需求數量
+		bunit nvarchar(20),----------單位
+		gmount float,----------------已領料量
+		emount float,----------------未領料量
+		stkmount float,--------------庫存量
+		s_mount float,---------------缺料量
+		e_mount float----------------在途未進量
+)
+insert into @tmp
+	select '0' gno,a.noa,b.noq,a.datea,f.productno,f.product,c.workcno,isnull(f.mount,0),isnull(f.inmount,0),
+	e.productno,e.product,e.cuadate,e.mount,e.unit,e.gmount,e.emount,0,0,0
+	from view_workc a
+	left join view_workcs b on a.noa = b.noa
+	left join view_workd c on c.workcno = b.noa 
+	left join view_works e on e.noa = b.workno and e.productno = b.productno
+	left join view_work f on e.noa = f.noa
+	where (isnull(a.datea,'') between @t_bdate and @t_edate) and (len(@t_noa)=0 or a.noa = @t_noa) 
+	and (f.tggno between @t_btggno and @t_etggno)
+	and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,f.ordeno)>0) 
+	and ISNULL(f.isfreeze,'0')!='1' --and isnull(f.enda,'0')!='1'
+	and isnull(f.cuadate,'') between @t_bcdate and @t_ecdate 
+
+insert into @tmp(gno,noa,gmount,bmount)
+	select '1',noa,sum(gmount),sum(bmount) from @tmp
+	group by noa
+	
+declare @noa nvarchar(30)
+declare cursor_table cursor for
+select noa from @tmp where gno = 1
+open cursor_table
+fetch next from cursor_table
+into @noa
+while(@@FETCH_STATUS <> -1)
+begin
+	update @tmp set mount = round((select gmount/bmount from @tmp where gno = 1 and noa = @noa)*mount,4) where gno = 0 and noa = @noa
+	fetch next from cursor_table 
+	into @noa
+end 
+close cursor_table 
+deallocate cursor_table 
+
+delete @tmp where gno = 1
+
+select gno,noa,noq,datea,aproductno,aproduct
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
+,bproductno,bproduct,cuadatez
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bmount),1)),0,30)) bmount
+,bunit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gmount),1)),0,30)) gmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,emount),1)),0,30)) emount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stkmount),1)),0,30)) stkmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,s_mount),1)),0,30)) s_mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,e_mount),1)),0,30)) e_mount
+from @tmp;
+
+---------------------------------------------------------------------------------------------------------
+z_workc8:--z_workc8
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_noa nvarchar(30)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	adatea nvarchar(10),
+	ordenoa nvarchar(90),
+	ordeno2 nvarchar(90),
+	stationno nvarchar(30),
+	stations nvarchar(90),
+	process nvarchar(50),
+	anoa nvarchar(30),
+	anoq nvarchar(10),
+	aproductno nvarchar(30),
+	aproducts nvarchar(90),
+	unit nvarchar(12),
+	amount float,
+	inmount float,
+	todaymount float,
+	finishmount float,
+	notmount float
+)
+insert into @tmp
+	select '0',b.datea,a.ordeno,a.no2,d.stationno,d.station,d.process,e.noa,a.noq,
+		a.productno,a.product,a.unit,d.mount,a.mount,(a.mount+a.errmount),	0,0
+	from view_workds a 	left join view_workd b on a.noa = b.noa left join view_workcs c on a.workno = c.workno
+	left join view_workc e on c.noa = e.noa	left join view_work d on c.workno = d.noa
+	where (b.datea between @t_bdate and @t_edate) and (len(@t_noa)=0 or c.noa = @t_noa)
+	and (b.tggno between @t_btggno and @t_etggno) 
+	and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,d.ordeno)>0)
+	and ISNULL(d.isfreeze,'0')!='1' --and isnull(d.enda,'0')!='1'
+	and isnull(d.cuadate,'') between @t_bcdate and @t_ecdate 
+	order by b.datea
+	
+update @tmp set finishmount = (select (sum(a.mount)+sum(a.errmount)) from workds[1] a
+											left join view_workd b on a.noa = b.noa
+											where (a.ordeno = ordenoa) and (a.no2 = ordeno2) and (b.datea <=adatea)
+											and (a.productno = aproductno)
+											)
+update @tmp set notmount = amount - finishmount
+insert into @tmp(gno,adatea)
+	select '1',adatea from @tmp group by adatea
+select
+	gno,adatea,stationno,stations,process,anoa,anoq,aproductno,aproducts,unit,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,amount),1)),4,12)) amount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,todaymount),1)),4,12)) todaymount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,finishmount),1)),4,12)) finishmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,notmount),1)),4,12)) notmount
+from @tmp order by adatea,gno,stationno,process,aproductno;
+---------------------------------------------------------------------------------------------------------
+z_workc9:--z_workc9
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_bproductno nvarchar(20)
+declare @t_eproductno nvarchar(20)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bproductno = case when '#non' = [7] then '' else [7] end
+set @t_eproductno = case when '#non' = [8] then CHAR(255) else [8] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	aproductno nvarchar(30),
+	aproducts nvarchar(50),
+	tggno nvarchar(30),
+	tggs nvarchar(90),
+	noa nvarchar(30),
+	bproductno nvarchar(30),
+	bproducts nvarchar(50),
+	workno nvarchar(30),
+	typea nvarchar(15),
+	mount float,
+	unit nvarchar(15),
+	storeno nvarchar(30),
+	stores nvarchar(50)
+)
+insert into @tmp
+	select 
+		'0',b.datea,a.productno,a.product,b.tggno,b.tgg,b.noa,a.productno,a.product,a.workno,
+		b.typea,
+		case when b.typea = '2' then a.mount*(-1) else a.mount end,
+		a.unit,b.storeno,b.store
+	from view_workcs a	left join view_workc b on a.noa = b.noa
+	left join view_work c on a.workno=c.noa
+	where (len(@t_noa) = 0 or b.noa = @t_noa) and
+		  (b.datea between @t_bdate and @t_edate) and
+		  (c.tggno between @t_btggno and @t_etggno)
+		  and ISNULL(c.isfreeze,'0')!='1' --and isnull(c.enda,'0')!='1'
+		  and isnull(c.cuadate,'') between @t_bcdate and @t_ecdate 
+	order by b.datea
+update @tmp set typea = (case typea when '1' then '發料' when '2' then '退料' end)
+insert into @tmp(gno,mount)
+	select '1',sum(mount) from @tmp
+select
+	gno,datea,aproductno,aproducts,tggno,tggs,noa,bproductno,bproducts,workno,typea,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+	unit,storeno,stores
+from @tmp order by gno,datea,noa,tggno,aproductno,bproductno;
+---------------------------------------------------------------------------------------------------------
+z_workc10:--z_workc10
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	noq nvarchar(10),
+	aproductno nvarchar(30),
+	aproducts nvarchar(90),
+	amount float,
+	ainmount float,
+	aunit nvarchar(12),
+	uindate nvarchar(10),
+	enddate nvarchar(10),
+	bproductno nvarchar(30),
+	bproducts nvarchar(90),
+	bunit nvarchar(12),
+	bmount float,
+	binmount float,
+	s_total float,
+	price float,
+	wmount float
+)
+insert into @tmp
+	select
+		'0',a.noa,a.noq,c.productno,c.product,c.workmount,c.inmount,c.workunit,c.uindate,c.enddate,a.productno,a.product,
+		a.unit,c.worksmount,a.mount,0,0,isnull(c.wmount,0)
+	from view_workcs a
+	left join view_workc b on a.noa = b.noa
+	left join (
+		select b.noa,a.noq,b.mount workmount,b.inmount,b.unit workunit,b.uindate,
+			b.enddate,b.productno,b.product,a.unit worksunit,a.mount worksmount,
+			a.productno aproductno,a.product aproduct ,b.ordeno,b.no2,b.wmount,b.cuadate,b.isfreeze,b.enda
+		from view_works a left join view_work b on a.noa = b.noa
+	) c on (a.workno = c.noa) and (a.productno = aproductno)
+	where (len(@t_noa) = 0 or b.noa = @t_noa) and
+		  (b.datea between @t_bdate and @t_edate) and
+		  (b.tggno between @t_btggno and @t_etggno)
+		  and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,c.ordeno)>0) 
+		  and ISNULL(c.isfreeze,'0')!='1' --and isnull(c.enda,'0')!='1'
+		  and isnull(c.cuadate,'') between @t_bcdate and @t_ecdate
+		  
+update @tmp set s_total = round((binmount-bmount),4) where (binmount-bmount) > 0
+ 
+select gno,noa,noq,aproductno,aproducts,amount,ainmount,wmount,
+	aunit,uindate,enddate,bproductno,bproducts,bunit,bmount,binmount,s_total,price
+from @tmp order by noa,noq,aproductno,bproductno;
+---------------------------------------------------------------------------------------------------------
+z_workc11:--z_workc11
+declare @t_noa nvarchar(30)
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_btggno nvarchar(20)
+declare @t_etggno nvarchar(20)
+declare @t_ordeno nvarchar(30)
+declare @t_no2 nvarchar(10)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_ordeno = case when '#non' = [13] then '' else [13] end
+set @t_no2 = case when '#non' = [14] then '' else [14] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+set @t_btggno = case when '#non' = [5] then '' else [5] end
+set @t_etggno = case when '#non' = [6] then CHAR(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	productno nvarchar(30),
+	products nvarchar(90),
+	unit nvarchar(12),
+	needmount float,
+	stkmount float,
+	uinmount float,
+	uoutmount float,
+	y_mount float,
+	n_mount float
+)
+
+declare @pev_date nvarchar(10)--取前一天庫存量
+set @pev_date=CONVERT (VARCHAR(7), dateadd (day,-1,cast( cast(cast(left(@t_bdate,3) as int)+1911 as nvarchar(10))+right(@t_bdate,6) as datetime)),12 )+0890000
+set @pev_date=left(@pev_date,3)+'/'+substring(@pev_date,4,2)+'/'+right(@pev_date,2)
+
+insert into @tmp
+select '0',
+wb.productno,wb.product,wb.unit,sum(wb.mount)needmount
+,isnull((select sum(mount) from stkucc(@pev_date,'','') where productno=wb.productno),0)stkmount
+,isnull((select SUM(mount) from view_ordcs ocs where ocs.datea>=@t_edate and ocs.productno=wb.productno),0) uinmount
+,isnull((select SUM(mount) from (
+select mount from view_ordes oes where oes.datea>=@t_edate and oes.productno=wb.productno union
+select mount from view_workcs wcs where wcs.datea>=@t_edate and wcs.productno=wb.productno
+)tmp),0) uinmount,0,0
+from view_work wa left join view_works wb on wa.noa=wb.noa
+where len(wa.tggno)!=0 and (wa.tggno between @t_btggno and @t_etggno)
+and (len(@t_ordeno)=0 or charindex(@t_ordeno+'-'+@t_no2,wa.ordeno)>0) 
+and ISNULL(wa.isfreeze,'0')!='1' --and isnull(wa.enda,'0')!='1'
+and isnull(wa.cuadate,'') between @t_bcdate and @t_ecdate 
+and wa.noa in (select workno from view_workcs where datea between @t_bdate and @t_edate)
+group by wb.productno,wb.product,wb.unit 
+
+	
+update @tmp set y_mount = (stkmount+uinmount-uoutmount)
+update @tmp set n_mount = case when (needmount-y_mount) > 0 then (needmount-y_mount) else 0 end
+select
+	gno,productno,products,unit,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,needmount),1)),4,12)) needmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stkmount),1)),4,12)) stkmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,uinmount),1)),4,12)) uinmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,uoutmount),1)),4,12)) uoutmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,y_mount),1)),4,12)) y_mount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,n_mount),1)),4,12)) n_mount
+from @tmp;
+--***********************************************************************************************
+z_workctb:--z_workctb
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_bstoreno nvarchar(50) 
+	declare @t_estoreno nvarchar(50)
+	
+	set @t_bdate = case when '#non'=[3] then '' else [3] end
+	set @t_edate = case when '#non'=[4] then char(255) else [4] end
+	set @t_bproductno = case when '#non'=[7] then '' else [7] end
+	set @t_eproductno = case when '#non'=[8] then char(255) else [8] end
+	set @t_bstoreno = case when '#non' = [9] then '' else [9] end
+	set @t_estoreno = case when '#non' = [10] then CHAR(255) else [10] end
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+
+	declare @tmp table(
+		gno nvarchar(1),
+		recno int,
+		storeno nvarchar(50),
+		stores nvarchar(50),
+		productno nvarchar(30),
+		xproduct nvarchar(40),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(40),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+	)
+	
+	insert into @tmp
+	select
+		'0' gno, ROW_NUMBER()over(order by R1.productno,R1.storeno,R1.datea,R1.typea)as recno,R1.*, 0 totmount, 0 totweight,''
+	from(
+		--select storeno,store,noa productno,product xproduct,isnull(datea,'') datea,'01' typea,'期初' typec, 
+		--       '' noa,'' comp, unit, start mount, start weight,'' qhref
+		--from ucc
+		--where  noa BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate and storeno between @t_bstoreno and @t_estoreno
+		--union all
+		select isnull(storeno,'')storeno ,store,productno,product xproduct,isnull(datea,'') datea,'01' typea,'盤點調整' typec, 
+		       noa,'' comp, unit, mount mount, weight weight,'ucce?noa=$noa?'+accy qhref
+		from view_ucces
+		where  productno BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate and isnull(storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then 'A0' else '10' end typea,case a.typea when '2' then '進貨退回' else '進貨' end typec,
+		       b.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'rc2?noa=$noa?'+b.accy qhref
+		from view_rc2s b left join view_rc2 a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then '11' else 'B0' end typea,case a.typea when '2' then '出貨退回' else '出貨' end typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit,(case when isnull(b.gmount,0)!=0 then b.gmount else b.mount end)
+		       ,(case when isnull(b.gweight,0)!=0 then b.gweight else b.weight end),'vcc'+'?noa=$noa?'+b.accy qhref 
+		from view_vccs b left join view_vcc a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '入庫' typec,
+		       b.noa,  isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'ina?noa=$noa?'+b.accy qhref
+		from view_inas b left join view_ina a on b.noa=a.noa 
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '領料' typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'get?noa=$noa?'+b.accy qhref
+		from view_gets b left join view_get a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '製品領料' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'worka?noa=$noa?'+b.accy qhref
+		from view_workas b left join view_worka a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '委製領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'workc?noa=$noa?'+b.accy qhref
+		from view_workcs b left join view_workc a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '製品入庫' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, b.mount, b.weight,'workb?noa=$noa?'+b.accy qhref
+		from view_workbs b left join view_workb a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '委製入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, b.mount+b.inmount-b.outmount, b.weight,'workd?noa=$noa?'+b.accy qhref
+		from view_workds b left join view_workd a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		
+		union all
+		select isnull(a.storeinno,''),a.storein,b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea
+		,case when a.typea='1' then '廠調入庫+' when a.typea='2' then '委入入庫' when a.typea='3' then '委出入庫' 
+				when a.typea='4' then '客借入庫' when a.typea='5' then '客歸入庫' when a.typea='6' then '委加入庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea
+		,case when a.typea='1' then '廠調出庫' when a.typea='2' then '委入出庫' when a.typea='3' then '委出出庫' 
+				when a.typea='4' then '客借出庫' when a.typea='5' then '客歸出庫' when a.typea='6' then '委加出庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno
+		-----------------------------------
+		union all
+		select isnull(b.storeno,''),d.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea, '裁剪入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'cut?noa=$noa?'+b.accy qhref
+		from view_cuts b left join view_cut a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		left join store d on b.storeno=d.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(a.storeno,''),a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '裁剪領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, a.mount, a.oweight,'cut?noa=$noa?'+a.accy qhref
+		from view_cut a left join view_ucaucc c on a.productno=c.noa
+		where a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '10' typea, '加工入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'cubpi?noa=$noa?'+b.accy qhref
+		from view_cubu b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '加工領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.gmount, b.gweight,'cubpi?noa=$noa?'+b.accy qhref
+		from view_cubt b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		----------
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '10' typea, '委外借入' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcft b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '委外借出' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcfs b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno
+		) as R1
+		
+	--*****************************************************************************************	
+	
+	declare @result table(
+		gno nvarchar(1),
+		recno int IDENTITY(1,1),
+		storeno nvarchar(50),
+		stores nvarchar(50),
+		productno nvarchar(30),
+		xproduct nvarchar(40),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(40),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+		primary key (productno,storeno,recno)
+	)
+	
+	declare @recno int
+	declare @productno nvarchar(30)
+	declare @storeno nvarchar(30)
+	declare @typea nvarchar(10)
+	declare @datea nvarchar(10)
+	declare @mount float
+	declare @weight float
+	
+	declare @t_productno nvarchar(30)
+	declare @t_storeno nvarchar(30)
+	declare @t_mount float
+	declare @t_weight float
+	declare @t_totmount float
+	declare @t_totweight float
+	declare @tt_totmount float
+	declare @tt_totweight float
+	declare @pt_totmount float
+	declare @pt_totweight float
+	
+	set @t_productno = '##########'
+	set @t_storeno = '##########'
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	
+	declare cursor_table cursor for
+	select recno,productno,storeno,typea,datea,mount,weight from @tmp order by productno,storeno,recno
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @t_productno!=@productno and @t_productno!='##########'
+		begin
+			if not(@t_totmount=0 and @t_totweight=0)
+			begin
+				insert into @result
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+			
+				insert into @result
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+				
+			end
+			
+				set @tt_totmount = @tt_totmount+@t_totmount
+				set @tt_totweight = @tt_totweight+@t_totweight
+				
+				if(select count(*) from @result where productno=@t_productno)>0
+				begin
+					insert into @result
+					select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+					'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+				end
+				   
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @tt_totmount = 0
+			set @tt_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+		end
+		else if @t_storeno!=@storeno and @t_storeno!='##########'
+		begin
+		
+			if not(@t_totmount=0 and @t_totweight=0)
+			begin
+				insert into @result
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+					  
+				insert into @result
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+			end
+			
+			set @tt_totmount = @tt_totmount+@t_totmount
+			set @tt_totweight = @tt_totweight+@t_totweight
+			
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+		end
+
+		if  @datea between @t_bdate and @t_edate
+		begin
+			set @t_mount =
+				case 
+				when @typea='01' or @typea='ZZ' then @mount
+				when @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @t_weight =
+				case 
+				when @typea='01' or @typea='ZZ' then @weight
+				when @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+				
+			insert @result
+			select gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,@t_mount,@t_weight,ucctype 
+			from @tmp where recno=@recno	
+		end
+		else
+		begin
+			set @pt_totmount =
+				case 
+				when @typea='01' or @typea='ZZ' then @mount
+				when @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @pt_totweight =
+				case 
+				when @typea='01' or @typea='ZZ' then @weight
+				when @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+		end
+		
+		set @t_totmount =
+			case 
+			when @typea='01' or @typea='ZZ' then @mount
+			when @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+			end
+		set @t_totweight =
+			case 
+			when @typea='01' or @typea='ZZ' then @weight
+			when @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+			end
+		
+		set @t_productno = @productno
+		set @t_storeno = @storeno
+		
+		fetch next from cursor_table
+		into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--最後一筆處理---------------------------------------------------------------------
+	if not(@t_totmount=0 and @t_totweight=0)
+	begin
+		insert into @result
+		select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+		
+		insert into @result
+		select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+		
+	end
+	
+	set @tt_totmount = @tt_totmount+@t_totmount
+	set @tt_totweight = @tt_totweight+@t_totweight
+	
+	if(select count(*) from @result where productno=@t_productno)>0
+	begin
+		insert into @result
+		select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+	end
+	
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	--------------------------------------------------------------------------------------------
+	declare @ucctype nvarchar(15)
+	declare cursor_table cursor for
+	select noa,typea from ucc order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @result set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select noa,typea from uca order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @result set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+	--*****************************************************************************************	
+	select gno,recno,storeno,case when ISNULL(stores,'')='' then storeno else left(stores,7) end stores,productno,xproduct,datea,typea,typec,noa,left(comp,11) comp,unit,ucctype,qhref
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,0)),1)),4,30)) mount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*weight),1)),0,30)) weight
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,totweight),1)),0,30)) totweight
+	from @result order by productno,storeno, gno,datea, recno;
+--------------------------------------------------------------------------------------------------------
+z_workc12:--z_workc12 ref. z_workd2
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_btggno nvarchar(30)
+declare @t_etggno nvarchar(30)
+declare @t_bcdate nvarchar(20)
+declare @t_ecdate nvarchar(20)
+
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+set @t_btggno = case when '#non'=[5] then '' else [5] end
+set @t_etggno = case when '#non'=[6] then char(255) else [6] end
+set @t_bcdate = case when '#non' = [11] then '' else [11] end
+set @t_ecdate = case when '#non' = [12] then CHAR(255) else [12] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	workno nvarchar(30),
+	tggno nvarchar(30),
+	tgg nvarchar(30),
+	productno nvarchar(30),
+	products nvarchar(90),
+	unit nvarchar(10),
+	amount float,
+	bmount float,
+	cmount float
+)
+
+insert into @tmp
+select '0'gno,wtmp.workno,w.tggno,w.comp,w.productno,w.product,w.unit
+,w.mount,isnull(wds.mount,0),w.mount-isnull(wds.mount,0) from (
+--有領料的workno
+select b.workno 
+from view_workc a left join view_workcs b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate and a.tggno between @t_btggno and @t_etggno and b.workno!=''
+group by b.workno)wtmp
+left join view_work w on wtmp.workno=w.noa 
+left join (
+	select a.workno,a.productno,SUM((case when b.typea='1' then 1 else -1 end)*(a.mount+a.inmount-a.outmount))mount 
+	from view_workds a left join view_workd b on a.noa=b.noa where b.datea between @t_bdate and @t_edate 
+	group by a.workno,a.productno
+) wds on w.noa=wds.workno and w.productno=wds.productno
+where w.mount!=isnull(wds.mount,0) 
+and ISNULL(w.isfreeze,'0')!='1' --and isnull(w.enda,'0')!='1'
+and isnull(w.cuadate,'') between @t_bcdate and @t_ecdate 
+
+insert into @tmp(gno,tggno,tgg,amount,bmount,cmount)
+select '1',tggno,tgg,sum(amount),sum(bmount),sum(cmount) from @tmp
+group by tggno,tgg
+
+select gno,workno,tggno,tgg,productno,products,unit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,amount),1)),0,30)) amount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bmount),1)),0,30)) bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cmount),1)),0,30)) cmount
+from @tmp order by tggno,gno,workno;

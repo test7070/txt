@@ -1,0 +1,110 @@
+z_ordbordc1:--z_ordbordc1
+declare @t_bpno nvarchar(100)
+declare @t_epno nvarchar(100)
+
+set @t_bpno = case when '#non' =  [1] then '' else  [1] end
+set @t_epno = case when '#non' =  [2] then char(255) else  [2] end
+--*****************************************************************
+--今天日期
+declare @t_date nvarchar(100)
+set @t_date=CONVERT (VARCHAR(7), GETDATE()+3,12 )+0890000
+set @t_date=left(@t_date,3)+'/'+substring(@t_date,4,2)+'/'+right(@t_date,2)
+
+declare @tmp table(
+	gno nvarchar(1),
+	pno nvarchar(30),
+	product nvarchar(90),
+	stk float,
+	orde float,
+	work float,
+	ordc float,
+	mount float
+)
+insert @tmp
+select '0' gno,noa,product
+,isnull((select SUM(mount) from stkucc(@t_date,'','') where productno=a.noa),0)--庫存
+,isnull((select SUM(notv) from view_ordes where productno=a.noa and notv>0),0)--未交訂單
+,isnull((select SUM(emount) from view_works where productno=a.noa and emount>0),0)+
+isnull((select SUM(emount) from view_workhs where productno=a.noa and emount>0),0)--製令未領量
+,isnull((select SUM(notv) from view_ordcs where productno=a.noa and notv>0),0)--採購在途量
+,0
+from ucc a where noa between @t_bpno and @t_epno
+
+update @tmp set mount=stk-orde-work+ordc
+
+select gno,pno,product
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stk),1)),0,30)) stk
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,orde),1)),0,30)) orde
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,work),1)),0,30)) work
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordc),1)),0,30)) ordc
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount
+from @tmp order by gno,pno;
+
+-----------------------------------------------------------------------------------------------------------------------------------------
+z_ordbordc2:--z_ordbordc2
+declare @t_bpno nvarchar(100)
+declare @t_epno nvarchar(100)
+
+set @t_bpno = case when '#non' =  [1] then '' else  [1] end
+set @t_epno = case when '#non' =  [2] then char(255) else  [2] end
+--*****************************************************************
+--今天日期
+declare @t_date nvarchar(100)
+set @t_date=CONVERT (VARCHAR(7), GETDATE()+3,12 )+0890000
+set @t_date=left(@t_date,3)+'/'+substring(@t_date,4,2)+'/'+right(@t_date,2)
+
+declare @tmp table(
+	gno nvarchar(1),
+	pno nvarchar(30),
+	product nvarchar(90),
+	datea nvarchar(30),
+	noa nvarchar(90),
+	stk float,
+	orde float,
+	work float,
+	ordc float,
+	mount float
+)
+
+--庫存
+insert @tmp (gno,pno,product,datea,noa,stk)
+select '0',noa,product,@t_date,'庫存',isnull((select SUM(mount) from stkucc(@t_date,'','') where productno=a.noa),0)
+from ucc a where a.noa between @t_bpno and @t_epno
+--未交訂單
+insert @tmp (gno,pno,product,datea,noa,orde)
+select '0',a.noa,a.product,c.odate,b.noa,notv
+from ucc a left join view_ordes b on a.noa=b.productno left join view_orde c on b.noa=c.noa 
+where b.notv>0 and a.noa between @t_bpno and @t_epno
+--製令未領量
+insert @tmp (gno,pno,product,datea,noa,work)
+select  '0',a.noa,a.product,c.cuadate,b.noa,emount
+from ucc a left join view_works b on a.noa=b.productno left join view_work c on b.noa=c.noa 
+where b.emount>0 and a.noa between @t_bpno and @t_epno
+union all
+select  '0',a.noa,a.product,c.cuadate,b.noa,emount
+from ucc a left join view_workhs b on a.noa=b.productno left join view_workh c on b.noa=c.noa 
+where b.emount>0 and a.noa between @t_bpno and @t_epno
+--採購在途量
+insert @tmp (gno,pno,product,datea,noa,ordc)
+select  '0',a.noa,a.product,c.odate,b.noa,notv
+from ucc a left join view_ordcs b on a.noa=b.productno left join view_ordc c on b.noa=c.noa 
+where b.notv>0 and a.noa between @t_bpno and @t_epno
+
+update @tmp set stk=0 where stk is null
+update @tmp set orde=0 where orde is null
+update @tmp set work=0 where work is null
+update @tmp set ordc=0 where ordc is null
+
+insert @tmp
+select '1',pno,MAX(product),'','',sum(stk),sum(orde),sum(work),sum(ordc),0 from @tmp 
+group by pno
+
+update @tmp set mount=stk-orde-work+ordc where gno='1'
+
+select gno,pno,product,datea,noa
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,stk),1)),0,30)) stk
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,orde),1)),0,30)) orde
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,work),1)),0,30)) work
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ordc),1)),0,30)) ordc
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount
+from @tmp order by pno,gno,(case when noa='庫存' then 0 else 1 end),datea,noa;

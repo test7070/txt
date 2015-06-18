@@ -1,0 +1,1356 @@
+z_401:--z_401 ref.qac.z_401
+declare @t_xbmon nvarchar(20)
+declare @t_xemon nvarchar(20)
+declare @t_xdate nvarchar(20)
+declare @t_48 float
+declare @t_49 float
+declare @t_108 float
+declare @t_73 float
+declare @t_74 float
+declare @t_82 float
+declare @t_13 float
+declare @t_14 float
+
+set @t_xbmon = case when '#non' = [1] then '' else [1] end
+set @t_xemon = case when '#non' = [2] then '' else [2] end
+set @t_xdate = case when '#non' = [3] then '' else [3] end
+set @t_48 = CAST(REPLACE((case when '#non' = [4] then '0' else [4] end),',','') as float)
+set @t_49 = CAST(REPLACE((case when '#non' = [5] then '0' else [5] end),',','') as float)
+set @t_108 = CAST(REPLACE((case when '#non' = [6] then '0' else [6] end),',','') as float)
+set @t_73 = CAST(REPLACE((case when '#non' = [7] then '0' else [7] end),',','') as float)
+set @t_74 = CAST(REPLACE((case when '#non' = [8] then '0' else [8] end),',','') as float)
+set @t_82 = CAST(REPLACE((case when '#non' = [7] then '0' else [9] end),',','') as float)
+set @t_13 = CAST(REPLACE((case when '#non' = [10] then '0' else [10] end),',','') as float)
+set @t_14 = CAST(REPLACE((case when '#non' = [11] then '0' else [11] end),',','') as float)
+
+if(@t_xdate='')
+begin
+	set @t_xdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+	set @t_xdate=left(@t_xdate,3)+'/'+substring(@t_xdate,4,2)+'/'+right(@t_xdate,2)
+end
+
+declare @t_xmon nvarchar(20)
+set @t_xmon=left(dbo.q_cdn(@t_xemon+'/01',45),6)
+--------------------------------------------------------------------------------------------------------------------
+declare @ztax table(
+	cno nvarchar(100),
+	kind nvarchar(100),
+	mon nvarchar(10),
+	datea nvarchar(10),
+	serial nvarchar(20),
+	noa nvarchar(20),
+	money float,
+	taxtype nvarchar(10), --1應稅 2零稅率 3內含 4免稅
+	tax float,
+	rem1 float,-- 1=進    2=進固資   3=銷   4=銷固資
+	rem2 nvarchar(10),
+	rem3 nvarchar(10),
+	specialfood float,	--特種飲食業
+	dutymemo nvarchar(100)	--海關繳納證
+)
+insert @ztax
+select cno,kind,mon,datea,serial,noa,money,isnull(taxtype,'1'),isnull(tax,0)
+,(case when ISNULL(isasset,0)=1 then 2 else 1 end) + (case when isnull(typea,'1')='1' then 0 else 2 end)
+,(case when ISNULL(istwo,0)=1 then 'A' else '' end),notaxnote,specialfood,dutymemo
+from vcct where datea between @t_xbmon+'/00' and @t_xemon+'/99'
+
+--避免稅額與內含錯誤(與vfp不同 前端含稅會算完)
+update @ztax
+set money=round(money/(1+(case when isnull(specialfood,0)=0 then 0.05 else specialfood end)),0)
+,tax=round(money/(1+(case when isnull(specialfood,0)=0 then 0.05 else specialfood end)),0)-money
+where (tax=0 and taxtype='1' and kind in ('32','34'))
+
+declare @tmpa table(
+	gno nvarchar(1),
+	taxport nvarchar(90),
+	taxportname nvarchar(90),
+	cno nvarchar(50),
+	years nvarchar(10),
+	bmon nvarchar(10),
+	emon nvarchar(10),
+	acomp nvarchar(100),
+	taxno nvarchar(100),
+	serial nvarchar(50),
+	boss nvarchar(50),
+	acomp_addr nvarchar(200),
+	typea nvarchar(200),
+	code nvarchar(200),
+	atype nvarchar(200),
+	aname nvarchar(200),
+	aid nvarchar(200),
+	aarea nvarchar(50),
+	atel nvarchar(50),
+	aext nvarchar(50),
+	ano nvarchar(200),
+	
+	t001 float,t002 float,
+	t005 float,t006 float,t007 float,
+	t009 float,t010 float,
+	t013 float,t014 float,t015 float,
+	t017 float,t018 float,t019 float,
+	t021 float,t022 float,t023 float,
+	t025 float,t027 float,
+	t028 float,t029 float,
+	t030 float,t031 float,
+	t032 float,t033 float,
+	t034 float,t035 float,
+	t036 float,t037 float,
+	t038 float,t039 float,
+	t078 float,t079 float,
+	t080 float,t081 float,t082 float,
+	t040 float,t041 float,
+	t042 float,t043 float,
+	t044 float,t045 float,
+	t046 float,t047 float,
+	t048 float,t049 float,
+	t073 float,t074 float,
+	t101 float,t107 float,t108 float,t110 float,t111 float,t112 float,t113 float,t114 float,t115 float,
+	s1 float,s2 float,s3 float,s4 float,s5 float,s6 float,s7 float,s8 float
+)
+
+insert @tmpa (gno,cno) select '0'gno,cno from @ztax group by cno
+
+update @tmpa
+set t013=@t_13,t014=@t_14,t048=@t_48,t049=@t_49,t073=@t_73,t074=@t_74,t108=@t_108,t082=@t_82
+
+----------------------------------------計算【進項】發票冊數-------------------------------------------------
+--進項憑證冊數
+declare @cno nvarchar(50)
+declare @t_cno nvarchar(50)
+declare @kind nvarchar(50)
+declare @t_kind nvarchar(50)
+declare @taxs float=0
+declare @s3 float=0--冊數
+declare @b1 float=0--稅額 >500
+declare @b2 float=0--稅額<=500
+declare @b3 float=0--稅額 >500 (進固定資產)
+declare @b4 float=0--稅額<=500 (進固定資產)
+declare @b5 float=0--稅額 >500 (折讓／退回)
+declare @b6 float=0--稅額<=500 (折讓／退回)
+
+update @ztax 
+set tax=money-round(money/1.05,0)
+where ((kind in ('21','22','25') and taxtype='1') or kind in ('23','24','29')) and tax=0 and taxtype='1'
+
+set @t_cno='XXXX'
+
+declare cursor_table cursor for
+select cno,kind from @ztax where (kind in ('21','22','25') and taxtype='1') or kind in ('23','24','29') group by kind,cno
+open cursor_table
+fetch next from cursor_table
+into @cno,@kind
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@t_cno!=@cno)
+		set @s3=0
+	
+	select 
+	@b5=sum((case when kind in('23','24','29','33','34') and tax>500 then 1 else 0 end)),
+	@b6=sum((case when kind in('23','24','29','33','34') and tax<=500 then 1 else 0 end)),
+	@b3=sum((case when kind not in ('23','24','29','33','34') and rem1=2 and tax>500 then 1 else 0 end)),
+	@b4=sum((case when kind not in ('23','24','29','33','34') and rem1=2 and tax<=500 then 1 else 0 end)),
+	@b1=sum((case when kind not in ('23','24','29','33','34') and rem1!=2 and tax>500 then 1 else 0 end)),
+	@b2=sum((case when kind not in ('23','24','29','33','34') and rem1!=2 and tax<=500 then 1 else 0 end))
+	from @ztax where ((kind in ('21','22','25') and taxtype='1') or kind in ('23','24','29')) and kind=@kind and cno=@cno
+	
+	
+	set @s3=@s3+cast((@b1+99)/100 as int)+cast((@b2+99)/100 as int)+cast((@b3+99)/100 as int)
+				+cast((@b4+99)/100 as int)+cast((@b5+99)/100 as int)+cast((@b6+99)/100 as int)
+				
+	update @tmpa set s3=@s3 where cno=@cno
+				
+	set @t_cno=@cno
+	fetch next from cursor_table
+	into @cno,@kind
+end
+close cursor_table
+deallocate cursor_table
+
+----------------------------------------計算【銷項】發票份數-------------------------------------------------
+declare @voucher float=0--憑證張數(預設0 目前保留)
+declare @s1 float=0--發票使用份數
+declare @s2 float=0--統一發票明細表
+declare @s4 float=0--進項憑證 份
+declare @s5 float=0--海關
+declare @s6 float=0--退回
+declare @s8 float=0--零稅率
+
+update a
+set s1=(select sum(case when kind='32' and rem2='A' and taxtype in ('1','2','4') then cast(serial as int)-cast(right(noa,8) as int)+1 else 0 end)
++sum(case when kind in ('31','32','35') and kind+'_'+rem2!='32_A' and taxtype not in('','6')  then 1 else 0 end) from @ztax where cno=a.cno)
+,s2=(select sum(case when kind in ('31','32','35') then (case when rem2='A' and RIGHT(noa,3) in ('000','250','500','750') then 1 when rem2!='A' and RIGHT(noa,2) in ('00','50') then 1 else 0 end) else 0 end) from @ztax where cno=a.cno)
+,s4=(select SUM(case when kind in ('21','22','25') and taxtype='1' then (case when kind in ('22','25') and @voucher>0 then @voucher else 1 end ) else 0 end )from @ztax where cno=a.cno)
+,s5=(select sum(case when kind in ('23','24','29','33','34') then 1 else 0 end) from @ztax where cno=a.cno)
+,s6=(select SUM(case when kind='28' then 1 else 0 end) from @ztax where cno=a.cno)
+,s8=(select count(*) from tax0 where LEFT(datea,6) between @t_xbmon and @t_xemon and cno=a.cno)
+from @tmpa a
+
+
+----------------------------------------------------------------------------------------------------------
+declare @rem1 float
+declare @money float
+declare @taxtype nvarchar(50)
+declare @tax float
+declare @total float=0
+declare @tax2type nvarchar(50)
+declare cursor_table cursor for
+select cno,kind,rem1
+,case when kind='32' then '1' else taxtype end --讓其二聯式發票統一加總不會因稅別拆開計算
+,sum(money),sum(tax) from @ztax
+where (taxtype='1' or (kind in ('23','24','29','33','34'))) or (kind='36' and taxtype='2')
+group by cno,kind,rem1,taxtype
+open cursor_table
+fetch next from cursor_table
+into @cno,@kind,@rem1,@taxtype,@money,@tax
+while(@@FETCH_STATUS <> -1)
+begin
+	set @tax2type=(select tax2type from acompu where noa=@cno)
+	--銷項
+	if(@kind='31' and @rem1=3)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t001=isnull(t001,0)+@money,t002=isnull(t002,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='32' and @rem1=3)
+	begin
+		if(@tax2type='2')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t009=isnull(t009,0)+@money,t010=isnull(t010,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in('33','34') and @rem1=3)
+	begin
+		update @tmpa
+		set t017=isnull(t017,0)+@money,t018=isnull(t018,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='35' and @rem1=3)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t005=isnull(t005,0)+@money,t006=isnull(t006,0)+@tax
+		where cno=@cno
+	end
+	--銷項固定資產
+	if(@kind='31' and @rem1=4)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t001=isnull(t001,0)+@money,t002=isnull(t002,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='32' and @rem1=4)
+	begin
+		if(@tax2type='2')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t009=isnull(t009,0)+@money,t010=isnull(t010,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in('33','34') and @rem1=4)
+	begin
+		update @tmpa
+		set t017=isnull(t017,0)+@money,t018=isnull(t018,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='35' and @rem1=4)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t005=isnull(t005,0)+@money,t006=isnull(t006,0)+@tax
+		where cno=@cno
+	end
+	
+	--進項
+	if(@kind in ('21','26') and @rem1=1)
+	begin
+		update @tmpa
+		set t028=isnull(t028,0)+@money,t029=isnull(t029,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in ('22','27') and @rem1=1)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t036=isnull(t036,0)+@money,t037=isnull(t037,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in('23','24','29') and @rem1=1)
+	begin
+		update @tmpa
+		set t040=isnull(t040,0)+@money,t041=isnull(t041,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='25' and @rem1=1)
+	begin
+		update @tmpa
+		set t032=isnull(t032,0)+@money,t033=isnull(t033,0)+@tax
+		where cno=@cno
+	end
+
+	--進固定資產
+	if(@kind='21' and @rem1=2)
+	begin
+		update @tmpa
+		set t030=isnull(t030,0)+@money,t031=isnull(t031,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='22' and @rem1=2)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t038=isnull(t038,0)+@money,t039=isnull(t039,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in ('23','24') and @rem1=2)
+	begin
+		update @tmpa
+		set t042=isnull(t042,0)+@money,t043=isnull(t043,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='25' and @rem1=2)
+	begin
+		update @tmpa
+		set t034=isnull(t034,0)+@money,t035=isnull(t035,0)+@tax
+		where cno=@cno
+	end
+	
+	--海關代徵營業稅
+	--進貨
+	if(@kind ='28' and @rem1=1)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t078=isnull(t078,0)+@money,t079=isnull(t079,0)+@tax
+		where cno=@cno
+	end
+	--進固定資產
+	if(@kind ='28' and @rem1=2)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t080=isnull(t080,0)+@money,t081=isnull(t081,0)+@tax
+		where cno=@cno
+	end
+	
+
+	fetch next from cursor_table
+	into @cno,@kind,@rem1,@taxtype,@money,@tax
+end
+close cursor_table
+deallocate cursor_table
+
+declare @paper nvarchar(50)
+
+declare cursor_table cursor for
+select a.cno,a.kind,b.paper,SUM(a.money) 
+from @ztax a left join tax0 b on a.noa=b.noa 
+where a.taxtype='2' and a.kind>='31'
+group by a.cno,a.kind,b.paper
+open cursor_table
+fetch next from cursor_table
+into @cno,@kind,@paper,@money
+while(@@FETCH_STATUS <> -1)
+begin
+	if(isnull(@paper,'')!='2')
+		set @paper='1'
+		
+	if(@kind in ('21','22','23','24','25','26','27'))
+	begin
+		if(@kind in('23','24','33','34'))
+		begin
+			update @tmpa
+			set t040=ISNULL(t040,0)+@money
+			where cno=@cno
+		end
+		
+		if(@paper='2')
+		begin
+			update @tmpa
+			set t032=ISNULL(t032,0)+@money
+			where cno=@cno
+		end
+		else
+		begin
+			update @tmpa
+			set t036=ISNULL(t036,0)+@money
+			where cno=@cno
+		end
+	end
+	else
+	begin
+		if(@kind in('23','24','33','34'))
+		begin
+			update @tmpa
+			set t019=ISNULL(t019,0)+@money
+			where cno=@cno
+		end
+		
+		if(@paper='2')
+		begin
+			update @tmpa
+			set t015=ISNULL(t015,0)+@money
+			where cno=@cno
+		end
+		else
+		begin
+			update @tmpa
+			set t007=ISNULL(t007,0)+@money
+			where cno=@cno
+		end
+	end
+
+	fetch next from cursor_table
+	into @cno,@kind,@paper,@money
+end
+close cursor_table
+deallocate cursor_table
+
+update @tmpa
+set t001=isnull(t001,0),t002=isnull(t002,0),t005=isnull(t005,0),t006=isnull(t006,0),t007=isnull(t007,0)
+,t009=isnull(t009,0),t010=isnull(t010,0),t013=isnull(t013,0),t014=isnull(t014,0),t015=isnull(t015,0)
+,t017=isnull(t017,0),t018=isnull(t018,0),t019=isnull(t019,0),t021=isnull(t021,0),t022=isnull(t022,0)
+,t023=isnull(t023,0),t025=isnull(t025,0),t027=isnull(t027,0),t028=isnull(t028,0),t029=isnull(t029,0)
+,t030=isnull(t030,0),t031=isnull(t031,0),t032=isnull(t032,0),t033=isnull(t033,0),t034=isnull(t034,0)
+,t035=isnull(t035,0),t036=isnull(t036,0),t037=isnull(t037,0),t038=isnull(t038,0),t039=isnull(t039,0)
+,t040=isnull(t040,0),t041=isnull(t041,0),t042=isnull(t042,0),t043=isnull(t043,0),t044=isnull(t044,0)
+,t045=isnull(t045,0),t046=isnull(t046,0),t047=isnull(t047,0),t048=isnull(t048,0),t049=isnull(t049,0)
+,t073=isnull(t073,0),t074=isnull(t074,0),t078=isnull(t078,0),t079=isnull(t079,0),t080=isnull(t080,0)
+,t081=isnull(t081,0),t082=isnull(t082,0),t101=isnull(t101,0),t107=isnull(t107,0),t108=isnull(t108,0)
+,t110=isnull(t110,0),t111=isnull(t111,0),t112=isnull(t112,0),t113=isnull(t113,0),t114=isnull(t114,0)
+,t115=isnull(t115,0)
+
+update @tmpa
+set t021=t001+t005+t009+t013-t017+t019
+,t022=t002+t006+t010+t014-t018
+,t023=t007+t015-t019
+,t044=t028+t032+t036+t078-t040
+,t045=t029+t033+t037+t079-t041
+,t046=t030+t034+t038+t080-t042
+,t047=t031+t035+t039+t081-t043
+,t074=@t_74
+,t082=@t_82
+,t108=@t_108
+
+update @tmpa
+set t048=t044+@t_48
+,t049=t046+@t_49
+,t017=t017-t019
+,t025=t021+t023
+,t101=t022
+,t107=t045+t047
+
+update @tmpa
+set t110=t107+t108
+
+update @tmpa
+set t111=case when t101-t110>=0 then t101-t110 else 0 end
+,t112=case when t101-t110>=0 then 0 else t110-t101 end
+,t113=case when t101-t110>=0 then 0 else ROUND((case when t023>0 then t023 else 0 end)*0.05+(case when t047>0 then t047 else 0 end),0) end
+,t114=case when t101-t110>=0 then 0 else (case when(t112>t113) then t113 else t112 end) end
+
+update @tmpa
+set t115=case when t101-t110>=0 then 0 else t112-t114 end
+,s7=case when t111>0 then 1 else 0 end
+
+update a
+set taxport=c.taxport,taxportname=c.taxportname
+,years=left(@t_xbmon,3),bmon=right(@t_xbmon,2),emon=right(@t_xemon,2)
+,acomp=b.acomp,taxno=c.taxno,serial=b.serial,boss=b.boss,acomp_addr=b.addr_invo
+,typea=c.typea,code=c.code,atype=c.applytype,aname=c.applyname,aid=c.applyid
+,atel=c.applytel,aarea=c.applyarea,aext=c.applyext,ano=c.applyno
+from @tmpa a left join acomp b on a.cno=b.noa left join acompu c on b.noa=c.noa
+
+update a
+set t1=t001,t2=t002,t5=t005,t6=t006,t7=t007,t9=t009,t10=t010,t13=t013,t14=t014,t15=t015,t17=t017,t18=t018,t19=t019
+,t21=t021,t22=t022,t23=t023,t25=t025,t27=t027,t28=t028,t29=t029,t30=t030,t31=t031,t32=t032,t33=t033,t34=t034
+,t35=t035,t36=t036,t37=t037,t38=t038,t39=t039,t40=t040,t41=t041,t42=t042,t43=t043,t44=t044,t45=t045,t46=t046
+,t47=t047,t48=t048,t49=t049,t73=t073,t74=t074,t78=t078,t79=t079,t80=t080,t81=t081,t82=t082,t101=b.t101,t107=b.t107
+,t108=b.t108,t110=b.t110,t111=b.t111,t112=b.t112,t113=b.t113,t114=b.t114,t115=b.t115
+from z401 a 
+outer apply (select * from @tmpa where @t_xmon+'__'+cno=a.out_date+'__'+a.cno) b
+
+insert z401 (out_date,cno,single,t1,t2,t5,t6,t7,t9,t10,t13,t14,t15,t17,t18,t19,t21,t22,t23,t25,t27,t28,t29,t30,t31,t32,t33,t34,t35,t36,t37,t38,t39,t40,t41,t42,t43,t44,t45,t46,t47,t48,t49,t73,t74,t78,t79,t80,t81,t82,t101,t107,t108,t110,t111,t112,t113,t114,t115)
+select @t_xmon,cno,0,t001,t002,t005,t006,t007,t009,t010,t013,t014,t015,t017,t018,t019,t021,t022,t023,t025,t027,t028,t029,t030,t031,t032,t033,t034,t035,t036,t037,t038,t039,t040,t041,t042,t043,t044,t045,t046,t047,t048,t049,t073,t074,t078,t079,t080,t081,t082,t101,t107,t108,t110,t111,t112,t113,t114,t115
+from @tmpa where @t_xmon+'__'+cno not in (select out_date+'__'+cno from z401)
+ 
+select 
+dbo.getComma(t001,0) t001,dbo.getComma(t002,0) t002,dbo.getComma(t005,0) t005,dbo.getComma(t006,0) t006
+,dbo.getComma(t007,0) t007,dbo.getComma(t009,0) t009,dbo.getComma(t010,0) t010,dbo.getComma(t013,0) t013
+,dbo.getComma(t014,0) t014,dbo.getComma(t015,0) t015,dbo.getComma(t017,0) t017,dbo.getComma(t018,0) t018
+,dbo.getComma(t019,0) t019,dbo.getComma(t021,0) t021,dbo.getComma(t022,0) t022,dbo.getComma(t023,0) t023
+,dbo.getComma(t025,0) t025,dbo.getComma(t027,0) t027,dbo.getComma(t028,0) t028,dbo.getComma(t029,0) t029
+,dbo.getComma(t030,0) t030,dbo.getComma(t031,0) t031,dbo.getComma(t032,0) t032,dbo.getComma(t033,0) t033
+,dbo.getComma(t034,0) t034,dbo.getComma(t035,0) t035,dbo.getComma(t036,0) t036,dbo.getComma(t037,0) t037
+,dbo.getComma(t038,0) t038,dbo.getComma(t039,0) t039,dbo.getComma(t040,0) t040,dbo.getComma(t041,0) t041
+,dbo.getComma(t042,0) t042,dbo.getComma(t043,0) t043,dbo.getComma(t044,0) t044,dbo.getComma(t045,0) t045
+,dbo.getComma(t046,0) t046,dbo.getComma(t047,0) t047,dbo.getComma(t048,0) t048,dbo.getComma(t049,0) t049
+,dbo.getComma(t073,0) t073,dbo.getComma(t074,0) t074,dbo.getComma(t078,0) t078,dbo.getComma(t079,0) t079
+,dbo.getComma(t080,0) t080,dbo.getComma(t081,0) t081,dbo.getComma(t082,0) t082,dbo.getComma(t101,0) t101
+,dbo.getComma(t107,0) t107,dbo.getComma(t108,0) t108,dbo.getComma(t110,0) t110,dbo.getComma(t111,0) t111
+,dbo.getComma(t112,0) t112,dbo.getComma(t113,0) t113,dbo.getComma(t114,0) t114,dbo.getComma(t115,0) t115
+,*,left(@t_xdate,3) y1,right(left(@t_xdate,6),2)m1,right(@t_xdate,2)d1
+,case when typea='2' then 'V' else '' end n1
+,case when code='1' then 'V' else '' end n2
+,case when code='2' then 'V' else '' end n3
+,case when atype='1' then aname else '' end a1
+,case when atype='1' then aid else '' end a2
+,case when atype='1' then (case when isnull(atel,'')='' then '' else aarea+case when isnull(aarea,'')='' then '' else '-' end+atel+(case when isnull(aext,'')='' then '' else '#' end)+aext end) else '' end a3
+,case when atype='2' then aname else '' end a4
+,case when atype='2' then aid else '' end a5
+,case when atype='2' then (case when isnull(atel,'')='' then '' else aarea+case when isnull(aarea,'')='' then '' else '-' end+atel+(case when isnull(aext,'')='' then '' else '#' end)+aext end) else '' end a6
+,case when atype='2' then ano else '' end a7
+from @tmpa order by cno
+;
+-----------------------------------------------------------------------------------------------------------------------------------------------
+media:--產生電子檔
+declare @t_xbmon nvarchar(20)=''
+declare @t_xemon nvarchar(20)=''
+declare @t_xdate nvarchar(20)=''
+declare @t_48 float=0
+declare @t_49 float=0
+declare @t_108 float=0
+declare @t_73 float=0
+declare @t_74 float=0
+declare @t_82 float=0
+declare @t_13 float=0
+declare @t_14 float=0
+
+set @t_xbmon = case when '#non' = [1] then '' else [1] end
+set @t_xemon = case when '#non' = [2] then '' else [2] end
+set @t_xdate = case when '#non' = [3] then '' else [3] end
+set @t_48 = CAST(REPLACE((case when '#non' = [4] then '0' else [4] end),',','') as float)
+set @t_49 = CAST(REPLACE((case when '#non' = [5] then '0' else [5] end),',','') as float)
+set @t_108 = CAST(REPLACE((case when '#non' = [6] then '0' else [6] end),',','') as float)
+set @t_73 = CAST(REPLACE((case when '#non' = [7] then '0' else [7] end),',','') as float)
+set @t_74 = CAST(REPLACE((case when '#non' = [8] then '0' else [8] end),',','') as float)
+set @t_82 = CAST(REPLACE((case when '#non' = [7] then '0' else [9] end),',','') as float)
+set @t_13 = CAST(REPLACE((case when '#non' = [10] then '0' else [10] end),',','') as float)
+set @t_14 = CAST(REPLACE((case when '#non' = [11] then '0' else [11] end),',','') as float)
+
+if(@t_xdate='')
+begin
+	set @t_xdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+	set @t_xdate=left(@t_xdate,3)+'/'+substring(@t_xdate,4,2)+'/'+right(@t_xdate,2)
+end
+-----------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+create table ##tmp(
+	serial nvarchar(20),
+	extension nvarchar(20),
+	txt nvarchar(2000)
+)
+-----------------------------------------------------------------------------
+--TXT 營業人進銷項資料檔
+insert ##tmp
+select isnull(b.serial,'00000000'),'TXT',
+right('00'+isnull(kind,''),2) --格式代號
++right('000000000'+isnull(c.taxno,''),9)--稅籍編號
++RIGHT('0000000'+cast(ROW_NUMBER() over (order by a.noa) as nvarchar(7)),7)--流水號
++right('00000'+REPLACE(mon,'/',''),5)--資料所屬年度--資料所屬月份
++right((case when kind in ('32','34') then '99999999' else '        ' end)
++REPLACE(case when a.typea='1' then b.serial else a.serial end,' ',''),8)--買受人統一編號--發票訖號
++case when kind in ('28','29') then
+	'    '--空白
+	+right('              '+isnull(a.dutymemo,''),14)--海關代徵營業稅繳納證號碼
+when kind in ('26','27') or (kind in ('22','25') and mount>0) then
+	right('0000'+replace(dbo.getComma(isnull(a.mount,0),0),',',''),4)--彙總張數
+	+'    '+--空白
+	+right('          '+a.noa,10)--其他憑證號碼
+else
+	right('        '+REPLACE(case when a.typea='1' then a.serial else b.serial end,' ',''),8)--銷售人統一編號
+	+right('  '+left(a.noa,2),2)--發票字軌
+	+right('00000000'+right(a.noa,8),8)--統一發票(發票(起)號碼)
+end
++right('000000000000'+replace(dbo.getComma(isnull(a.money,0),0),',',''),12)--銷售金額/營業稅稅基(28,29)
++case when a.taxtype='2' then '2' when a.taxtype='4' then '3' 
+when a.taxtype='6' then 'F' else '1' end --課稅別--發票沒有內含，其他一律當含稅 (空白未使用統一發票D)
++right('0000000000'+replace(dbo.getComma(isnull(a.tax,0),0),',',''),10)--營業稅額
++(case when a.typea='2' then ' ' 
+when isnull(isasset,0)=0 and isnull(isnondeductible,0)=0 then '1'
+when isnull(isasset,0)=1 and isnull(isnondeductible,0)=0 then '2'
+when isnull(isasset,0)=0 and isnull(isnondeductible,0)=1 then '3'
+when isnull(isasset,0)=1 and isnull(isnondeductible,0)=1 then '4'
+else ' ' end)--扣抵代號
++'     '--空白(5)
++' '--特種稅額稅率(除非金融或保險才會判斷)
++(case when kind in ('26','27') or (kind in ('22','25') and mount>0) then 'A' else ' 'end)--彙加註記
++case when a.typea='1' then ' ' else (case when (select count(*) from tax0 where a.noa=noa)>0 then 
+(case when isnull((select top 1 paper from tax0 where a.noa=noa),'1')='2' then '2'  else '1' end) else ' ' end) end--通關方式註記
+txt
+from vcct a left join acomp b on a.cno=b.noa left join acompu c on a.cno=c.noa 
+where a.mon between @t_xbmon and @t_xemon
+
+-------------------------------------------------------------------------------------------------
+--TET 營業人銷售額與稅額申報書檔
+declare @ztax table(
+	cno nvarchar(100),
+	kind nvarchar(100),
+	mon nvarchar(10),
+	datea nvarchar(10),
+	serial nvarchar(20),
+	noa nvarchar(20),
+	money float,
+	taxtype nvarchar(10), --1應稅 2零稅率 3內含 4免稅
+	tax float,
+	rem1 float,-- 1=進    2=進固資   3=銷   4=銷固資
+	rem2 nvarchar(10),
+	rem3 nvarchar(10),
+	specialfood float,	--特種飲食業
+	dutymemo nvarchar(100)	--海關繳納證
+)
+insert @ztax
+select cno,kind,mon,datea,serial,noa,money,isnull(taxtype,'1'),isnull(tax,0)
+,(case when ISNULL(isasset,0)=1 then 2 else 1 end) + (case when isnull(typea,'1')='1' then 0 else 2 end)
+,(case when ISNULL(istwo,0)=1 then 'A' else '' end),notaxnote,specialfood,dutymemo
+from vcct where datea between @t_xbmon+'/00' and @t_xemon+'/99'
+
+--避免稅額與內含錯誤(與vfp不同 前端含稅會算完)
+update @ztax
+set money=round(money/(1+(case when isnull(specialfood,0)=0 then 0.05 else specialfood end)),0)
+,tax=round(money/(1+(case when isnull(specialfood,0)=0 then 0.05 else specialfood end)),0)-money
+where (tax=0 and taxtype='1' and kind in ('32','34'))
+
+declare @tmpa table(
+	gno nvarchar(1),
+	taxport nvarchar(90),
+	taxportname nvarchar(90),
+	cno nvarchar(50),
+	years nvarchar(10),
+	bmon nvarchar(10),
+	emon nvarchar(10),
+	acomp nvarchar(100),
+	taxno nvarchar(100),
+	serial nvarchar(50),
+	boss nvarchar(50),
+	acomp_addr nvarchar(200),
+	typea nvarchar(200),
+	code nvarchar(200),
+	atype nvarchar(200),
+	aname nvarchar(200),
+	aid nvarchar(200),
+	aarea nvarchar(50),
+	atel nvarchar(50),
+	aext nvarchar(50),
+	ano nvarchar(200),
+	
+	t001 float,t002 float,
+	t005 float,t006 float,t007 float,
+	t009 float,t010 float,
+	t013 float,t014 float,t015 float,
+	t017 float,t018 float,t019 float,
+	t021 float,t022 float,t023 float,
+	t025 float,t027 float,
+	t028 float,t029 float,
+	t030 float,t031 float,
+	t032 float,t033 float,
+	t034 float,t035 float,
+	t036 float,t037 float,
+	t038 float,t039 float,
+	t078 float,t079 float,
+	t080 float,t081 float,t082 float,
+	t040 float,t041 float,
+	t042 float,t043 float,
+	t044 float,t045 float,
+	t046 float,t047 float,
+	t048 float,t049 float,
+	t073 float,t074 float,
+	t101 float,t107 float,t108 float,t110 float,t111 float,t112 float,t113 float,t114 float,t115 float,
+	s1 float,s2 float,s3 float,s4 float,s5 float,s6 float,s7 float,s8 float
+)
+
+insert @tmpa (gno,cno) select '0'gno,cno from @ztax group by cno
+
+update @tmpa
+set t013=@t_13,t014=@t_14,t048=@t_48,t049=@t_49,t073=@t_73,t074=@t_74,t108=@t_108,t082=@t_82
+
+----------------------------------------計算【進項】發票冊數-------------------------------------------------
+--進項憑證冊數
+declare @cno nvarchar(50)
+declare @t_cno nvarchar(50)
+declare @kind nvarchar(50)
+declare @t_kind nvarchar(50)
+declare @taxs float=0
+declare @s3 float=0--冊數
+declare @b1 float=0--稅額 >500
+declare @b2 float=0--稅額<=500
+declare @b3 float=0--稅額 >500 (進固定資產)
+declare @b4 float=0--稅額<=500 (進固定資產)
+declare @b5 float=0--稅額 >500 (折讓／退回)
+declare @b6 float=0--稅額<=500 (折讓／退回)
+
+update @ztax 
+set tax=money-round(money/1.05,0)
+where ((kind in ('21','22','25') and taxtype='1') or kind in ('23','24','29')) and tax=0 and taxtype='1'
+
+set @t_cno='XXXX'
+
+declare cursor_table cursor for
+select cno,kind from @ztax where (kind in ('21','22','25') and taxtype='1') or kind in ('23','24','29') group by kind,cno
+open cursor_table
+fetch next from cursor_table
+into @cno,@kind
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@t_cno!=@cno)
+		set @s3=0
+	
+	select 
+	@b5=sum((case when kind in('23','24','29','33','34') and tax>500 then 1 else 0 end)),
+	@b6=sum((case when kind in('23','24','29','33','34') and tax<=500 then 1 else 0 end)),
+	@b3=sum((case when kind not in ('23','24','29','33','34') and rem1=2 and tax>500 then 1 else 0 end)),
+	@b4=sum((case when kind not in ('23','24','29','33','34') and rem1=2 and tax<=500 then 1 else 0 end)),
+	@b1=sum((case when kind not in ('23','24','29','33','34') and rem1!=2 and tax>500 then 1 else 0 end)),
+	@b2=sum((case when kind not in ('23','24','29','33','34') and rem1!=2 and tax<=500 then 1 else 0 end))
+	from @ztax where ((kind in ('21','22','25') and taxtype='1') or kind in ('23','24','29')) and kind=@kind and cno=@cno
+	
+	
+	set @s3=@s3+cast((@b1+99)/100 as int)+cast((@b2+99)/100 as int)+cast((@b3+99)/100 as int)
+				+cast((@b4+99)/100 as int)+cast((@b5+99)/100 as int)+cast((@b6+99)/100 as int)
+				
+	update @tmpa set s3=@s3 where cno=@cno
+				
+	set @t_cno=@cno
+	fetch next from cursor_table
+	into @cno,@kind
+end
+close cursor_table
+deallocate cursor_table
+
+----------------------------------------計算【銷項】發票份數-------------------------------------------------
+declare @voucher float=0--憑證張數(預設0 目前保留)
+declare @s1 float=0--發票使用份數
+declare @s2 float=0--統一發票明細表
+declare @s4 float=0--進項憑證 份
+declare @s5 float=0--海關
+declare @s6 float=0--退回
+declare @s8 float=0--零稅率
+
+update a
+set s1=(select sum(case when kind='32' and rem2='A' and taxtype in ('1','2','4') then cast(serial as int)-cast(right(noa,8) as int)+1 else 0 end)
++sum(case when kind in ('31','32','35') and kind+'_'+rem2!='32_A' and taxtype not in('','6')  then 1 else 0 end) from @ztax where cno=a.cno)
+,s2=(select sum(case when kind in ('31','32','35') then (case when rem2='A' and RIGHT(noa,3) in ('000','250','500','750') then 1 when rem2!='A' and RIGHT(noa,2) in ('00','50') then 1 else 0 end) else 0 end) from @ztax where cno=a.cno)
+,s4=(select SUM(case when kind in ('21','22','25') and taxtype='1' then (case when kind in ('22','25') and @voucher>0 then @voucher else 1 end ) else 0 end )from @ztax where cno=a.cno)
+,s5=(select sum(case when kind in ('23','24','29','33','34') then 1 else 0 end) from @ztax where cno=a.cno)
+,s6=(select SUM(case when kind='28' then 1 else 0 end) from @ztax where cno=a.cno)
+,s8=(select count(*) from tax0 where LEFT(datea,6) between @t_xbmon and @t_xemon and cno=a.cno)
+from @tmpa a
+
+
+----------------------------------------------------------------------------------------------------------
+declare @rem1 float
+declare @money float
+declare @taxtype nvarchar(50)
+declare @tax float
+declare @total float=0
+declare @tax2type nvarchar(50)
+declare cursor_table cursor for
+select cno,kind,rem1
+,case when kind='32' then '1' else taxtype end --讓其二聯式發票統一加總不會因稅別拆開計算
+,sum(money),sum(tax) from @ztax
+where (taxtype='1' or (kind in ('23','24','29','33','34'))) or (kind='36' and taxtype='2')
+group by cno,kind,rem1,taxtype
+open cursor_table
+fetch next from cursor_table
+into @cno,@kind,@rem1,@taxtype,@money,@tax
+while(@@FETCH_STATUS <> -1)
+begin
+	set @tax2type=(select tax2type from acompu where noa=@cno)
+	--銷項
+	if(@kind='31' and @rem1=3)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t001=isnull(t001,0)+@money,t002=isnull(t002,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='32' and @rem1=3)
+	begin
+		if(@tax2type='2')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t009=isnull(t009,0)+@money,t010=isnull(t010,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in('33','34') and @rem1=3)
+	begin
+		update @tmpa
+		set t017=isnull(t017,0)+@money,t018=isnull(t018,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='35' and @rem1=3)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t005=isnull(t005,0)+@money,t006=isnull(t006,0)+@tax
+		where cno=@cno
+	end
+	--銷項固定資產
+	if(@kind='31' and @rem1=4)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t001=isnull(t001,0)+@money,t002=isnull(t002,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='32' and @rem1=4)
+	begin
+		if(@tax2type='2')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t009=isnull(t009,0)+@money,t010=isnull(t010,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in('33','34') and @rem1=4)
+	begin
+		update @tmpa
+		set t017=isnull(t017,0)+@money,t018=isnull(t018,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='35' and @rem1=4)
+	begin
+		if(@taxtype='3')
+		begin
+			set @total=round(@money+@tax,0)
+			set @money=round(@total/1.05,0)
+			set @tax=@total-@money
+		end
+		update @tmpa
+		set t005=isnull(t005,0)+@money,t006=isnull(t006,0)+@tax
+		where cno=@cno
+	end
+	
+	--進項
+	if(@kind in ('21','26') and @rem1=1)
+	begin
+		update @tmpa
+		set t028=isnull(t028,0)+@money,t029=isnull(t029,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in ('22','27') and @rem1=1)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t036=isnull(t036,0)+@money,t037=isnull(t037,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in('23','24','29') and @rem1=1)
+	begin
+		update @tmpa
+		set t040=isnull(t040,0)+@money,t041=isnull(t041,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='25' and @rem1=1)
+	begin
+		update @tmpa
+		set t032=isnull(t032,0)+@money,t033=isnull(t033,0)+@tax
+		where cno=@cno
+	end
+
+	--進固定資產
+	if(@kind='21' and @rem1=2)
+	begin
+		update @tmpa
+		set t030=isnull(t030,0)+@money,t031=isnull(t031,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='22' and @rem1=2)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t038=isnull(t038,0)+@money,t039=isnull(t039,0)+@tax
+		where cno=@cno
+	end
+	if(@kind in ('23','24') and @rem1=2)
+	begin
+		update @tmpa
+		set t042=isnull(t042,0)+@money,t043=isnull(t043,0)+@tax
+		where cno=@cno
+	end
+	if(@kind='25' and @rem1=2)
+	begin
+		update @tmpa
+		set t034=isnull(t034,0)+@money,t035=isnull(t035,0)+@tax
+		where cno=@cno
+	end
+	
+	--海關代徵營業稅
+	--進貨
+	if(@kind ='28' and @rem1=1)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t078=isnull(t078,0)+@money,t079=isnull(t079,0)+@tax
+		where cno=@cno
+	end
+	--進固定資產
+	if(@kind ='28' and @rem1=2)
+	begin
+		if(@tax=0)
+		begin
+			set @total=@money
+			set @money=round(@money/1.05,0)
+			set @tax=@total-@money
+		end
+		
+		update @tmpa
+		set t080=isnull(t080,0)+@money,t081=isnull(t081,0)+@tax
+		where cno=@cno
+	end
+	
+
+	fetch next from cursor_table
+	into @cno,@kind,@rem1,@taxtype,@money,@tax
+end
+close cursor_table
+deallocate cursor_table
+
+declare @paper nvarchar(50)
+
+declare cursor_table cursor for
+select a.cno,a.kind,b.paper,SUM(a.money) 
+from @ztax a left join tax0 b on a.noa=b.noa 
+where a.taxtype='2' and a.kind>='31'
+group by a.cno,a.kind,b.paper
+open cursor_table
+fetch next from cursor_table
+into @cno,@kind,@paper,@money
+while(@@FETCH_STATUS <> -1)
+begin
+	if(isnull(@paper,'')!='2')
+		set @paper='1'
+		
+	if(@kind in ('21','22','23','24','25','26','27'))
+	begin
+		if(@kind in('23','24','33','34'))
+		begin
+			update @tmpa
+			set t040=ISNULL(t040,0)+@money
+			where cno=@cno
+		end
+		
+		if(@paper='2')
+		begin
+			update @tmpa
+			set t032=ISNULL(t032,0)+@money
+			where cno=@cno
+		end
+		else
+		begin
+			update @tmpa
+			set t036=ISNULL(t036,0)+@money
+			where cno=@cno
+		end
+	end
+	else
+	begin
+		if(@kind in('23','24','33','34'))
+		begin
+			update @tmpa
+			set t019=ISNULL(t019,0)+@money
+			where cno=@cno
+		end
+		
+		if(@paper='2')
+		begin
+			update @tmpa
+			set t015=ISNULL(t015,0)+@money
+			where cno=@cno
+		end
+		else
+		begin
+			update @tmpa
+			set t007=ISNULL(t007,0)+@money
+			where cno=@cno
+		end
+	end
+
+	fetch next from cursor_table
+	into @cno,@kind,@paper,@money
+end
+close cursor_table
+deallocate cursor_table
+
+update @tmpa
+set t001=isnull(t001,0),t002=isnull(t002,0),t005=isnull(t005,0),t006=isnull(t006,0),t007=isnull(t007,0)
+,t009=isnull(t009,0),t010=isnull(t010,0),t013=isnull(t013,0),t014=isnull(t014,0),t015=isnull(t015,0)
+,t017=isnull(t017,0),t018=isnull(t018,0),t019=isnull(t019,0),t021=isnull(t021,0),t022=isnull(t022,0)
+,t023=isnull(t023,0),t025=isnull(t025,0),t027=isnull(t027,0),t028=isnull(t028,0),t029=isnull(t029,0)
+,t030=isnull(t030,0),t031=isnull(t031,0),t032=isnull(t032,0),t033=isnull(t033,0),t034=isnull(t034,0)
+,t035=isnull(t035,0),t036=isnull(t036,0),t037=isnull(t037,0),t038=isnull(t038,0),t039=isnull(t039,0)
+,t040=isnull(t040,0),t041=isnull(t041,0),t042=isnull(t042,0),t043=isnull(t043,0),t044=isnull(t044,0)
+,t045=isnull(t045,0),t046=isnull(t046,0),t047=isnull(t047,0),t048=isnull(t048,0),t049=isnull(t049,0)
+,t073=isnull(t073,0),t074=isnull(t074,0),t078=isnull(t078,0),t079=isnull(t079,0),t080=isnull(t080,0)
+,t081=isnull(t081,0),t082=isnull(t082,0),t101=isnull(t101,0),t107=isnull(t107,0),t108=isnull(t108,0)
+,t110=isnull(t110,0),t111=isnull(t111,0),t112=isnull(t112,0),t113=isnull(t113,0),t114=isnull(t114,0)
+,t115=isnull(t115,0)
+
+update @tmpa
+set t021=t001+t005+t009+t013-t017+t019
+,t022=t002+t006+t010+t014-t018
+,t023=t007+t015-t019
+,t044=t028+t032+t036+t078-t040
+,t045=t029+t033+t037+t079-t041
+,t046=t030+t034+t038+t080-t042
+,t047=t031+t035+t039+t081-t043
+,t074=@t_74
+,t082=@t_82
+,t108=@t_108
+
+update @tmpa
+set t048=t044+@t_48
+,t049=t046+@t_49
+,t017=t017-t019
+,t025=t021+t023
+,t101=t022
+,t107=t045+t047
+
+update @tmpa
+set t110=t107+t108
+
+update @tmpa
+set t111=case when t101-t110>=0 then t101-t110 else 0 end
+,t112=case when t101-t110>=0 then 0 else t110-t101 end
+,t113=case when t101-t110>=0 then 0 else ROUND((case when t023>0 then t023 else 0 end)*0.05+(case when t047>0 then t047 else 0 end),0) end
+,t114=case when t101-t110>=0 then 0 else (case when(t112>t113) then t113 else t112 end) end
+
+update @tmpa
+set t115=case when t101-t110>=0 then 0 else t112-t114 end
+,s7=case when t111>0 then 1 else 0 end
+
+update a
+set taxport=c.taxport,taxportname=c.taxportname
+,years=left(@t_xbmon,3),bmon=right(@t_xbmon,2),emon=right(@t_xemon,2)
+,acomp=b.acomp,taxno=c.taxno,serial=b.serial,boss=b.boss,acomp_addr=b.addr_invo
+,typea=c.typea,code=c.code,atype=c.applytype,aname=c.applyname,aid=c.applyid
+,atel=c.applytel,aarea=c.applyarea,aext=c.applyext,ano=c.applyno
+from @tmpa a left join acomp b on a.cno=b.noa left join acompu c on b.noa=c.noa
+
+insert ##tmp
+select isnull(serial,'00000000'),'TET',
+'1'--資料別(目前只做401)
++'00'--空白
++'00000000'--檔案編號
++right('        '+isnull(serial,0),8)--統一編號
++replace(@t_xemon,'/','')--所屬年月
++case when code in ('0','2') then '1' else '5' end --申報代號
++right('         '+taxno,9)--稅籍編號
++'00000'--空白
++right('0'+isnull(code,'0'),1)--總繳代號
++'000000'--空白
++right('0000000000'+replace(dbo.getComma(s1,0),',',''),10)--使用發票分數
+--一般稅額銷項金額
+	--應稅銷售額
+	+dbo.StrMinus2(t001,12)--三聯式電子計算機發票
+	+dbo.StrMinus2(t005,12)--收銀機發票(三聯式)
+	+dbo.StrMinus2(t009,12)--二聯式收銀機(二聯式)發票
+	+dbo.StrMinus2(t013,12)--免用發票
+	+dbo.StrMinus2(t017,12)--退回及折讓
+	+dbo.StrMinus2(t021,12)--合計
+	--應稅稅額	
+	+dbo.StrMinus2(t002,10)--三聯式電子計算機發票
+	+dbo.StrMinus2(t006,10)--收銀機發票(三聯式)
+	+dbo.StrMinus2(t010,10)--二聯式收銀機(二聯式)發票
+	+dbo.StrMinus2(t014,10)--免用發票
+	+dbo.StrMinus2(t018,10)--退回及折讓
+	+dbo.StrMinus2(t022,10)--合計
+	+dbo.StrMinus2(t082,12)	--免稅出口區內之區內事業、科學工業園區內之園區事業及海關管理之保稅工廠、保稅倉庫或物流中心按進口報關程序銷售貨物至我國境內其他地區之免開立統一發票銷售額
+	--零稅率銷售額	
+	+dbo.StrMinus2(t007,12)--非經海關出口應附證明文件者
+	+'000000000000'--空白(12)
+	+dbo.StrMinus2(t015,12)--經海關出口免附證明文件者
+	+dbo.StrMinus2(t019,12)--退回及折讓
+	+dbo.StrMinus2(t023,12)--合計
+	--免稅銷售額(401沒有補0)
+	+dbo.StrMinus2(0,12)--三聯式電子計算機發票4
+	+dbo.StrMinus2(0,12)--收銀機發票(三聯式)8
+	+dbo.StrMinus2(0,12)--二聯式收銀機(二聯式)發票12
+	+dbo.StrMinus2(0,12)--免用發票16
+	+dbo.StrMinus2(0,12)--退回及折讓20
+	+dbo.StrMinus2(0,12)--合計24
+	
+--特種稅額-特種飲食
+	--25%(401沒有補0)
+	+dbo.StrMinus2(0,12)--銷售額52
+	+dbo.StrMinus2(0,10)--稅額53
+	--15%(401沒有補0)
+	+dbo.StrMinus2(0,12)--銷售額54
+	+dbo.StrMinus2(0,10)--稅額55
+	
+--特種稅額-銀行、保險及信託投資業
+	--專屬本業收入2%(401沒有補0)
+	+dbo.StrMinus2(0,12)--銷售額56
+	+dbo.StrMinus2(0,10)--稅額57
+	--非專屬本業收入5%(401沒有補0)
+	+dbo.StrMinus2(0,12)--銷售額58
+	+dbo.StrMinus2(0,10)--稅額59
+	
+--特種稅額再保收入
+	--1%(401沒有補0)
+	+dbo.StrMinus2(0,12)--銷售額60
+	+dbo.StrMinus2(0,10)--稅額61
+	
+--特種稅額
+	--免稅收入(401沒有補0)
+	+dbo.StrMinus2(0,12)--銷售額62
+	--退回及折讓
+	+dbo.StrMinus2(0,12)--銷售額63
+	+dbo.StrMinus2(0,10)--稅額64
+	--合計
+	+dbo.StrMinus2(0,12)--銷售額65
+	+dbo.StrMinus2(0,10)--稅額66
+	
+--銷售額分析
++dbo.StrMinus2(t025,12)--銷售額總計
++dbo.StrMinus2(0,12)--土地26(401沒有補0)
++dbo.StrMinus2(t027,12)--其他固定之資產
+	
+--應比例計算得扣抵進項金額
+	--統一發票扣抵聯(包括電子計算機發票)
+	+dbo.StrMinus2(t028,12)--進貨及費用
+	+dbo.StrMinus2(t030,12)--固定資產
+	--三聯式收銀機發票扣抵聯
+	+dbo.StrMinus2(t032,12)--進貨及費用
+	+dbo.StrMinus2(t034,12)--固定資產
+	--載有稅額之其他憑證(包括二聯式收銀機發票)
+	+dbo.StrMinus2(t036,12)--進貨及費用
+	+dbo.StrMinus2(t038,12)--固定資產
+	--退出及折讓
+	+dbo.StrMinus2(t040,12)--進貨及費用
+	+dbo.StrMinus2(t042,12)--固定資產
+	--合計
+	+dbo.StrMinus2(t044,12)--進貨及費用
+	+dbo.StrMinus2(t046,12)--固定資產
+	
+--應比例計算得扣抵進項稅額
+	--統一發票扣抵聯(包括電子計算機發票)
+	+dbo.StrMinus2(t029,10)--進貨及費用
+	+dbo.StrMinus2(t031,10)--固定資產
+	--三聯式收銀機發票扣抵聯
+	+dbo.StrMinus2(t033,10)--進貨及費用
+	+dbo.StrMinus2(t035,10)--固定資產
+	--載有稅額之其他憑證(包括二聯式收銀機發票)
+	+dbo.StrMinus2(t037,10)--進貨及費用
+	+dbo.StrMinus2(t039,10)--固定資產
+	--退出及折讓
+	+dbo.StrMinus2(t041,10)--進貨及費用
+	+dbo.StrMinus2(t043,10)--固定資產
+	--合計
+	+dbo.StrMinus2(t045,10)--進貨及費用
+	+dbo.StrMinus2(t047,10)--固定資產
+	--進項總金額(包括不得扣抵憑證及普通收據)
+	+dbo.StrMinus2(t048,12)--進貨及費用
+	+dbo.StrMinus2(t049,12)--固定資產
+	--兼營營業人查填(401沒有補0)
+	+right('000'+replace(dbo.getComma(0,0),',',''),3)--不得扣抵比例50
+	+dbo.StrMinus2(0,10)--得扣抵之進項稅額51
+	+dbo.StrMinus2(t078,12)--海關代徵營業稅繳納證扣抵聯進貨及費用金額
+	+dbo.StrMinus2(t080,12)--海關代徵營業稅繳納證扣抵聯固定資產金額
+	+dbo.StrMinus2(t073,12)--進口免稅貨物
+	+dbo.StrMinus2(t074,12)--購買國外勞務給付額之購買國外勞務稅額計算 
+	+dbo.StrMinus2(t079,10)--海關代徵營業稅繳納證扣抵聯進貨及費用稅額
+	+dbo.StrMinus2(t081,10)--海關代徵營業稅繳納證扣抵聯固定資產稅額
+	+dbo.StrMinus2(0,10)--應比例計算進項稅額之購買國外勞務稅額計算75
+	+right('0000000000'+replace(dbo.getComma(0,0),',',''),10)--空白(10)
+	+right('0000000000'+replace(dbo.getComma(0,0),',',''),10)--空白(10)
+	+dbo.StrMinus2(0,10)--應納稅額之購買國外勞務稅額計算76
+
+--稅額計算
++dbo.StrMinus2(t101,10)--本(期)月銷項稅額合計
++right('0000000000'+replace(dbo.getComma(0,0),',',''),10)--空白
++dbo.StrMinus2(0,10)---購買國外勞務應納稅額103
++dbo.StrMinus2(0,10)--特種稅額計算應納稅額104
++dbo.StrMinus2(0,10)--中途歇業年底調整補徵應繳稅額105
++dbo.StrMinus2(0,10)--小計(1+3+4+5)106
++dbo.StrMinus2(t107,10)--得扣抵進項稅額合計
++dbo.StrMinus2(t108,10)--上期(月)累積留抵稅額
++dbo.StrMinus2(0,10)--中途歇業或年底調整應退稅額、辦理現場小額退稅申報扣減金額t109
++dbo.StrMinus2(t110,10)--小計(7+8+9)
++dbo.StrMinus2(t111,10)--本期(月)應實繳稅額(6-10)
++dbo.StrMinus2(t112,10)--本期(月)申報留抵稅額(10-6)
++dbo.StrMinus2(t113,10)--得退稅限額合計
++dbo.StrMinus2(t114,10)--本期(月)應退稅額
++dbo.StrMinus2(t115,10)--本期(月)累積留抵稅額
++REPLICATE('0',23)--空白
++isnull(typea,'1')--申報種類
++'0'--空白
++left(taxport,1)--縣市別
++REPLICATE('0',6)--空白
++isnull(atype,'1')--自行或委託辦理申報註記
++left(isnull(aid,'')+'          ',10)--申報人身分證統一編號
++left(isnull(aname,'')+'            ',12)--申報人姓名
++left(isnull(aarea,'')+'    ',4)--申報人電話區域碼
++left(isnull(atel,'')+'           ',11)--申報人電話
++left(isnull(aext,'')+'     ',5)--申報人電話分機
++left(isnull(ano,'')+'                                                  ',50)--代理申報人登錄（文）字號
++REPLICATE('0',92) --空白
+txt
+from @tmpa
+-------------------------------------------------------------------------------------------------
+--T01 營業人直接扣抵檔(不產生)
+-------------------------------------------------------------------------------------------------
+--T02 零稅率
+insert ##tmp
+select isnull(b.serial,'00000000'),'T02',
+right('        '+isnull(b.serial,''),8)--銷售人統一編號
++left(taxport,1)--銷售人縣市別
++right('         '+c.taxno,9)--銷售人稅籍編號
++right('     '+replace(@t_xemon,'/',''),5)--資料所屬年月
+--開立發票
+	+right('     '+replace(left(a.datea,6),'/',''),5)--年月
+	+right('          '+a.noa,10)--字軌號碼
++right('        '+replace(isnull(a.serial,''),' ',''),8)--買受人統一編號
++RIGHT(' '+a.otype,1)--適用零稅率規定
++(case when isnull(a.paper,'1')='2' then '2' else '1' end)--通關方式註記
+--出口報單
+	+RIGHT('  '+isnull(a.ptype,''),2)--類別
+	+RIGHT('              '+isnull(a.pno,''),14)--號碼
++right('000000000000'+replace(dbo.getComma(isnull(money,0),0),',',''),12)--金額
++right('       '+replace(isnull(edate,''),'/',''),7)--輸出或結匯日期
+txt
+from tax0 a left join acomp b on a.cno=b.noa left join acompu c on a.cno=c.noa
+where LEFT(a.datea,6) between @t_xbmon and @t_xemon
+
+-------------------------------------------------------------------------------------------------
+--T03 營業人購買舊乘人小汽車及機車進項憑證明細資料檔(不產生)
+-------------------------------------------------------------------------------------------------
+declare @string varchar(500)=''
+declare @path varchar(500)=''
+declare @serial nvarchar(MAX)=''
+declare @extension nvarchar(MAX)=''
+
+select serial from ##tmp group by serial
+
+--電子檔
+declare cursor_table cursor for
+select serial,extension from ##tmp group by serial,extension
+open cursor_table
+fetch next from cursor_table
+into @serial,@extension
+while(@@FETCH_STATUS <> -1)
+begin
+	--產生檔案
+	set @path='C:\inetpub\wwwroot\htm\htm\'+@serial+'.'+@extension
+	set @string='bcp "SELECT txt FROM ##tmp a where serial='''+@serial+''' and extension='''+@extension+''' " queryout "C:\inetpub\wwwroot\htm\htm\'+@serial+'.'+@extension+'" -S"59.125.143.171,1799" -U"sa" -P"artsql963" -T -c -t'
+	
+	EXEC master..xp_cmdshell @string
+	
+	--產生壓縮檔
+	set @string='"C:\Program Files\WinRAR\WinRAR.exe" a -ep C:\inetpub\wwwroot\htm\htm\'+@serial+'.rar '+@path
+	EXEC master..xp_cmdshell @string
+	
+	--刪除檔案
+	set @string='del '+@path
+	EXEC master..xp_cmdshell @string
+		
+	fetch next from cursor_table
+	into @serial,@extension
+end
+close cursor_table
+deallocate cursor_table
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+;

@@ -1,0 +1,748 @@
+trans_ef_copy:--trans_ef_copy 
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @workerno nvarchar(20) = [1]
+	declare @worker nvarchar(20) = [2]
+	declare @t_noa nvarchar(20) = [3]
+	declare @t_bdate nvarchar(10) = [4]
+	declare @t_edate nvarchar(10) = [5]
+	declare @t_weekday nvarchar(max) = [6] --日一二三四五六  => 1234567
+	-----------------------------------------------------------------------------
+	if not exists(select * from view_trans where noa=@t_noa)
+	begin
+		select '單據不存在' errmsg
+		return
+	end
+	if exists(select COUNT(1) from view_trans where noa=@t_noa having COUNT(1)>1)
+	begin
+		select '單據重複' errmsg
+		return
+	end
+	--------------------------------------------------------------------------------
+	declare @tmpa table(
+		datea nvarchar(20),
+		[day] int,
+		noa nvarchar(20)
+	)	
+	begin try
+		declare @bdate date = cast(cast(cast(left(@t_bdate,3) as int)+1911 as nvarchar)+'/'+right(@t_bdate,5) as date)
+		declare @edate date = cast(cast(cast(left(@t_edate,3) as int)+1911 as nvarchar)+'/'+right(@t_edate,5) as date)
+		declare @nextdate date = @bdate
+		while @nextdate<=@edate
+		begin
+			insert into @tmpa(datea,[day])
+			select right('000'+cast(YEAR(@nextdate)-1911 as nvarchar),3)+'/'+right('00'+cast(MONTH(@nextdate) as nvarchar),2)+'/'+right('00'+cast(day(@nextdate) as nvarchar),2)
+			,DATEPART(WEEKDAY, @nextdate)
+			set @nextdate = dateadd(DD,1,@nextdate)
+		end
+		delete @tmpa where CHARINDEX(CAST([day] as nvarchar),@t_weekday)=0
+	end try
+	begin catch
+		select '日期異常' errmsg
+		return
+	end catch
+	-----------------------------------------------------------------------------------
+	declare @noa nvarchar(20)
+	declare @maxnoa nvarchar(20)
+	declare @xdatea nvarchar(20)
+	declare @accy nvarchar(20)
+	----------------------------------------------------
+	--排除本張出車單
+	select @xdatea=datea from view_trans where noa=@t_noa
+	delete @tmpa where datea =@xdatea
+	----------------------------------------------------
+	declare cursor_table cursor for
+	select datea from @tmpa
+	open cursor_table
+	fetch next from cursor_table
+	into @xdatea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @maxnoa = ''
+		select top 1 @maxnoa = noa from view_trans where LEFT(noa,9)='BA'+REPLACE(@xdatea,'/','') order by noa desc
+		if len(ISNULL(@maxnoa,''))=0
+		begin
+			set @maxnoa = 'BA'+REPLACE(@xdatea,'/','')+'001'
+		end
+		else
+		begin
+			set @maxnoa = LEFT(@maxnoa,9)+ right('000'+cast(cast(RIGHT(@maxnoa,3) as int)+1 as nvarchar),3)
+		end
+		if exists(select * from view_trans where noa=@maxnoa)
+		begin
+			select '【'+@maxnoa+'】單號已存在' errmsg
+			return
+		end
+		update @tmpa set noa=@maxnoa where datea=@xdatea
+
+		fetch next from cursor_table
+		into @xdatea
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------
+	declare cursor_table cursor for
+	select datea,noa from @tmpa
+	open cursor_table
+	fetch next from cursor_table
+	into @xdatea,@noa
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @accy = LEFT(@xdatea,3)
+		
+		set @cmd = " insert into trans"+@accy+"(worker,noa,noq,custno,comp,nick,driverno,driver,carno,straddrno,endaddrno,straddr,endaddr,trandate,datea,inmount,pton,mount,price,total,outmount,pton2,mount2,price2,price3,discount,total2,calctype,carteamno"
+			+" ,po,unit,sender,stel,saddr,addressee,atel,aaddr,miles,tggno,tgg,memo)"
+			+" select @worker,@noa,'001',custno,comp,nick,driverno,driver,carno,straddrno,endaddrno,straddr,endaddr,@xdatea,@xdatea,inmount,pton,mount,price,total,outmount,pton2,mount2,price2,price3,discount,total2,calctype,carteamno"
+			+" ,po,unit,sender,stel,saddr,addressee,atel,aaddr,miles,tggno,tgg,'出車單【'+@t_noa+'】複製'"
+			+" from view_trans where noa=@t_noa"
+		execute sp_executesql @cmd,N'@worker nvarchar(20),@t_noa nvarchar(20),@noa nvarchar(20),@xdatea nvarchar(20)'
+			,@worker=@worker,@t_noa=@t_noa,@noa=@noa,@xdatea=@xdatea
+		fetch next from cursor_table
+		into @xdatea,@noa 
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--寫入DRUN
+	insert into drun(datea,timea,usera,action,noa,tablea,title)
+	select convert(nvarchar,getdate(),111),left(convert(nvarchar,getdate(),108),5)
+		,@workerno,'Insert',noa,'trans','出車單複製'
+	from @tmpa
+	
+	select * from @tmpa;
+
+tran_sum:--tran_sum
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_mon nvarchar(10) = [1]
+	-----------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_trana')is not null
+	BEGIN
+		set @cmd = 'drop table #z_trana'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_trana(
+		tranaccy nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		custno nvarchar(20),
+		carteamno nvarchar(20),
+		trandate nvarchar(10),
+		
+		insures float,--勞健保(公司負擔)
+		money1 float,--應收運費
+		money2 float,--應付運費
+		custplus float,--客戶加項
+		custminus float,--客戶減項
+		driverplus float,--司機加項
+		driverminus float,--司機減項
+		reserve float,--寄櫃費
+		tolls float,--通行費
+		etc float,--ETC
+		oil float,--油費
+		wmoney float,--工資
+		wmoneycar float,--工資 車頭  大昌用
+		wmoneyplate float,--工資 板台  大昌用
+		cmoney float,--輪胎
+		dmoney float,--材料
+		emoney float,--費用
+		ticket float,--罰單(公司負擔)
+		bonus float,--達成獎金
+		tax float,--保牌燃費
+		depreciation float,--折舊
+		driverpay float,--司機付
+		
+		profit float --毛利
+	)
+	--CREATE INDEX no1 ON #z_trana (tranaccy,tranno,trannoq)
+	--CREATE INDEX no2 ON #z_trana (carno)
+	--CREATE INDEX no3 ON #z_trana (carno,driverno)
+	--CREATE INDEX no4 ON #z_trana (carno,trandate)
+	--出車單************************************************************************
+	--大昌 102/12 用登錄日期
+	if exists(select * from acomp where CHARINDEX('邱莉雯',acomp)>0)
+	begin
+		insert into #z_trana(tranaccy,tranno,trannoq,carno,driverno,custno,carteamno,trandate,money1,money2,reserve,tolls)
+		select accy,noa,noq  ,carno,driverno,custno,carteamno,trandate,total,total2,reserve,tolls
+		from view_trans where case when LEFT(datea,6)<='102/12' then LEFT(datea,6) else LEFT(trandate,6) end=@t_mon 
+	end
+	else
+	begin
+		insert into #z_trana(tranaccy,tranno,trannoq,carno,driverno,custno,carteamno,trandate,money1,money2,reserve,tolls)
+		select accy,noa,noq  ,carno,driverno,custno,carteamno,trandate,total,total2,reserve,tolls
+		from view_trans where LEFT(trandate,6)=@t_mon
+	end
+	--折舊、保牌燃費************************************************************************
+	declare @tmp1 table(
+		carno nvarchar(20),
+		tax float,--保牌燃費
+		depreciation float,--折舊
+		tax1 float,--修正用
+		depreciation1 float,--修正用
+		tax2 float,--修正用
+		depreciation2 float--修正用
+	)
+	insert into @tmp1(carno,tax,depreciation)
+	select a.carno,sum(isnull(b.tax,0)) mm1,sum(isnull(b.depreciation,0)) mm2 
+	from cart a right join carts b on a.noa=b.noa 
+	where b.mon=@t_mon and not(isnull(b.depreciation,0)=0 and isnull(b.tax,0)=0)
+	group by a.carno
+		
+	update #z_trana set tax=case when b.money1=0 then 0 else round(a.money1/b.money1*c.tax,0) end
+		,depreciation=case when b.money1=0 then 0 else round(a.money1/b.money1*c.depreciation,0) end
+	from #z_trana a
+	right join (select carno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp1 c on a.carno=c.carno
+	where isnull(a.money1,0)>0
+	--==修正金額
+	update @tmp1 set tax1=b.mm1,depreciation1=b.mm2
+	from @tmp1 a
+	right join (select carno,SUM(ISNULL(tax,0)) mm1,sum(isnull(depreciation,0)) mm2 from #z_trana group by carno) b on a.carno=b.carno
+	
+	update @tmp1 set tax2 = ISNULL(tax,0)-ISNULL(tax1,0),depreciation2=ISNULL(depreciation,0)-ISNULL(depreciation1,0)	
+	delete @tmp1 where ISNULL(tax2,0)=0 and ISNULL(depreciation2,0)=0	
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set tax = a.tax + case when d.tax2<0 then -1 else 1 end * (floor(ABS(d.tax2)/c.nn)+case when (cast(ABS(d.tax2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,depreciation = a.depreciation + case when d.depreciation2<0 then -1 else 1 end * (floor(ABS(d.depreciation2)/c.nn)+case when (cast(ABS(d.depreciation2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select carno,COUNT(1) nn from #z_trana where money1!=0 group by carno) c on a.carno=c.carno
+	right join @tmp1 d on a.carno=d.carno	
+	--==無出車單的另外寫入
+	update @tmp1 set tax1=b.mm1,depreciation1=b.mm2
+	from @tmp1 a
+	right join (select carno,SUM(ISNULL(tax,0)) mm1,sum(isnull(depreciation,0)) mm2 from #z_trana group by carno) b on a.carno=b.carno
+	
+	update @tmp1 set tax2 = ISNULL(tax,0)-ISNULL(tax1,0),depreciation2=ISNULL(depreciation,0)-ISNULL(depreciation1,0)	
+	delete @tmp1 where ISNULL(tax2,0)=0 and ISNULL(depreciation2,0)=0	
+	insert into #z_trana(carno,tax,depreciation)
+	select carno,tax2,depreciation2 from @tmp1
+	--************************************************************************
+	--油費************************************************************************
+	declare @tmp2 table(
+		carno nvarchar(20),
+		oil float,
+		oil1 float,--修正用
+		oil2 float--修正用
+	)
+	insert into @tmp2(carno,oil)
+	select carno,SUM(ISNULL([money],0)) [money] 
+	from oil 
+	where left(oildate,6)=@t_mon and ISNULL([money],0)!=0
+	group by carno
+	
+	update #z_trana set oil=case when b.money1=0 then 0 else round(a.money1/b.money1*c.oil,0) end
+	from #z_trana a
+	right join (select carno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp2 c on a.carno=c.carno
+	where isnull(a.money1,0)>0
+	--==修正金額
+	update @tmp2 set oil1=b.mm1
+	from @tmp2 a
+	right join (select carno,SUM(ISNULL(oil,0)) mm1 from #z_trana group by carno) b on a.carno=b.carno
+	
+	update @tmp2 set oil2= ISNULL(oil,0)-ISNULL(oil1,0)	
+	delete @tmp2 where ISNULL(oil2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set oil = a.oil + case when d.oil2<0 then -1 else 1 end * (floor(ABS(d.oil2)/c.nn)+case when (cast(ABS(d.oil2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select carno,COUNT(1) nn from #z_trana where money1!=0 group by carno) c on a.carno=c.carno
+	right join @tmp2 d on a.carno=d.carno	
+	--==無出車單的另外寫入
+	update @tmp2 set oil1=b.mm1
+	from @tmp2 a
+	right join (select carno,SUM(ISNULL(oil,0)) mm1 from #z_trana group by carno) b on a.carno=b.carno
+	update @tmp2 set oil2= ISNULL(oil,0)-ISNULL(oil1,0)	
+	delete @tmp2 where ISNULL(oil2,0)=0 
+	insert into #z_trana(carno,oil)
+	select carno,oil2 from @tmp2
+	--************************************************************************
+	--維修************************************************************************
+	declare @tmp3 table(
+		carno nvarchar(20),
+		wmoney float,
+		wmoneycar float,
+		wmoneyplate float,
+		cmoney float,
+		dmoney float,
+		emoney float,
+		wmoney1 float,--修正用
+		wmoneycar1 float,--修正用
+		wmoneyplate1 float,--修正用
+		cmoney1 float,--修正用
+		dmoney1 float,--修正用
+		emoney1 float,--修正用
+		wmoney2 float,--修正用
+		wmoneycar2 float,--修正用
+		wmoneyplate2 float,--修正用
+		cmoney2 float,--修正用
+		dmoney2 float,--修正用
+		emoney2 float--修正用
+	)
+	--大昌FIXOUT都算輪胎
+	insert into @tmp3(carno,wmoney,wmoneycar,wmoneyplate,cmoney,dmoney,emoney)
+	select carno,sum(wmoney),sum(wmoneycar),sum(wmoneyplate),sum(cmoney),sum(dmoney),sum(emoney)
+	from (select carno,SUM(ISNULL(wmoney,0)-case when ISNULL(wmoney,0)!=0 then ISNULL(discount,0) else 0 end) wmoney
+			,SUM(case when len(isnull(carplateno,''))=0 then ISNULL(wmoney,0)-case when ISNULL(wmoney,0)!=0 then ISNULL(discount,0) else 0 end else 0 end) wmoneycar
+			,SUM(case when len(isnull(carplateno,''))>0 then ISNULL(wmoney,0)-case when ISNULL(wmoney,0)!=0 then ISNULL(discount,0) else 0 end else 0 end) wmoneyplate
+			,SUM(ISNULL(cmoney,0)-case when ISNULL(wmoney,0)=0 and ISNULL(cmoney,0)!=0 then ISNULL(discount,0) else 0 end) cmoney
+			,SUM(ISNULL(dmoney,0)-case when ISNULL(wmoney,0)=0 and ISNULL(cmoney,0)=0 and ISNULL(dmoney,0)!=0 then ISNULL(discount,0) else 0 end) dmoney
+			,SUM(ISNULL(emoney,0)-case when ISNULL(wmoney,0)=0 and ISNULL(cmoney,0)=0 and ISNULL(dmoney,0)=0 then ISNULL(discount,0) else 0 end) emoney
+		from fixa
+		where LEFT(fixadate,6)=@t_mon and not(ISNULL(wmoney,0)=0 and ISNULL(cmoney,0)=0 and ISNULL(dmoney,0)=0 and ISNULL(emoney,0)=0)
+		group by carno
+		union all
+		select carno,SUM(ISNULL(wmoney,0)) wmoney
+			,SUM(case when len(isnull(carplateno,''))=0 then ISNULL(wmoney,0) else 0 end) wmoneycar
+			,SUM(case when len(isnull(carplateno,''))>0 then ISNULL(wmoney,0) else 0 end) wmoneyplate
+			,SUM(ISNULL(cmoney,0)) cmoney,SUM(ISNULL(dmoney,0)) dmoney,SUM(ISNULL(emoney,0)) emoney
+		from fixout
+		where LEFT(outdate,6)=@t_mon and not(ISNULL(wmoney,0)=0 and ISNULL(cmoney,0)=0 and ISNULL(dmoney,0)=0 and ISNULL(emoney,0)=0)
+		group by carno
+		)a
+	group by carno
+	
+	update #z_trana set wmoney=case when b.money1=0 then 0 else round(a.money1/b.money1*c.wmoney,0) end
+		,wmoneycar=case when b.money1=0 then 0 else round(a.money1/b.money1*c.wmoneycar,0) end
+		,wmoneyplate=case when b.money1=0 then 0 else round(a.money1/b.money1*c.wmoneyplate,0) end
+		,cmoney=case when b.money1=0 then 0 else round(a.money1/b.money1*c.cmoney,0) end
+		,dmoney=case when b.money1=0 then 0 else round(a.money1/b.money1*c.dmoney,0) end
+		,emoney=case when b.money1=0 then 0 else round(a.money1/b.money1*c.emoney,0) end
+	from #z_trana a
+	right join (select carno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp3 c on a.carno=c.carno
+	where isnull(a.money1,0)>0
+	--==修正金額
+	update @tmp3 set wmoney1=b.mm1,cmoney1=b.mm2,dmoney1=b.mm3,emoney1=b.mm4,wmoneycar1=b.mm5,wmoneyplate1=b.mm6
+	from @tmp3 a
+	right join (select carno,SUM(ISNULL(wmoney,0)) mm1,SUM(ISNULL(cmoney,0)) mm2 
+		,SUM(ISNULL(dmoney,0)) mm3 ,SUM(ISNULL(emoney,0)) mm4
+		,SUM(ISNULL(wmoneycar,0)) mm5,SUM(ISNULL(wmoneyplate,0)) mm6 
+		from #z_trana group by carno) b on a.carno=b.carno
+	
+	update @tmp3 set wmoney2= ISNULL(wmoney,0)-ISNULL(wmoney1,0)
+		,wmoneycar2= ISNULL(wmoneycar,0)-ISNULL(wmoneycar1,0)
+		,wmoneyplate2= ISNULL(wmoneyplate,0)-ISNULL(wmoneyplate1,0)
+		,cmoney2= ISNULL(cmoney,0)-ISNULL(cmoney1,0)
+		,dmoney2= ISNULL(dmoney,0)-ISNULL(dmoney1,0)
+		,emoney2= ISNULL(emoney,0)-ISNULL(emoney1,0)	
+	delete @tmp3 where ISNULL(wmoney2,0)=0 and ISNULL(cmoney2,0)=0 and ISNULL(dmoney2,0)=0 and ISNULL(emoney2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set wmoney = a.wmoney + case when d.wmoney2<0 then -1 else 1 end * (floor(ABS(d.wmoney2)/c.nn)+case when (cast(ABS(d.wmoney2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,wmoneycar = a.wmoneycar + case when d.wmoneycar2<0 then -1 else 1 end * (floor(ABS(d.wmoneycar2)/c.nn)+case when (cast(ABS(d.wmoneycar2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,wmoneyplate = a.wmoneyplate + case when d.wmoneyplate2<0 then -1 else 1 end * (floor(ABS(d.wmoneyplate2)/c.nn)+case when (cast(ABS(d.wmoneyplate2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,cmoney = a.cmoney + case when d.cmoney2<0 then -1 else 1 end * (floor(ABS(d.cmoney2)/c.nn)+case when (cast(ABS(d.cmoney2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,dmoney = a.dmoney + case when d.dmoney2<0 then -1 else 1 end * (floor(ABS(d.dmoney2)/c.nn)+case when (cast(ABS(d.dmoney2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,emoney = a.emoney + case when d.emoney2<0 then -1 else 1 end * (floor(ABS(d.emoney2)/c.nn)+case when (cast(ABS(d.emoney2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select carno,COUNT(1) nn from #z_trana where money1!=0 group by carno) c on a.carno=c.carno
+	right join @tmp3 d on a.carno=d.carno	
+	--==無出車單的另外寫入
+	update @tmp3 set wmoney1=b.mm1,cmoney1=b.mm2,dmoney1=b.mm3,emoney1=b.mm4,wmoneycar1=b.mm5,wmoneyplate1=b.mm6
+	from @tmp3 a
+	right join (select carno,SUM(ISNULL(wmoney,0)) mm1,SUM(ISNULL(cmoney,0)) mm2 
+		,SUM(ISNULL(dmoney,0)) mm3 ,SUM(ISNULL(emoney,0)) mm4
+		,SUM(ISNULL(wmoneycar,0)) mm5,SUM(ISNULL(wmoneyplate,0)) mm6 
+		from #z_trana group by carno) b on a.carno=b.carno
+	
+	update @tmp3 set wmoney2= ISNULL(wmoney,0)-ISNULL(wmoney1,0)
+		,wmoneycar2= ISNULL(wmoneycar,0)-ISNULL(wmoneycar1,0)
+		,wmoneyplate2= ISNULL(wmoneyplate,0)-ISNULL(wmoneyplate1,0)
+		,cmoney2= ISNULL(cmoney,0)-ISNULL(cmoney1,0)
+		,dmoney2= ISNULL(dmoney,0)-ISNULL(dmoney1,0)
+		,emoney2= ISNULL(emoney,0)-ISNULL(emoney1,0)	
+	delete @tmp3 where ISNULL(wmoney2,0)=0 and ISNULL(cmoney2,0)=0 and ISNULL(dmoney2,0)=0 and ISNULL(emoney2,0)=0 
+	insert into #z_trana(carno,wmoney,wmoneycar,wmoneyplate,cmoney,dmoney,emoney)
+	select carno,wmoney2,wmoneycar2,wmoneyplate2,cmoney2,dmoney2,emoney2 from @tmp3
+	--************************************************************************
+	--罰單************************************************************************
+	declare @tmp4 table(
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		ticket float,
+		ticket1 float,--修正用
+		ticket2 float--修正用
+	)
+	insert into @tmp4(carno,driverno,ticket)
+	select carno,ISNULL(driverno,''),sum(isnull(comppay,0)) 
+	from carborr
+	where left(datea,6)=@t_mon and typea='罰單' and isnull(comppay,0)!=0
+	group by carno,ISNULL(driverno,''),isnull(driverno,'')
+	
+	update #z_trana set ticket=case when b.money1=0 then 0 else round(a.money1/b.money1*c.ticket,0) end
+	from #z_trana a
+	right join (select carno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp4 c on a.carno=c.carno and a.driverno=c.driverno
+	where isnull(a.money1,0)>0
+	--==修正金額
+	update @tmp4 set ticket1=b.mm1
+	from @tmp4 a
+	right join (select carno,driverno,SUM(ISNULL(ticket,0)) mm1 from #z_trana group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	
+	update @tmp4 set ticket2= ISNULL(ticket,0)-ISNULL(ticket1,0)	
+	delete @tmp4 where ISNULL(ticket2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set ticket = a.ticket + case when d.ticket2<0 then -1 else 1 end * (floor(ABS(d.ticket2)/c.nn)+case when (cast(ABS(d.ticket2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno,driverno order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select carno,driverno,COUNT(1) nn from #z_trana where money1!=0 group by carno,driverno) c on a.carno=c.carno and a.driverno=c.driverno
+	right join @tmp4 d on a.carno=d.carno and a.driverno=d.driverno	
+	--==無出車單的另外寫入
+	update @tmp4 set ticket1=b.mm1
+	from @tmp4 a
+	right join (select carno,driverno,SUM(ISNULL(ticket,0)) mm1 from #z_trana group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	update @tmp4 set ticket2= ISNULL(ticket,0)-ISNULL(ticket1,0)	
+	delete @tmp4 where ISNULL(ticket2,0)=0  
+	insert into #z_trana(carno,driverno,ticket)
+	select carno,driverno,ticket2 from @tmp4
+	--************************************************************************
+	--ETC************************************************************************
+	declare @tmp5 table(
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		datea nvarchar(10),
+		etc float,
+		etc1 float,--修正用
+		etc2 float--修正用
+	)
+	insert into @tmp5(carno,driverno,datea,etc)
+	select carno,driverno,datea,SUM(ISNULL([money],0)) [money] 
+	from etc
+	where left(datea,6)=@t_mon and ISNULL([money],0)!=0
+	and (typea='ETC' or typea='CASH')
+	group by carno,driverno,datea
+	
+	update #z_trana set etc=case when b.money1=0 then 0 else round(a.money1/b.money1*c.etc,0) end
+	from #z_trana a
+	right join (select carno,driverno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	right join @tmp5 c on a.carno=c.carno and a.driverno=c.driverno and a.trandate=c.datea
+	where isnull(a.money1,0)>0
+	
+	--select * from @tmp5
+	----==修正金額
+	update @tmp5 set etc1=b.mm1
+	from @tmp5 a
+	right join (select carno,driverno,trandate,SUM(ISNULL(etc,0)) mm1 from #z_trana group by carno,driverno,trandate) b on a.carno=b.carno and a.driverno=b.driverno and a.datea=b.trandate
+	update @tmp5 set etc2= ISNULL(etc,0)-ISNULL(etc1,0)	
+	delete @tmp5 where ISNULL(etc2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set etc = a.etc + case when d.etc2<0 then -1 else 1 end * (floor(ABS(d.etc2)/c.nn)+case when (cast(ABS(d.etc2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno,trandate order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select carno,driverno,trandate,COUNT(1) nn from #z_trana where money1!=0 group by carno,driverno,trandate) c on a.carno=c.carno and a.driverno=c.driverno and a.trandate=c.trandate
+	right join @tmp5 d on a.carno=d.carno and a.driverno=d.driverno and a.trandate=d.datea	
+	--==無出車單的另外寫入
+	update @tmp5 set etc1=b.mm1
+	from @tmp5 a
+	right join (select carno,driverno,trandate,SUM(ISNULL(etc,0)) mm1 from #z_trana group by carno,driverno,trandate) b on a.carno=b.carno and a.driverno=b.driverno and a.datea=b.trandate
+	update @tmp5 set etc2= ISNULL(etc,0)-ISNULL(etc1,0)	
+	delete @tmp5 where ISNULL(etc2,0)=0 
+	insert into #z_trana(carno,driverno,trandate,etc)
+	select carno,driverno,datea,etc2 from @tmp5
+	--************************************************************************
+	--達成獎金************************************************************************
+	declare @tmp6 table(
+		driverno nvarchar(20),
+		bonus float,
+		bonus1 float,--修正用
+		bonus2 float--修正用
+	)
+	insert into @tmp6(driverno,bonus)
+	select driverno,SUM(ISNULL(bonus,0)) 
+	from carsals
+	where noa=@t_mon and ISNULL(bonus,0)!=0
+	group by driverno
+	
+	update #z_trana set bonus=case when b.money2=0 then 0 else round(a.money2/b.money2*c.bonus,0) end
+	from #z_trana a
+	right join (select carno,SUM(money2) money2 from #z_trana where isnull(money2,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp6 c on a.driverno=c.driverno
+	where isnull(a.money2,0)>0
+	--==修正金額
+	update @tmp6 set bonus1=b.mm1
+	from @tmp6 a
+	right join (select driverno,SUM(ISNULL(bonus,0)) mm1 from #z_trana group by driverno) b on a.driverno=b.driverno
+	update @tmp6 set bonus2= ISNULL(bonus,0)-ISNULL(bonus1,0)	
+	delete @tmp6 where ISNULL(bonus2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money2一次補1調整,LOOP 直到沒誤差
+	update #z_trana set bonus = a.bonus + case when d.bonus2<0 then -1 else 1 end * (floor(ABS(d.bonus2)/c.nn)+case when (cast(ABS(d.bonus2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by driverno order by money2) recno
+		,tranaccy,tranno,trannoq from #z_trana where money2!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select driverno,COUNT(1) nn from #z_trana where money2!=0 group by driverno) c on a.driverno=c.driverno
+	right join @tmp6 d on a.driverno=d.driverno	
+	--==無出車單的另外寫入
+	update @tmp6 set bonus1=b.mm1
+	from @tmp6 a
+	right join (select driverno,SUM(ISNULL(bonus,0)) mm1 from #z_trana group by driverno) b on a.driverno=b.driverno
+	update @tmp6 set bonus2= ISNULL(bonus,0)-ISNULL(bonus1,0)	
+	delete @tmp6 where ISNULL(bonus2,0)=0 
+	insert into #z_trana(driverno,bonus)
+	select driverno,bonus2 from @tmp6
+	--************************************************************************
+	--勞健保
+	declare @tmp7 table(
+		driverno nvarchar(20),
+		insures float,
+		insures1 float,--修正用
+		insures2 float--修正用
+	)
+	insert into @tmp7(driverno,insures)
+	select a.noa,SUM(ISNULL(a.total2,0)) 
+	from salinsures a
+	right join driver b on a.noa=b.noa
+	where mon=@t_mon and ISNULL(a.total2,0)!=0
+	group by a.noa
+	
+	declare @tmp7a table(
+		driverno nvarchar(20),
+		accc5 nvarchar(30),
+		dmoney float,
+		cmoney float
+	)
+	set @cmd = "select b.accc5,b.dmoney,b.cmoney from accc"+LEFT(@t_mon,3)+"_1 a"
+		+" left join acccs"+LEFT(@t_mon,3)+"_1 b on a.accc3=b.accc3"
+		+" where left(a.accc2,2)='"+RIGHT(@t_mon,2)+"'"
+		+" and b.accc5 like '6019.%' and b.accc5!='6019.'"
+	insert into @tmp7a(accc5,dmoney,cmoney)	
+	execute sp_executesql @cmd
+	update @tmp7a set driverno = REPLACE(isnull(accc5,''),'6019.','')
+	
+	declare @driverno nvarchar(20)
+	declare @dmoney float
+	declare @cmoney float
+	
+	declare cursor_table cursor for
+	select driverno,sum(isnull(dmoney,0)),sum(isnull(cmoney,0)) from @tmp7a group by driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@dmoney,@cmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from @tmp7 where driverno=@driverno)
+		begin
+			update @tmp7 set insures = isnull(insures,0)+@dmoney-@cmoney where driverno=@driverno
+		end
+		else
+		begin
+			insert into @tmp7(driverno,insures)values(@driverno,@dmoney-@cmoney)
+		end
+		fetch next from cursor_table
+		into @driverno,@dmoney,@cmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update #z_trana set insures=case when b.money2=0 then 0 else round(a.money2/b.money2*c.insures,0) end
+	from #z_trana a
+	right join (select carno,SUM(money2) money2 from #z_trana where isnull(money2,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp7 c on a.driverno=c.driverno
+	where isnull(a.money2,0)>0
+	--==修正金額
+	update @tmp7 set insures1=b.mm1
+	from @tmp7 a
+	right join (select driverno,SUM(ISNULL(insures,0)) mm1 from #z_trana group by driverno) b on a.driverno=b.driverno
+	update @tmp7 set insures2= ISNULL(insures,0)-ISNULL(insures1,0)	
+	delete @tmp7 where ISNULL(insures2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money2一次補1調整,LOOP 直到沒誤差
+	update #z_trana set insures = a.insures + case when d.insures2<0 then -1 else 1 end * (floor(ABS(d.insures2)/c.nn)+case when (cast(ABS(d.insures2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by driverno order by money2) recno
+		,tranaccy,tranno,trannoq from #z_trana where money2!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select driverno,COUNT(1) nn from #z_trana where money2!=0 group by driverno) c on a.driverno=c.driverno
+	right join @tmp7 d on a.driverno=d.driverno	
+	--==無出車單的另外寫入
+	update @tmp7 set insures1=b.mm1
+	from @tmp7 a
+	right join (select driverno,SUM(ISNULL(insures,0)) mm1 from #z_trana group by driverno) b on a.driverno=b.driverno
+	update @tmp7 set insures2= ISNULL(insures,0)-ISNULL(insures1,0)	
+	delete @tmp7 where ISNULL(insures2,0)=0 
+	insert into #z_trana(driverno,insures)
+	select driverno,insures2 from @tmp7
+	--************************************************************************
+	--客戶加減項************************************************************************
+	declare @tmp8 table(
+		custno nvarchar(20),
+		custplus float,
+		custminus float,
+		custplus1 float,--修正用
+		custminus1 float,--修正用
+		custplus2 float,--修正用
+		custminus2 float--修正用
+	)
+	insert into @tmp8(custno,custplus,custminus)
+	select custno,SUM(ISNULL(plusmoney,0)),SUM(ISNULL(minusmoney,0)) 
+	from custchg
+	where left(datea,6)=@t_mon and not(ISNULL(plusmoney,0)=0 and ISNULL(minusmoney,0)=0)
+	--排除 代收、付,暫收
+	and (left(acc1,4)!='2195') and (left(acc1,4)!='1191') 
+	and (left(acc1,4)!='2191') and (left(acc1,4)!='1149') 
+	and (left(acc1,4)!='1194') and (left(acc1,4)!='1129') 
+	and (left(acc1,4)!='4201') and (left(acc1,4)!='4202') 
+	group by custno
+	
+	update #z_trana set custplus=case when b.money1=0 then 0 else round(a.money1/b.money1*c.custplus,0) end
+		,custminus=case when b.money1=0 then 0 else round(a.money1/b.money1*c.custminus,0) end
+	from #z_trana a
+	right join (select custno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by custno) b on a.custno=b.custno
+	right join @tmp8 c on a.custno=c.custno
+	where isnull(a.money1,0)>0
+	--==修正金額
+	update @tmp8 set custplus1=b.mm1,custminus1=b.mm2
+	from @tmp8 a
+	right join (select custno,SUM(ISNULL(custplus,0)) mm1,SUM(ISNULL(custminus,0)) mm2 from #z_trana group by custno) b on a.custno=b.custno
+	update @tmp8 set custplus2= ISNULL(custplus,0)-ISNULL(custplus1,0),custminus2= ISNULL(custminus,0)-ISNULL(custminus1,0)	
+	delete @tmp8 where ISNULL(custplus2,0)=0 and ISNULL(custminus2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set custplus = a.custplus + case when d.custplus2<0 then -1 else 1 end * (floor(ABS(d.custplus2)/c.nn)+case when (cast(ABS(d.custplus2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,custminus = a.custminus + case when d.custminus2<0 then -1 else 1 end * (floor(ABS(d.custminus2)/c.nn)+case when (cast(ABS(d.custminus2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by custno order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select custno,COUNT(1) nn from #z_trana where money1!=0 group by custno) c on a.custno=c.custno
+	right join @tmp8 d on a.custno=d.custno	
+	--==無出車單的另外寫入
+	update @tmp8 set custplus1=b.mm1,custminus1=b.mm2
+	from @tmp8 a
+	right join (select custno,SUM(ISNULL(custplus,0)) mm1,SUM(ISNULL(custminus,0)) mm2 from #z_trana group by custno) b on a.custno=b.custno
+	update @tmp8 set custplus2= ISNULL(custplus,0)-ISNULL(custplus1,0),custminus2= ISNULL(custminus,0)-ISNULL(custminus1,0)	
+	delete @tmp8 where ISNULL(custplus2,0)=0 and ISNULL(custminus2,0)=0 
+	insert into #z_trana(custno,custplus,custminus)
+	select custno,custplus2,custminus2 from @tmp8
+	--************************************************************************
+	--司機加減項************************************************************************
+	declare @tmp9 table(
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driverplus float,
+		driverminus float,
+		driverplus1 float,--修正用
+		driverminus1 float,--修正用
+		driverplus2 float,--修正用
+		driverminus2 float--修正用
+	)
+	if exists(select * from acomp where nick='日光')
+	begin
+		insert into @tmp9(carno,driverno,driverplus,driverminus)
+		select carno,driverno,SUM(ISNULL(plusmoney,0)),SUM(ISNULL(minusmoney,0)) 
+		from carchg
+		where left(datea,6)=@t_mon and not(ISNULL(plusmoney,0)=0 and ISNULL(minusmoney,0)=0)
+		--有付款廠商的就判斷為代收、代付
+		and len(isnull(tggno,''))=0
+		--借支排除
+		and charindex('借支',minusitem)=0
+		group by carno,driverno	
+	end
+	else
+	begin
+		insert into @tmp9(carno,driverno,driverplus,driverminus)
+		select carno,driverno,SUM(ISNULL(plusmoney,0)),SUM(ISNULL(minusmoney,0)) 
+		from carchg
+		where left(datea,6)=@t_mon and not(ISNULL(plusmoney,0)=0 and ISNULL(minusmoney,0)=0)
+		--排除 代收、付,暫收
+		and (left(acc1,4)!='2195') and (left(acc1,4)!='1191') 
+		and (left(acc1,4)!='2191') and (left(acc1,4)!='1149') 
+		and (left(acc1,4)!='1194') and (left(acc1,4)!='1129') 
+		and (left(acc1,4)!='4201') and (left(acc1,4)!='4202') 
+		--有付款廠商的就判斷為代收、代付
+		and len(isnull(tggno,''))=0
+		group by carno,driverno
+	end
+	update #z_trana set driverplus=case when b.money2=0 then 0 else round(a.money2/b.money2*c.driverplus,0) end
+		,driverminus=case when b.money2=0 then 0 else round(a.money2/b.money2*c.driverminus,0) end
+	from #z_trana a
+	right join (select carno,driverno,SUM(money2) money2 from #z_trana where isnull(money2,0)>0 group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	right join @tmp9 c on a.carno=c.carno and a.driverno=c.driverno
+	where isnull(a.money2,0)>0
+	--==修正金額
+	update @tmp9 set driverplus1=b.mm1,driverminus1=b.mm2
+	from @tmp9 a
+	right join (select carno,driverno,SUM(ISNULL(driverplus,0)) mm1,SUM(ISNULL(driverminus,0)) mm2 
+		from #z_trana group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	update @tmp9 set driverplus2= ISNULL(driverplus,0)-ISNULL(driverplus1,0),driverminus2= ISNULL(driverminus,0)-ISNULL(driverminus1,0)	
+	delete @tmp9 where ISNULL(driverplus2,0)=0 and ISNULL(driverminus2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money2一次補1調整,LOOP 直到沒誤差
+	update #z_trana set driverplus = a.driverplus + case when d.driverplus2<0 then -1 else 1 end * (floor(ABS(d.driverplus2)/c.nn)+case when (cast(ABS(d.driverplus2) as int)%c.nn)>=b.recno then 1 else 0 end)
+		,driverminus = a.driverminus + case when d.driverminus2<0 then -1 else 1 end * (floor(ABS(d.driverminus2)/c.nn)+case when (cast(ABS(d.driverminus2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno,driverno order by money2) recno
+		,tranaccy,tranno,trannoq from #z_trana where money2!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select driverno,carno,COUNT(1) nn from #z_trana where money2!=0 group by carno,driverno) c on a.carno=c.carno and a.driverno=c.driverno
+	right join @tmp9 d on a.carno=d.carno and a.driverno=d.driverno	
+	--==無出車單的另外寫入
+	update @tmp9 set driverplus1=b.mm1,driverminus1=b.mm2
+	from @tmp9 a
+	right join (select carno,driverno,SUM(ISNULL(driverplus,0)) mm1,SUM(ISNULL(driverminus,0)) mm2 
+		from #z_trana group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	update @tmp9 set driverplus2= ISNULL(driverplus,0)-ISNULL(driverplus1,0),driverminus2= ISNULL(driverminus,0)-ISNULL(driverminus1,0)	
+	delete @tmp9 where ISNULL(driverplus2,0)=0 and ISNULL(driverminus2,0)=0 
+	insert into #z_trana(carno,driverno,driverplus,driverminus)
+	select carno,driverno,driverplus2,driverminus2 from @tmp9
+	--************************************************************************
+	--司機付************************************************************************
+	declare @tmp10 table(
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driverpay float,
+		driverpay1 float,--修正用
+		driverpay2 float--修正用
+	)
+	insert into @tmp10(carno,driverno,driverpay)
+	select carno,ISNULL(driverno,''),sum(isnull(driverpay,0)) 
+	from carborr
+	where left(datea,6)=@t_mon and typea='維修' and isnull(driverpay,0)!=0
+	group by carno,ISNULL(driverno,''),isnull(driverno,'')
+	
+	update #z_trana set driverpay=case when b.money1=0 then 0 else round(a.money1/b.money1*c.driverpay,0) end
+	from #z_trana a
+	right join (select carno,SUM(money1) money1 from #z_trana where isnull(money1,0)>0 group by carno) b on a.carno=b.carno
+	right join @tmp10 c on a.carno=c.carno and a.driverno=c.driverno
+	where isnull(a.money1,0)>0
+	--==修正金額
+	update @tmp10 set driverpay1=b.mm1
+	from @tmp10 a
+	right join (select carno,driverno,SUM(ISNULL(driverpay,0)) mm1 from #z_trana group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	
+	update @tmp10 set driverpay2= ISNULL(driverpay,0)-ISNULL(driverpay1,0)	
+	delete @tmp10 where ISNULL(driverpay2,0)=0 
+	--==在平均分攤金額再加總時,多少會有誤差,因此依money1一次補1調整,LOOP 直到沒誤差
+	update #z_trana set driverpay = a.driverpay + case when d.driverpay2<0 then -1 else 1 end * (floor(ABS(d.driverpay2)/c.nn)+case when (cast(ABS(d.driverpay2) as int)%c.nn)>=b.recno then 1 else 0 end)
+	from #z_trana a
+	right join(select ROW_NUMBER()over(partition by carno,driverno order by money1) recno
+		,tranaccy,tranno,trannoq from #z_trana where money1!=0) b on a.tranaccy=b.tranaccy 
+		and a.tranno=b.tranno and a.trannoq=b.trannoq
+	right join(select carno,driverno,COUNT(1) nn from #z_trana where money1!=0 group by carno,driverno) c on a.carno=c.carno and a.driverno=c.driverno
+	right join @tmp10 d on a.carno=d.carno and a.driverno=d.driverno	
+	--==無出車單的另外寫入
+	update @tmp10 set driverpay1=b.mm1
+	from @tmp10 a
+	right join (select carno,driverno,SUM(ISNULL(driverpay,0)) mm1 from #z_trana group by carno,driverno) b on a.carno=b.carno and a.driverno=b.driverno
+	
+	update @tmp10 set driverpay2= ISNULL(driverpay,0)-ISNULL(driverpay1,0)	
+	delete @tmp10 where ISNULL(driverpay2,0)=0 
+	insert into #z_trana(carno,driverno,driverpay)
+	select carno,driverno,driverpay2 from @tmp10
+	--===============================================================
+	delete trans_sum where mon=@t_mon
+	insert into trans_sum
+	select @t_mon,* from #z_trana
+	drop table #z_trana;

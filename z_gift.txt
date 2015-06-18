@@ -1,0 +1,449 @@
+z_gift1:--z_gift1
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_tsendmemo nvarchar(20)
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then CHAR(255) else [2] end
+set @t_tsendmemo = case when '#non' = [3] then '' else [3] end
+declare @tmp table(
+		gno nvarchar(1),
+		n int identity,
+		nick nvarchar(20),
+		comp nvarchar(50),
+		tel nvarchar(50),
+		addr nvarchar(90),
+		product nvarchar(50),
+		mount float,
+		chg float,
+		sales nvarchar(20),
+		memo nvarchar(max),
+		acomp2 nvarchar(50),
+		[message] nvarchar(max)
+)
+insert into @tmp
+select '0' gno,case when len(d.nick)>0 then d.nick else left(c.comp,4) end,
+c.comp+c.namea+c.job,c.tel,c.addr_cust,a.gift,b.mount,b.money,a.sales,b.memo,a.acomp2,a.message
+from giftsend a
+left join giftsends b on a.noa = b.noa
+left join giftcust c on c.noa = b.custno
+left join cust d on c.custno = d.noa
+where (a.senddate between @t_bdate and @t_edate) and
+(len(@t_tsendmemo) = 0 or @t_tsendmemo = a.sendmemo)
+
+select gno,n,nick,comp,tel,addr,product,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chg),1)),4,12)) chg,
+sales,memo,acomp2,message
+from @tmp;
+--************************************************************************************
+z_gift2:--z_gift2
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bgiftno nvarchar(20)
+	declare @t_egiftno nvarchar(20)
+	declare @t_store nvarchar(max)
+	declare @t_part nvarchar(max)
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then char(255) else [2] end
+	set @t_bgiftno = case when '#non'=[4] then '' else [4] end
+	set @t_egiftno = case when '#non'=[5] then char(255) else [5] end
+	set @t_store = case when '#non'=[6] then '' else [6] end
+	set @t_part = case when '#non'=[7] then '' else [7] end
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @typea nvarchar(10)
+	declare @storeno nvarchar(20)
+	declare @giftno nvarchar(20)
+	declare @datea nvarchar(20)
+	declare @mount float
+	declare @price float
+	declare @total float
+	declare @mount2 float
+	
+	declare @tmp table(
+		gno nvarchar(3),
+		typea nvarchar(10),
+		datea nvarchar(20),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		storeno nvarchar(20),
+		giftno nvarchar(20),	
+		gift nvarchar(40),
+		mount float,
+		price float,
+		total float,
+		mount2 float
+	)
+	insert into @tmp
+	select '0','B',ISNULL(b.indate,''),a.noa+'入料',a.noq,isnull(b.storeno,''),isnull(a.giftno,''),a.gift,isnull(a.mount,0),ISNULL(a.price,0),ISNULL(a.total,0),0
+	from giftins a
+	left join giftin b on a.noa=b.noa
+	where (ISNULL(a.giftno,'') between @t_bgiftno and @t_egiftno) and (@t_store = '99' or @t_store = a.storeno)
+	and (ISNULL(b.indate,'')<=@t_edate)
+	
+	insert into @tmp
+	select '0','C',ISNULL(b.senddate,''),a.noa+'領料',a.noq,isnull(b.storeno,''),isnull(b.giftno,''),b.gift,isnull(a.mount,0),null,null,0
+	from giftsends a
+	left join giftsend b on a.noa=b.noa
+	where (ISNULL(b.giftno,'') between @t_bgiftno and @t_egiftno) and (@t_store = '99' or @t_store = b.storeno)
+	and (ISNULL(b.senddate,'')<=@t_edate) and b.storeno!=''
+	
+	declare @bmount float
+	declare cursor_table cursor for
+	select storeno,giftno from @tmp group by storeno,giftno
+	open cursor_table
+	fetch next from cursor_table
+	into @storeno,@giftno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @bmount=0 ,@mount2=0
+	
+		declare cursor_table2 cursor for
+		select noa,noq,typea,datea,isnull(mount,0) from @tmp where storeno=@storeno and giftno=@giftno order by datea,typea,noa,noq
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa,@noq,@typea,@datea,@mount
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if(@typea='A')
+				set @mount2 = @mount
+			else
+			begin
+				set @mount2 = @mount2 + case when @typea='B' then @mount else -@mount end
+			end
+			update @tmp set mount2=@mount2 where noa=@noa and noq=@noq
+			if(@datea<@t_bdate)
+			begin
+				set @bmount=@mount2
+			end
+			fetch next from cursor_table2
+			into @noa,@noq,@typea,@datea,@mount
+		end
+		close cursor_table2
+		deallocate cursor_table2	
+		insert into @tmp(gno,typea,storeno,giftno,noa,mount2)values('1','',@storeno,@giftno,'庫存量',@mount2)
+
+		insert into @tmp(gno,typea,storeno,giftno,noa,mount2)values('0','',@storeno,@giftno,'前期存量',@bmount)
+
+		fetch next from cursor_table
+		into @storeno,@giftno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	delete @tmp where datea<@t_bdate and len(typea)>0
+	select a.*
+	,a.storeno sa 
+	,b.store sb
+	,a.giftno ba
+	,c.product bb
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.mount),1)),4,12)) mt1
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.total),1)),4,12)) tt
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.mount2),1)),4,12)) mt2
+	from @tmp a
+	left join store b on a.storeno=b.noa
+	left join gift c on c.noa=a.giftno
+	order by a.storeno,a.giftno,a.gno,a.datea,a.typea,a.noa,a.noq;
+--**************************************************************************************
+z_gift3:--z_gift3
+
+declare @t_bgiftno nvarchar(20)
+declare @t_egiftno nvarchar(20)
+declare @t_store nvarchar(max)
+	
+set @t_bgiftno = case when '#non'=[4] then '' else [4] end
+set @t_egiftno = case when '#non'=[5] then char(255) else [5] end
+set @t_store = case when '#non'=[6] then '' else [6] end
+
+declare @now_date nvarchar(10)--現在日期
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+--************************************************
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @typea nvarchar(10)
+	declare @storeno nvarchar(20)
+	declare @giftno nvarchar(20)
+	declare @datea nvarchar(20)
+	declare @mount float
+	declare @price float
+	declare @total float
+	declare @mount2 float
+	
+	declare @tmp table(
+		gno nvarchar(3),
+		typea nvarchar(10),
+		datea nvarchar(20),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		storeno nvarchar(20),
+		giftno nvarchar(20),	
+		gift nvarchar(40),
+		mount float,
+		price float,
+		total float,
+		mount2 float
+	)
+	insert into @tmp
+	select '0','B',ISNULL(b.indate,''),a.noa+'入料',a.noq,isnull(a.storeno,''),isnull(a.giftno,''),a.gift,isnull(a.mount,0),ISNULL(a.price,0),ISNULL(a.total,0),0
+	from giftins a
+	left join giftin b on a.noa=b.noa
+	where (ISNULL(a.giftno,'') between @t_bgiftno and @t_egiftno) and (@t_store = '99' or @t_store = b.storeno)
+	and (ISNULL(b.indate,'')<=@now_date)
+	
+	insert into @tmp
+	select '0','C',ISNULL(b.senddate,''),a.noa+'領料',a.noq,isnull(b.storeno,''),isnull(b.giftno,''),b.gift,isnull(a.mount,0),null,null,0
+	from giftsends a
+	left join giftsend b on a.noa=b.noa
+	where (ISNULL(b.giftno,'') between @t_bgiftno and @t_egiftno) and (@t_store = '99' or @t_store = b.storeno)
+	and (ISNULL(b.senddate,'')<=@now_date) and b.storeno!=''
+
+	insert into @tmp
+	select '1'gno,''typea,'999/99/99' datea,''noa,''noq,storeno,giftno,''gift,0 mount, 0 price,0 total
+	,SUM((case when typea='B' then 1 else -1 end )*mount)mount2
+	 from @tmp group by storeno,giftno
+	
+	delete @tmp where gno='0'
+	update @tmp set gno='0'
+	delete @tmp where mount2=0
+	
+	select gno,a.storeno sa 
+	,b.store sb
+	,a.giftno ba
+	,c.product bb
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.mount2),1)),4,12)) mt2
+	from @tmp a
+	left join store b on a.storeno=b.noa
+	left join gift c on c.noa=a.giftno
+	order by a.storeno,a.giftno,a.gno,a.datea,a.typea,a.noa,a.noq;;
+	
+------------------------------------------------------------------------------------------------------------------------------------------------
+z_gift4:--z_gift4
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bgiftno nvarchar(20)
+	declare @t_egiftno nvarchar(20)
+	declare @t_storeno nvarchar(max)
+	declare @t_part nvarchar(max)
+	set @t_bdate = case when '#non'=[1] then '' else [1] end
+	set @t_edate = case when '#non'=[2] then char(255) else [2] end
+	set @t_bgiftno = case when '#non'=[4] then '' else [4] end
+	set @t_egiftno = case when '#non'=[5] then char(255) else [5] end
+	set @t_storeno = case when '#non'=[6] then '' else [6] end
+	
+declare @tmp table( 
+storeno nvarchar(20), 
+gno nvarchar(1), 
+datea nvarchar(10), 
+giftno nvarchar(20), 
+gift nvarchar(50), 
+price float, 
+inmount decimal (14,2), 
+outmount decimal (14,2), 
+stkmount decimal (14,2), 
+usename nvarchar(20), 
+memo nvarchar (200) 
+) 
+
+
+declare	@storeno nvarchar(20) 
+declare	@giftno nvarchar(20) 
+declare	@gift nvarchar(50) 
+declare	@datea nvarchar(10) 
+declare	@mount decimal (14,2) 
+declare @total decimal (14,2) 
+declare	@t_mount decimal (14,2) 
+declare @t_total decimal (14,2) 
+declare @t_price float 
+set @t_total=0 
+set @t_mount=0 
+
+--計算沒有盤存的庫存 
+declare gift_table cursor for 
+select b.noa,a.noa,a.product from gift a,store b where a.noa between @t_bgiftno and @t_egiftno 
+and a.noa between @t_bgiftno and @t_egiftno
+open gift_table 
+fetch next from gift_table 
+into @storeno,@giftno,@gift 
+while(@@FETCH_STATUS <> -1) 
+begin 
+--計算入庫平均單價 
+set @t_price=isnull((select sum(b.total) 
+from giftin a left join giftins b on a.noa=b.noa 
+where b.giftno=@giftno and a.indate < @t_bdate and b.storeno=@storeno 
+group by b.giftno),0) /nullif(isnull((select sum(b.mount) 
+from giftin a left join giftins b on a.noa=b.noa 
+where b.giftno=@giftno and a.indate < @t_bdate and b.storeno=@storeno 
+group by b.giftno),0) ,0) 
+
+
+--計算價錢 
+set @t_total= 
+--入料 
+isnull((select sum(b.total) total 
+from giftin a left join giftins b on a.noa=b.noa 
+where b.giftno=@giftno and a.indate < @t_bdate and b.storeno=@storeno 
+group by b.giftno),0) 
+- 
+isnull((select sum((b.mount)*@t_price) total 
+from giftsend a left join giftsends b on a.noa=b.noa 
+where a.giftno=@giftno and a.senddate < @t_bdate and a.storeno=@storeno 
+group by a.giftno),0) 
+
+--計算庫存 
+set @t_mount= 
+--入料 
+isnull((select sum(b.mount) mount 
+from giftin a left join giftins b on a.noa=b.noa 
+where b.giftno=@giftno and a.indate < @t_bdate and b.storeno=@storeno 
+group by b.giftno),0) 
+--領料&繳回 
+-isnull((select sum(b.mount) mount1 
+from giftsend a left join giftsends b on a.noa=b.noa 
+where a.giftno=@giftno and a.senddate < @t_bdate and a.storeno=@storeno 
+group by a.giftno),0) 
+--存入沒有盤存的庫存 
+insert into @tmp 
+select @storeno,'0',' 庫存',@giftno,@gift,round(@t_total/nullif(@t_mount,0),0),0,0,@t_mount,'','' 
+
+set @t_total=0 
+set @t_mount=0 
+
+fetch next from gift_table 
+into @storeno,@giftno,@gift 
+
+end 
+close gift_table 
+deallocate gift_table 
+
+
+--插入進出貨明細 
+insert into @tmp 
+select b.storeno,'0',a.indate,b.giftno,b.gift,b.price,b.mount,null,null,null,b.memo 
+from giftin a left join giftins b on a.noa=b.noa 
+where a.indate between @t_bdate and @t_edate and b.giftno between @t_bgiftno and @t_egiftno 
+
+insert into @tmp 
+select a.storeno,'0',a.senddate,a.giftno,a.gift,null,null,b.mount,null,a.sales,b.memo 
+from giftsend a left join giftsends b on a.noa=b.noa 
+where a.senddate between @t_bdate and @t_edate and a.giftno between @t_bgiftno and @t_egiftno and storeno!=''
+
+declare @result table( 
+	storeno nvarchar(20), 
+	gno nvarchar(1), 
+	datea nvarchar(10), 
+	giftno nvarchar(20), 
+	gift nvarchar(50), 
+	price float, 
+	inmount decimal (14,2), 
+	outmount decimal (14,2), 
+	stkmount decimal (14,2), 
+	usename nvarchar(20), 
+	memo nvarchar (200), 
+	sp nvarchar (1) 
+) 
+insert into @result 
+select *,'0' from @tmp order by storeno,giftno,datea 
+
+
+--更新庫存量 
+
+declare @inmount decimal (14,2) 
+declare @outmount decimal (14,2) 
+declare @stkmount decimal (14,2) 
+declare @t_stkmount decimal (14,2) 
+
+set @t_stkmount=0 
+
+declare gift_table cursor for 
+select datea,giftno,inmount,outmount,stkmount from @result 
+open gift_table 
+fetch next from gift_table 
+into @datea,@giftno,@inmount,@outmount,@stkmount 
+while(@@FETCH_STATUS <> -1) 
+begin 
+if(@datea=' 庫存') 
+begin 
+set @t_stkmount=@stkmount 
+end 
+else 
+begin 
+update @result 
+set stkmount=@t_stkmount+isnull(@inmount,0)-isnull(@outmount,0)	where current of gift_table	
+set @t_stkmount=@t_stkmount+isnull(@inmount,0)-isnull(@outmount,0) 
+end 
+
+fetch next from gift_table 
+into @datea,@giftno,@inmount,@outmount,@stkmount 
+end 
+close gift_table 
+deallocate gift_table 
+
+insert into @result 
+select a.storeno,'1',null,a.giftno,b.product,null,null,null,null,null,null,'0' from @result a left join gift b on a.giftno=b.noa group by a.storeno,a.giftno,b.product 
+
+insert into @result 
+select storeno,'0',null,giftno,null,null,null,null,null,null,null,'1' from @result group by storeno,giftno 
+insert into @result 
+select storeno,'0',null,giftno,null,null,null,null,null,null,null,'1' from @result group by storeno,giftno 
+update @result 
+set gift=null where datea=' 庫存' 
+
+
+-------------不要讓同一個資材拆成兩頁 
+declare @space bit	
+declare @count int 
+declare	@t_giftno nvarchar(20) 
+declare	@t_giftno2 nvarchar(20) 
+declare	@t_giftno33 nvarchar(20) 
+declare	@gno nvarchar(1) 
+declare	@t_gno nvarchar(1) 
+declare	@x_storeno nvarchar(20) 
+set @space=1 
+set @t_giftno='XXXX' 
+set @t_giftno2='YYYY' 
+set @x_storeno='ZZZZZ' 
+
+set @count=0 
+declare gift_table cursor for 
+select storeno,gno,giftno from @result order by storeno,giftno,gno desc ,sp 
+open gift_table 
+fetch next from gift_table 
+into @storeno,@gno,@giftno 
+while(@@FETCH_STATUS <> -1) 
+begin 
+if (@x_storeno='ZZZZZ') 
+set @x_storeno=@storeno 
+set @count=@count+1 
+if(@gno='1') 
+set @count=@count+1 
+if(@count>39 or @storeno!=@x_storeno) 
+begin 
+insert into @result 
+select @storeno,'2',null,@giftno,null,null,null,null,null,null,null,'1' 
+set @count=0 
+end 
+if (@x_storeno!=@storeno) 
+set @x_storeno=@storeno 
+fetch next from gift_table 
+into @storeno,@gno,@giftno 
+end 
+close gift_table 
+deallocate gift_table 
+
+
+------------------- 
+if(@t_storeno='99') 
+select store,gno,a.datea,giftno xgift,gift,usename,memo, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price),1)),4,12)) price, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmount),1)),4,12)) outmount, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stkmount),1)),4,12)) stkmount 
+from @result a left join store b on a.storeno=b.noa order by storeno,giftno,gno desc,sp 
+else 
+select store,gno,a.datea,giftno xgift,gift,usename,memo, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,price),1)),4,12)) price, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmount),1)),4,12)) inmount, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmount),1)),4,12)) outmount, 
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,stkmount),1)),4,12)) stkmount 
+from @result a left join store b on a.storeno=b.noa where storeno=@t_storeno order by storeno,giftno,gno desc,sp ;

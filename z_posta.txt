@@ -1,0 +1,161 @@
+﻿z_posta1:--z_posta1
+declare @t_bnoa nvarchar(35)
+declare @t_enoa nvarchar(35)
+set @t_bnoa = case when '#non'=[2] then '' else [2] end
+set @t_enoa = case when '#non'=[3] then char(255) else [3] end
+select 
+	'0' gno,a.useno,a.comp,a.part,a.conn,
+	SUBSTRING(a.zipcode,1,1) z1,
+	SUBSTRING(a.zipcode,2,1) z2,
+	SUBSTRING(a.zipcode,3,1) z3,
+	SUBSTRING(a.zipcode,4,1) z4,
+	SUBSTRING(a.zipcode,5,1) z5,
+	a.addr
+from postas a where (a.noa between @t_bnoa and @t_enoa) order by noa,noq,useno;
+---------********************************************************-----------
+z_posta2:--z_posta2
+declare @t_pageline int = 30   --------一頁幾行
+declare @t_bnoa nvarchar(35)
+declare @t_enoa nvarchar(35)
+set @t_bnoa = case when '#non'=[2] then '' else [2] end
+set @t_enoa = case when '#non'=[3] then char(255) else [3] end
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	orderno int,
+	pageno int,
+	typea nvarchar(30),
+	noa nvarchar(35),
+	a_comp nvarchar(max),
+	a_addr nvarchar(max),
+	tel nvarchar(90),
+	b_comp nvarchar(max),
+	b_addr nvarchar(max),
+	b_zip nvarchar(max),
+	b_memo nvarchar(max),
+	pcount int
+)
+insert into @tmp
+	select
+	 '0',ROW_NUMBER()over(partition by a.noa order by a.noa),1,
+	 a.typea,a.noa,a.comp,a.addr,a.tel,b.comp,b.addr,b.zipcode,b.memo,0
+	from posta a
+	left join postas b on a.noa = b.noa
+	where (a.noa between @t_bnoa and @t_enoa)
+	order by a.noa
+declare @a_noa nvarchar(30)
+declare @a_count int
+declare @idno int
+declare @k int = 0 ----差幾頁
+declare @pageCount int
+declare @orderno int
+declare @pageno int
+
+declare cursor_table cursor for
+	select noa,count(*),max(orderno) from @tmp group by noa
+open cursor_table
+fetch next from cursor_table
+into @a_noa,@a_count,@orderno
+while(@@FETCH_STATUS <> -1)
+begin		
+	if(@a_count > @t_pageline)
+	begin
+		set @k = CEILING((cast(@a_count as float)/@t_pageline))
+		while(@k > 0)
+		begin
+			update @tmp set pageno = @k where orderno > ((@k-1)*@t_pageline) and orderno <= (@k*@t_pageline)
+			set @k -=1
+		end
+	end
+	fetch next from cursor_table
+	into @a_noa,@a_count,@orderno
+end
+close cursor_table
+deallocate cursor_table
+
+update @tmp set orderno = orderno-((pageno-1)*@t_pageline)
+
+declare cursor_table cursor for
+	select distinct noa,max(orderno),pageno,min(idno),count(*) from @tmp group by noa,pageno
+open cursor_table
+fetch next from cursor_table
+into @a_noa,@orderno,@pageno,@idno,@a_count
+while(@@FETCH_STATUS <> -1)
+begin
+	set @k = @t_pageline -(@a_count%@t_pageline)
+	set @pageCount = @a_count/@t_pageline
+	if(@k < @t_pageline and (@pageCount =0))
+	begin
+		while(@k > 0)
+		begin
+			insert into @tmp(gno,orderno,pageno,noa,typea,a_comp,a_addr,tel)
+				select '0',(@orderno+1),@pageno,@a_noa,typea,a_comp,a_addr,tel from @tmp where idno = @idno
+			set @k = @k-1
+			set @orderno = @orderno +1
+		end
+	end
+	insert into @tmp(gno,orderno,pageno,noa)
+		select '1',(@t_pageline+1),pageno,noa from @tmp where gno=0 and noa=@a_noa and pageno=@pageno group by noa,pageno
+	insert into @tmp(gno,orderno,pageno,noa) 
+		select '2',(@t_pageline+2),pageno,noa from @tmp where gno=0 and noa=@a_noa and pageno=@pageno group by noa,pageno
+	update @tmp set pcount = (select count(*) from @tmp where (noa=@a_noa) and not(b_comp is null and b_addr is null) ) where noa=@a_noa
+	fetch next from cursor_table
+	into @a_noa,@orderno,@pageno,@idno,@a_count
+end
+close cursor_table
+deallocate cursor_table
+update @tmp set typea = (case typea when '1' then '限時掛號' when '2' then '掛號' when '3' then '快捷郵件' end)
+select
+	gno,idno,orderno,pageno,typea,noa,a_comp,a_addr,tel,b_comp,b_addr,b_zip,b_memo,pcount,
+	case when (b_comp is null and b_addr is null) then null else orderno end pid
+from @tmp order by noa desc,pageno,gno,orderno;
+----------------------------------------------------------------------------------------------------------------------
+z_posta3:--z_posta3
+declare @t_bnoa nvarchar(35)
+declare @t_enoa nvarchar(35)
+set @t_bnoa = case when '#non'=[2] then '' else [2] end
+set @t_enoa = case when '#non'=[3] then char(255) else [3] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(max),
+	noq nvarchar(max),
+	useno nvarchar(max),
+	comp nvarchar(max),
+	conn nvarchar(max),
+	part nvarchar(max),
+	z1 nvarchar(10),
+	z2 nvarchar(10),
+	z3 nvarchar(10),
+	z4 nvarchar(10),
+	z5 nvarchar(10),
+	addr nvarchar(max),
+	c1 nvarchar(max),
+	c2 nvarchar(max)
+)
+
+insert @tmp
+select '0' gno,a.noa,a.noq,a.useno,
+	SUBSTRING(dbo.charbr(a.comp,1),case when CHARINDEX('<BR>',dbo.charbr(a.comp,1))=1 then 5 else 1 end,len(dbo.charbr(a.comp,1))) comp,
+	SUBSTRING(dbo.charbr(a.conn,1),case when CHARINDEX('<BR>',dbo.charbr(a.conn,1))=1 then 5 else 1 end,len(dbo.charbr(a.conn,1))) conn,
+	SUBSTRING(dbo.charbr(a.part,1),case when CHARINDEX('<BR>',dbo.charbr(a.part,1))=1 then 5 else 1 end,len(dbo.charbr(a.part,1))) part,
+	SUBSTRING(a.zipcode,1,1) z1, 
+	SUBSTRING(a.zipcode,2,1) z2, 
+	SUBSTRING(a.zipcode,3,1) z3, 
+	SUBSTRING(a.zipcode,4,1) z4, 
+	SUBSTRING(a.zipcode,5,1) z5, 
+	SUBSTRING(dbo.charbr(a.addr,1),case when CHARINDEX('<BR>',dbo.charbr(a.addr,1))=1 then 5 else 1 end,len(dbo.charbr(a.addr,1))) addr
+	,'',''
+from postas a where (a.noa between @t_bnoa and @t_enoa) order by noa,noq,useno
+
+update @tmp
+set c1=(case when len(conn)=0 and len(part)=0 then comp else part+(case when len(part)>0 then '<BR><BR><BR>' else '' end)+conn end)
+,c2=(case when len(conn)=0 and len(part)=0 then '' else comp end)
+
+update @tmp
+set c1=replace(replace(c1,'(','︵'),')','︶')
+,c2=replace(replace(c2,'(','︵'),')','︶')
+
+select * from @tmp order by noa,noq,useno
+;
+

@@ -1,0 +1,846 @@
+z_cugp1:--z_cugp1
+declare @t_bstation nvarchar(50)
+declare @t_estation nvarchar(50)
+declare @t_bprocess nvarchar(50)
+declare @t_eprocess nvarchar(50)
+declare @t_edate nvarchar(50)
+declare @t_orde nvarchar(50)
+
+set @t_bstation = case when '#non' = [3] then '' else  [3] end
+set @t_estation = case when '#non' = [4] then CHAR(255) else  [4] end
+set @t_bprocess = case when '#non' = [5] then '' else  [5] end
+set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
+set @t_edate = case when '#non' = [7] then '999/99/99' else  [7] end
+set @t_orde = case when '#non' = [8] then '' else  [8] end
+---------------------------------------------------------------------------------------------------------------------------------
+--今天日期
+declare @now_date nvarchar(30)
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+
+declare @tmp table(
+	gno  nvarchar(1),
+	accy nvarchar(10),
+	sidno int identity(1,1),
+	idno nvarchar(50),
+	workno nvarchar(50),
+	processno nvarchar(50),
+	processs nvarchar(50),
+	stationno nvarchar(50),
+	stations nvarchar(50),
+	productno nvarchar(50),
+	products nvarchar(90),
+	mount float,
+	hours float, --製令需花費的時數
+	thours float,
+	days float,
+	workdate nvarchar(50),
+	enddate nvarchar(50),
+	datea nvarchar(50),
+	ghours float ,--標準日工時
+	gens float  --標準日產能
+)
+
+--插入已排程的製令且未完工
+insert into @tmp
+select '0',b.accy,a.nos,a.workno,case when isnull(b.processno,'')='' then 'zzzz' else b.processno end,a.process
+,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
+,b.productno,b.product,a.mount,a.hours,'',1,a.datea,a.datea,a.datea
+,c.hours,isnull(c.gen,0) gen
+from view_cugu a left join view_work b on a.workno=b.noa
+left join station c on a.stationno=c.noa left join uca d on b.productno=d.noa
+where isnull(b.enda,'0')!='1' and isnull(b.isfreeze,'0')!='1'
+and a.stationno between @t_bstation and @t_estation
+order by b.processno,b.datea,a.nos
+
+--insert into @tmp
+--select DISTINCT '0',b.accy,a.noq,a.workno,case when a.processno='' then 'zzzz' else a.processno end,a.process
+--,case when a.workno='' then a.stationno else b.stationno end
+--,case when a.workno='' then a.station else b.station end
+--,a.productno,a.product,a.mount,a.hours,'',a.days,a.cuadate,a.uindate,a.uindate,d.hours,c.gen
+--from view_cugs a left join view_work b on a.workno=b.noa
+--left join station c on b.stationno=c.noa left join uca d on b.productno=d.noa
+--where isnull(b.enda,'0')!='1' and isnull(b.isfreeze,'0')!='1' and isnull(a.issel,'0')='1'
+--and (case when a.workno='' then a.stationno else b.stationno end between @t_bstation and @t_estation)
+--order by a.noa,a.noq
+
+--插入未排程的製令
+insert into @tmp
+select '2',a.accy,'',a.noa,a.processno,a.process,a.stationno,a.station,a.productno,a.product
+,a.mount,a.hours,'',ceiling(a.hours/NULLIF(b.gen,0))+1,cuadate,uindate,'',b.hours,isnull(b.gen,0)
+from view_work a left join station b on a.stationno=b.noa left join uca c on a.productno=c.noa
+where isnull(a.enda,'0')!='1' and isnull(a.isfreeze,'0')!='1' and isnull(a.workdate,'')=''
+and (a.stationno between @t_bstation and @t_estation) and a.noa not in (select workno from view_cugu )
+and a.stationno!='' and (a.processno between @t_bprocess and @t_eprocess)
+--讓要最先做的製程放在最前面
+order by a.stationno,case when a.cuadate='' then '999/99/99' else a.cuadate end
+,case when a.uindate='' then '999/99/99' else a.uindate end,a.rank,a.processno,a.noa desc,a.hours
+
+--insert into @tmp
+--select '2',a.accy,'',a.noa,a.processno,a.process,a.stationno,a.station,a.productno,a.product,a.mount,a.hours,'',case when c.hours=0 then 0 else round(a.mount/(b.gen/NULLIF(c.hours,0)),2) end,cuadate,uindate,'',c.hours,b.gen
+--from view_work a left join station b on a.stationno=b.noa left join uca c on a.productno=c.noa
+--where isnull(a.enda,'0')!='1' and isnull(a.isfreeze,'0')!='1' and isnull(a.workdate,'')=''
+--and (a.stationno between @t_bstation and @t_estation) and a.noa not in (select workno from view_cugu) and a.stationno!='' and (a.processno between @t_bprocess and @t_eprocess)
+--order by a.stationno,case when a.cuadate='' then '999/99/99' else a.cuadate end,case when a.uindate='' then '999/99/99' else a.uindate end,a.processno,a.noa desc,a.hours--讓要最先做的製程放在最前面
+
+declare @t_stationno nvarchar(50)
+declare @stationno nvarchar(50)
+declare @sidno nvarchar(50)
+
+insert into @tmp (gno,stationno,stations,workdate,enddate,datea,ghours,gens)
+select '1',stationno,MAX(stations),MAX(workdate),MAX(enddate),@now_date,MAX(ghours),MAX(gens) from @tmp group by stationno
+insert into @tmp (gno,stationno,stations)
+select '3',stationno,MAX(stations) from @tmp group by stationno
+
+update a
+set datea=(select MAX(datea) from @tmp where stationno=a.stationno)
+from @tmp a where gno='1'
+
+--處理未排程的開工日與完工日
+declare @gno nvarchar(30)
+declare @hours float
+declare @gens float
+declare @t_ghours float
+declare @t_gens float
+declare @bgens float --剩餘產能
+declare @s_bgens float --指定剩餘產能
+declare @t_enddate nvarchar(30) --排程的完工時間
+declare @t_workdate nvarchar(30) --排程的開工時間
+declare @s_enddate nvarchar(30) --指定排程的完工時間
+declare @s_workdate nvarchar(30) --指定排程的開工時間
+declare @workdate nvarchar(30)
+declare @enddate nvarchar(30)
+declare @mount float
+declare @t_weekday int--星期
+declare @workno nvarchar(30)
+
+--暫存產能
+declare @tmpa table(
+	sidno int,
+	workdate nvarchar(50),
+	enddate nvarchar(50),
+	bgens float,
+	workno nvarchar(50)
+)
+
+declare cursor_table cursor for
+select stationno,gno,ghours,gens,mount,workdate,enddate,sidno,workno from @tmp where gno='1' or gno='2' order by stationno,gno,idno
+open cursor_table
+fetch next from cursor_table
+into @stationno,@gno,@hours,@gens,@mount,@workdate,@enddate,@sidno,@workno
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@gno='1')
+	begin
+		if((select COUNT(*) from @tmp where gno='0' and stationno=@stationno)=0 --沒有排程
+			or @enddate<@now_date --今天沒有排程
+		)
+		begin
+			set @bgens=isnull((select gen from view_cugt where noa=@stationno and datea=@now_date),@gens)
+			set @t_enddate=@now_date
+		end
+		else
+		begin
+			set @bgens=isnull((select gen from view_cugt where noa=@stationno and datea=@enddate),@gens)-isnull((select SUM(hours) from @tmp where gno='0' and stationno=@stationno and datea=@enddate),0)
+			set @t_enddate=@enddate
+		end
+	end
+	else
+	begin
+		--有應開工日且大於目前開工時間 且目前開工日小於等於截止運算日 且開工日當天不在暫存產能內
+		if(@workdate!='' and @workdate>@t_enddate and @t_enddate<=@t_edate
+		and((select count(*) from @tmpa where @workdate between workdate and enddate)=0))
+		begin
+			set @s_workdate=@workdate
+			set @s_enddate=@workdate
+			--表示剩下產能
+			set @s_bgens=isnull((select gen from view_cugt where noa=@stationno and datea=@workdate),@gens)-@hours
+
+			while (@s_bgens < 0) --如果剩下產能小於0
+			begin
+				--往後一天
+				set @s_enddate=
+				left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),3)+'/'
+				+right(left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),5),2)+'/'
+				+right(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),2)
+
+				set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@s_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@s_enddate,6),2)+right(@s_enddate,2))-1
+
+				--遇到假日和周休在往後一天
+				while((@t_weekday=0 and isnull((select gen from view_cugt where stationno=@stationno and datea=@s_enddate),0)=0)  --禮拜日且沒有加工
+					or (@t_weekday=6 and isnull((select gen from view_cugt where stationno=@stationno and datea=@s_enddate),case when 1=[2] then @gens else 0 end)=0)) --禮拜六且是否要上班且是否要加班
+				begin
+					set @s_enddate=
+					left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),3)+'/'
+					+right(left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),5),2)+'/'
+					+right(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),2)
+
+					set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@s_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@s_enddate,6),2)+right(@s_enddate,2))-1
+				end
+
+				set @s_bgens=@s_bgens+isnull((select gen from view_cugt where noa=@stationno and datea=@s_enddate),@gens)--加一天產能
+
+			end
+
+			insert into @tmpa
+			select @sidno,@s_workdate,@s_enddate,@s_bgens,@workno
+
+			update @tmp
+			set workdate=@s_workdate+(case when @workdate!='' then '<BR>('+@workdate+')' else '' end),enddate=@s_enddate
+			where sidno=@sidno
+		end
+		--處理階層關係
+		else if(left(@workno,11) in (select left(workno,11) from @tmpa))
+		begin
+			set @s_workdate=(select top 1 enddate from @tmpa where left(@workno,11)=left(workno,11) order by sidno desc)
+			set @s_enddate=(select top 1 enddate from @tmpa where left(@workno,11)=left(workno,11) order by sidno desc)
+			set @s_bgens=(select top 1 bgens from @tmpa where left(@workno,11)=left(workno,11) order by sidno desc)-@hours
+
+			--判斷工作日是否大於運算截止日
+			if(@s_workdate>@t_edate)
+			begin
+				delete @tmp
+				where sidno=@sidno
+				fetch next from cursor_table
+				into @stationno,@gno,@hours,@gens,@mount,@workdate,@enddate,@sidno,@workno
+				CONTINUE
+			end
+
+			while (@s_bgens < 0)
+			begin
+				--往後一天
+				set @s_enddate=
+				left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),3)+'/'
+				+right(left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),5),2)+'/'
+				+right(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),2)
+
+				set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@s_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@s_enddate,6),2)+right(@s_enddate,2))-1
+
+				--遇到假日和周休在往後一天
+				while((@t_weekday=0 and isnull((select gen from view_cugt where stationno=@stationno and datea=@s_enddate),0)=0)  --禮拜日且沒有加工
+					or (@t_weekday=6 and isnull((select gen from view_cugt where stationno=@stationno and datea=@s_enddate),case when 1=[2] then @gens else 0 end)=0)) --禮拜六且是否要上班且是否要加班
+				begin
+					set @s_enddate=
+					left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),3)+'/'
+					+right(left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),5),2)+'/'
+					+right(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@s_enddate,3))+1911)+right(left(@s_enddate,6),2)+right(@s_enddate,2)) ),12 )+0890000),7),2)
+
+					set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@s_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@s_enddate,6),2)+right(@s_enddate,2))-1
+				end
+
+				set @s_bgens=@s_bgens+isnull((select gen from view_cugt where noa=@stationno and datea=@s_enddate),@gens)--加一天產能
+
+			end
+
+			insert into @tmpa
+			select @sidno,@s_workdate,@s_enddate,@s_bgens,@workno
+
+			update @tmp
+			set workdate=@s_workdate+(case when @workdate!='' then '<BR>('+@workdate+')' else '' end),enddate=@s_enddate
+			where sidno=@sidno
+		end
+		else
+		begin
+			set @t_workdate=@t_enddate
+			set @bgens=isnull((select gen from view_cugt where noa=@stationno and datea=@t_workdate),@gens)-@hours
+
+			--判斷工作日是否大於運算截止日
+			if(@t_workdate>@t_edate)
+			begin
+				delete @tmp
+				where sidno=@sidno
+				fetch next from cursor_table
+				into @stationno,@gno,@hours,@gens,@mount,@workdate,@enddate,@sidno,@workno
+				CONTINUE
+			end
+
+			while (@bgens < 0)
+			begin
+				--往後一天
+				set @t_enddate=
+				left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@t_enddate,3))+1911)+right(left(@t_enddate,6),2)+right(@t_enddate,2)) ),12 )+0890000),7),3)+'/'
+				+right(left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@t_enddate,3))+1911)+right(left(@t_enddate,6),2)+right(@t_enddate,2)) ),12 )+0890000),7),5),2)+'/'
+				+right(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@t_enddate,3))+1911)+right(left(@t_enddate,6),2)+right(@t_enddate,2)) ),12 )+0890000),7),2)
+
+				set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@t_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@t_enddate,6),2)+right(@t_enddate,2))-1
+
+				--遇到假日和周休在往後一天
+				while((@t_weekday=0 and isnull((select gen from view_cugt where stationno=@stationno and datea=@t_enddate),0)=0)  --禮拜日且沒有加工
+					or (@t_weekday=6 and isnull((select gen from view_cugt where stationno=@stationno and datea=@t_enddate),case when 1=[2] then @gens else 0 end)=0)) --禮拜六且是否要上班且是否要加班
+				begin
+					set @t_enddate=
+					left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@t_enddate,3))+1911)+right(left(@t_enddate,6),2)+right(@t_enddate,2)) ),12 )+0890000),7),3)+'/'
+					+right(left(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@t_enddate,3))+1911)+right(left(@t_enddate,6),2)+right(@t_enddate,2)) ),12 )+0890000),7),5),2)+'/'
+					+right(right('0'+CONVERT (nvarchar(7),CONVERT (VARCHAR(7),dateadd(d,1,CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@t_enddate,3))+1911)+right(left(@t_enddate,6),2)+right(@t_enddate,2)) ),12 )+0890000),7),2)
+
+					set @t_weekday=DATEPART(WEEKDAY, cast(cast(left(@t_enddate,3)as int)+1911 as NVARCHAR(10))+right(left(@t_enddate,6),2)+right(@t_enddate,2))-1
+				end
+
+				set @bgens=@bgens+isnull((select gen from view_cugt where noa=@stationno and datea=@t_workdate),@gens)--加一天產能
+			end
+
+			update @tmp
+			set workdate=@t_workdate+(case when @workdate!='' then '<BR>('+@workdate+')' else '' end),enddate=@t_enddate
+			where sidno=@sidno
+
+			insert into @tmpa
+			select @sidno,@t_workdate,@t_enddate,@bgens,@workno
+
+		end
+	end
+
+	fetch next from cursor_table
+	into @stationno,@gno,@hours,@gens,@mount,@workdate,@enddate,@sidno,@workno
+end
+close cursor_table
+deallocate cursor_table
+
+declare @noq int
+set @t_stationno='XXX___XXXX'
+--寫入idno
+declare cursor_table cursor for
+select stationno,sidno from @tmp where gno='2' order by stationno,workdate,sidno
+open cursor_table
+fetch next from cursor_table
+into @stationno,@sidno
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@t_stationno='XXX___XXXX' or @t_stationno!=@stationno)
+	begin
+		set @noq=1
+	end
+
+	update @tmp
+	set idno= right('0000'+cast(@noq as nvarchar(50)),4)
+	where sidno=@sidno
+
+	set @noq=@noq+1
+	set @t_stationno=@stationno
+
+	fetch next from cursor_table
+	into @stationno,@sidno
+end
+close cursor_table
+deallocate cursor_table
+
+--刪除沒有製令的資料
+delete a
+from @tmp a
+where a.stationno not in (select stationno from @tmp b where gno='0' or gno='2' group by stationno)
+
+update a
+set datea=(select top 1 datea from @tmp where (gno='1' or gno='0') and stationno=a.stationno)
+from @tmp a where gno='2' and datea=''
+
+declare @thours float
+set @t_stationno='XXX___XXXX'
+
+if(@t_orde='1')
+begin
+	--計算總工時
+	declare cursor_table cursor for
+	select stationno,sidno,hours from @tmp order by stationno,gno,processno,processs,idno
+	open cursor_table
+	fetch next from cursor_table
+	into @stationno,@sidno,@hours
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@t_stationno='XXX___XXXX' or @t_stationno!=@stationno)
+		begin
+			set @thours=0
+		end
+		set @thours=@thours+isnull(@hours,0)
+
+		update @tmp
+		set thours=@thours
+		where sidno=@sidno
+
+		set @t_stationno=@stationno
+
+		fetch next from cursor_table
+		into @stationno,@sidno,@hours
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	select gno,idno,workno,processno,processs,stationno,stations,productno,products
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),0,15)) mount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,hours),1)),0,15)) hours
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,thours),1)),0,15)) thours
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,days),1)),0,15)) days
+	,workdate,enddate,datea
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ghours),1)),0,15)) ghours
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gens),1)),0,15)) gens
+	,'work?noa=$workno?'+accy qhref
+	,'work?noa=$workno?'+accy ghref
+	from @tmp
+	--where processno between @t_bprocess and @t_eprocess
+	order by stationno,gno,processno,processs,idno
+end
+
+if(@t_orde='2')
+begin
+	--計算總工時
+	declare cursor_table cursor for
+	select stationno,sidno,hours from @tmp order by stationno,gno,idno
+	open cursor_table
+	fetch next from cursor_table
+	into @stationno,@sidno,@hours
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@t_stationno='XXX___XXXX' or @t_stationno!=@stationno)
+		begin
+			set @thours=0
+		end
+		set @thours=@thours+isnull(@hours,0)
+
+		update @tmp
+		set thours=@thours
+		where sidno=@sidno
+
+		set @t_stationno=@stationno
+
+		fetch next from cursor_table
+		into @stationno,@sidno,@hours
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	select gno,idno,workno,processno,processs,stationno,stations,productno,products
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),0,15)) mount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,hours),1)),0,15)) hours
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,thours),1)),0,15)) thours
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,days),1)),0,15)) days
+	,workdate,enddate,datea
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ghours),1)),0,15)) ghours
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,gens),1)),0,15)) gens
+	,'work?noa=$workno?'+accy qhref
+	,'work?noa=$workno?'+accy ghref
+	from @tmp
+	--where processno between @t_bprocess and @t_eprocess
+	order by stationno,gno,workdate,idno
+end
+;
+--**************************************************************************************************
+z_cugp2:--z_cugp2
+declare @t_bstation nvarchar(50)
+declare @t_estation nvarchar(50)
+declare @t_bprocess nvarchar(50)
+declare @t_eprocess nvarchar(50)
+declare @t_bdate nvarchar(50)
+declare @t_edate nvarchar(50)
+
+set @t_bstation = case when '#non' = [3] then '' else  [3] end
+set @t_estation = case when '#non' = [4] then CHAR(255) else  [4] end
+set @t_bprocess = case when '#non' = [5] then '' else  [5] end
+set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
+set @t_bdate = case when '#non' = [9] then '' else  [9] end
+set @t_edate = case when '#non' = [10] then CHAR(255) else  [10] end
+---------------------------------------------------------------------------------------------------------------------------------
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(2),
+	workgno nvarchar(50),
+	workgnoq nvarchar(50),
+	rank nvarchar(50),
+	noq nvarchar(30),
+	nos nvarchar(30),
+	stationno nvarchar(90),
+	station nvarchar(90),
+	processno nvarchar(90),
+	process nvarchar(90),
+	productno nvarchar(30),
+	product nvarchar(90),
+	mount float,
+	hours float,
+	datea nvarchar(90),
+	workno nvarchar(50),
+	custno nvarchar(30),
+	comp nvarchar(90),
+	qhref nvarchar(max),
+	ordeno nvarchar(max),
+	dhours float,
+	thours float,
+	dgen float,
+	gen float,
+	smount float
+)
+
+declare @tmpb table(
+	gno nvarchar(2),
+	workgno nvarchar(50),
+	workgnoq nvarchar(50),
+	rank nvarchar(30),
+	noq nvarchar(30),
+	nos nvarchar(30),
+	datea nvarchar(90),
+	workno nvarchar(50),
+	ordeno nvarchar(max)
+)
+
+insert into #tmp
+select '0',b.cuano,b.cuanoq,b.rank,a.noq,a.nos,a.stationno,b.station,b.processno,a.process,b.productno,b.product,a.mount,a.hours,a.datea,a.workno
+,d.custno,d.comp,'work?noa=$workno?'+b.accy,b.ordeno
+,0,0,isnull((select gen from view_cugt where noa=a.stationno and datea=a.datea),0)
+,isnull(e.gen,8),isnull(e.mount,1)
+from view_cugu a 
+left join view_work b on a.workno=b.noa
+left join(
+	select noa+'-'+noq cuano,ordeno+'-'+no2 ordeno from view_cuas
+	union all 
+	select noa+'-'+noq cuano,ordeno from view_workgs
+)c on b.cuano+'-'+b.cuanoq=c.cuano
+left join view_orde d on CHARINDEX(d.noa,c.ordeno)>0 
+left join station e on a.stationno=e.noa
+where (a.stationno between @t_bstation and @t_estation)
+and (isnull(b.processno,'') between @t_bprocess and @t_eprocess)
+and (a.datea between @t_bdate and @t_edate)
+and a.datea!='' order by a.stationno,a.datea,a.nos,a.noq
+
+--更新累計時數
+update a
+set thours=(select SUM(hours) from #tmp where stationno=a.stationno and a.datea+'-'+a.nos+'-'+a.noq>=datea+'-'+nos+'-'+noq)
+,dhours=(select SUM(hours) from #tmp where stationno=a.stationno and a.datea=datea and a.nos+'-'+a.noq>=nos+'-'+noq)
+from #tmp a
+
+insert into @tmpb
+select '0',b.cuano,b.cuanoq,b.rank,a.noq,a.nos,a.datea,a.workno,b.ordeno
+from view_cugu a left join view_work b on a.workno=b.noa
+where a.datea!=''
+
+--有問題的階層
+--update a set rank='<font color="red">'+a.rank+'</font>',datea='<font color="red">'+a.datea+'</font>'
+--from @tmp a
+--outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
+--where a.rank>b.rank
+
+insert into #tmp (gno,stationno,station,hours,mount)
+select '1',stationno,MAX(station),sum(hours),sum(mount) from #tmp group by stationno
+
+select gno,noq,nos,stationno,station,processno,process,productno pno,product
+,(case when dhours>(case when dgen=0 then gen else dgen end) then '<font color="red">' else '' end)
++(case when a.rank>b.rank then '<font color="FA8000">' else '' end)+datea+(case when a.rank>b.rank then '</font>' else '' end)
++(case when dhours>(case when dgen=0 then gen else dgen end) then '</font>' else '' end) datea
+,workno,custno,comp,qhref,dbo.charbr(ordeno,16) ordeno
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hours),1)),0,30)) hours
+,(case when dhours>(case when dgen=0 then gen else dgen end) then '<font color="red">' else '' end)
++reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dhours),1)),0,30))
++(case when dhours>(case when dgen=0 then gen else dgen end) then '</font>' else '' end)dhours
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,thours),1)),0,30)) thours
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dgen),1)),0,30)) dgen
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,gen),1)),0,30)) gen
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,smount),1)),4,30)) smount
+,(select COUNT(*) from(select stationno,workno from #tmp where gno='0' and stationno=a.stationno and workno!='' group by stationno,workno)tmp) wmount
+from #tmp a outer apply(select min(rank) rank from @tmpb where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
+order by stationno,gno
+,REPLACE(REPLACE(REPLACE(datea,'<font color="red">',''),'<font color="FA8000">',''),'</font>','')
+,nos,noq
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+;
+--**************************************************************************************************
+z_cugp3:--z_cugp3
+declare @t_ordeno nvarchar(50)
+--declare @t_no2 nvarchar(50)
+declare @t_workgno nvarchar(50)
+--declare @t_workgnoq nvarchar(50)
+
+set @t_ordeno = case when '#non' = [11] then '' else  [11] end
+--set @t_no2 = case when '#non' = [12] then '' else  [12] end
+set @t_workgno = case when '#non' = [13] then '' else  [13] end
+--set @t_workgnoq = case when '#non' = [14] then '' else  [14] end
+----------------------------------------------------------------------------------------------------------------------------------------------------
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+IF OBJECT_ID('tempdb..#tmp') is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(2),
+	workgno nvarchar(90),
+	workgnoq nvarchar(30),
+	ordeno nvarchar(MAX),
+	productno nvarchar(MAX),
+	product nvarchar(MAX),
+	workno nvarchar(90),
+	rank nvarchar(90),
+	accy nvarchar(10),
+	datea nvarchar(90),
+	noq nvarchar(50),
+	nos nvarchar(50),
+	stationno nvarchar(90),
+	stations nvarchar(90),
+	processno nvarchar(90),
+	process nvarchar(90),
+	mproductno nvarchar(MAX),
+	mproduct nvarchar(MAX),
+	hours float,
+	mount float,
+	qhref nvarchar(max)
+)
+
+insert into #tmp
+select '0',b.cuano,b.cuanoq,b.ordeno,d.productno,d.product,a.workno,b.rank,a.accy,a.datea,a.noq,a.nos
+,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
+,b.processno,a.process,b.productno,b.product,a.hours,a.mount
+,'work?noa=$workno?'+b.accy
+from view_cugu a left join view_work b on a.workno=b.noa
+left join station c on a.stationno=c.noa
+left join view_workgs d on b.cuano=d.noa and b.cuanoq=d.noq
+where a.datea!='' and a.workno!=''
+and (len(@t_ordeno)=0 or CHARINDEX(@t_ordeno,b.ordeno)>0)
+and (len(@t_workgno)=0 or charindex(@t_workgno,b.cuano+'-'+b.cuanoq)>0)
+order by b.cuano,b.cuanoq,a.datea,a.noq,a.nos
+
+update a
+set rank='<font color="red">'+a.rank+'</font>',datea='<font color="red">'+a.datea+'</font>'
+from #tmp a
+outer apply(select min(rank) rank from #tmp where a.workgno=workgno and a.workgnoq=workgnoq and datea+'-'+nos+'-'+noq<a.datea+'-'+a.nos+'-'+a.noq )b
+where a.rank>b.rank
+
+insert into #tmp
+select '0',e.workgno,e.workgnoq,e.ordeno,e.productno,e.product,a.workno,b.rank,a.accy,a.datea,a.noq,a.nos
+,a.stationno,case when isnull(b.station,'')='' then c.station else b.station end
+,b.processno,a.process,b.productno,b.product,a.hours,a.mount,''
+from view_cugu a left join view_work b on a.workno=b.noa
+left join station c on a.stationno=c.noa
+left join view_workgs d on b.cuano=d.noa and b.cuanoq=d.noq
+left join #tmp e on a.datea=e.datea and a.stationno=e.stationno
+where a.datea!='' and a.workno=''
+and (len(@t_ordeno)=0 or CHARINDEX(@t_ordeno,b.ordeno)>0)
+and (len(@t_workgno)=0 or charindex(@t_workgno,b.cuano+'-'+b.cuanoq)>0)
+and e.workgno!=''
+order by b.cuano,b.cuanoq,a.datea,a.noq,a.nos
+
+insert into #tmp(gno,workgno,workgnoq,hours,mount)
+select '1',workgno,workgnoq,sum(hours),sum(mount) from #tmp group by workgno,workgnoq
+
+select gno,workgno wgnoa,workgnoq wgnoq,ordeno,productno,product,workno,rank,accy,datea,noq,nos
+,stationno,stations,processno,process,mproductno mpno,mproduct,qhref
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,hours),1)),0,30)) hours
+,(select COUNT(*) from(select workgno,workgnoq,workno from #tmp where gno='0' and workgno=a.workgno and workgnoq=a.workgnoq and workno!='' group by workgno,workgnoq,workno)tmp) wmount
+from #tmp a order by workgno,workgnoq,gno,REPLACE(REPLACE(datea,'<font color="red">',''),'</font>',''),noq,nos
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
+----------------------------------------------------------------------------------------*
+z_cugp4:--z_cugp4
+declare @t_bstationno nvarchar(max)
+declare @t_estationno nvarchar(max)
+declare @t_bstationgno nvarchar(max)
+declare @t_estationgno nvarchar(max)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+set @t_bstationno = case when '#non' = [3] then '' else  [3] end
+set @t_estationno = case when '#non' = [4] then CHAR(255) else  [4] end
+set @t_bstationgno = case when '#non' = [15] then '' else  [15] end
+set @t_estationgno = case when '#non' = [16] then CHAR(255) else  [16] end
+set @t_bdate = case when '#non' = [17] then '' else  [17] end
+set @t_edate = case when '#non' = [18] then CHAR(255) else  [18] end
+declare @tmp table(
+	gno nvarchar(10),
+	noa nvarchar(max),
+	productno nvarchar(max),
+	products nvarchar(max),
+	spec nvarchar(max),
+	style nvarchar(max),
+	unit nvarchar(50),
+	mount float,
+	stationno nvarchar(max),
+	stations nvarchar(max),
+	hours float,
+	cuadate nvarchar(10),
+	uindate nvarchar(10)
+)
+insert into @tmp
+	select
+		'0' gno,a.workno,b.productno,b.product,b.spec,b.style,b.unit,
+		sum(a.mount),a.stationno,c.station,sum(a.hours),isnull(b.cuadate,''),isnull(b.uindate,'')
+	from view_cugu a
+	left join view_work b on (a.workno=b.noa)
+	left join station c on (a.stationno=c.noa)
+	where (a.workno not in (select workno from view_cugs)) and
+			 (a.stationno between @t_bstationno and @t_estationno) and
+			 (c.stationgno between @t_bstationgno and @t_estationgno) and
+			 (a.datea between @t_bdate and @t_edate)
+	group by a.workno,b.productno,b.product,b.spec,b.style,b.unit,a.stationno,c.station,b.cuadate,b.uindate
+	order by a.stationno,b.productno
+	
+select
+	a.gno,a.noa,a.productno,a.products,a.spec,a.style,a.unit,a.stationno,a.stations,round(a.hours,3) hours,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.mount),1)),4,12)) mount,
+	a.cuadate,a.uindate,
+	case when (@t_bdate='' and @t_edate=char(255)) then '無設定日期'
+		 when (@t_bdate!='' and @t_edate=char(255)) then @t_bdate+' 至 全部日期'
+		 when (@t_bdate='' and @t_edate!=char(255)) then '全部日期 至 '+@t_edate
+		 when (@t_bdate!='' and @t_edate!=char(255)) then @t_bdate
+		 else @t_bdate + ' ~ ' + @t_edate
+	end showdate,
+	case when (@t_bstationno='' and @t_estationno=char(255)) then '無設定工作線別'
+		 when (@t_bstationno!='' and @t_estationno=char(255)) then isnull(station1.noa+' ','')+isnull(station1.station,@t_bstationno)+' 至 全部工作線別'
+		 when (@t_bstationno='' and @t_estationno!=char(255)) then '全部工作線別 至 '+isnull(station2.noa+' ','')+isnull(station2.station,@t_estationno)
+		 when (@t_bstationno!='' and @t_estationno!=char(255)) then isnull(station1.noa+' ','')+isnull(station1.station,@t_bstationno)
+		 else isnull(station1.noa+' ','') + isnull(station1.station,@t_bstationno) + ' ~ '+ isnull(station2.noa+' ','') + isnull(station2.station,@t_estationno)
+	end showstation1,
+	case when (@t_bstationgno='' and @t_estationgno=char(255)) then '無設定管理單位'
+		 when (@t_bstationgno!='' and @t_estationgno=char(255)) then isnull(stationg1.noa+' ','')+isnull(stationg1.namea,@t_bstationgno)+' 至 全部管理單位'
+		 when (@t_bstationgno='' and @t_estationgno!=char(255)) then '全部管理單位 至 '+isnull(stationg2.noa+' ','')+isnull(stationg2.namea,@t_estationgno)
+		 when (@t_bstationgno!='' and @t_estationgno!=char(255)) then isnull(stationg1.noa+' ','')+isnull(stationg1.namea,@t_bstationgno)
+		 else isnull(stationg1.noa+' ','') + isnull(stationg1.namea,@t_bstationgno) + ' ~ '+ isnull(stationg2.noa+' ','') + isnull(stationg2.namea,@t_estationgno)
+	end showstationg1	
+from @tmp a
+left join station station1 on (@t_bstationno=station1.noa)
+left join station station2 on (@t_estationno=station2.noa)
+left join stationg stationg1 on (@t_bstationgno=stationg1.noa)
+left join stationg stationg2 on (@t_estationgno=stationg2.noa)
+order by a.stationno,a.productno,a.noa;
+----------------------------------------------------------------------------------------*
+z_cugp5:--z_cugp5
+declare @t_bstationno nvarchar(max)
+declare @t_estationno nvarchar(max)
+declare @t_bstationgno nvarchar(max)
+declare @t_estationgno nvarchar(max)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_xshowtgg nvarchar(10)
+set @t_bstationno = case when '#non' = [3] then '' else  [3] end
+set @t_estationno = case when '#non' = [4] then CHAR(255) else  [4] end
+set @t_bstationgno = case when '#non' = [15] then '' else  [15] end
+set @t_estationgno = case when '#non' = [16] then CHAR(255) else  [16] end
+set @t_bdate = case when '#non' = [17] then '' else  [17] end
+set @t_edate = case when '#non' = [18] then CHAR(255) else  [18] end
+set @t_xshowtgg = case when '#non' = [21] then '' else  [21] end
+declare @tmp table(
+	gno nvarchar(10),
+	noa nvarchar(max),
+	tggno nvarchar(max),
+	comp nvarchar(max),
+	productno nvarchar(max),
+	products nvarchar(max),
+	spec nvarchar(max),
+	style nvarchar(max),
+	unit nvarchar(50),
+	mount float,
+	stationno nvarchar(max),
+	stations nvarchar(max),
+	hours float,
+	cuadate nvarchar(10),
+	uindate nvarchar(10)
+)
+insert into @tmp
+	select
+		'0' gno,a.workno,isnull(b.tggno,''),isnull(b.comp,''),b.productno,b.product,b.spec,b.style,b.unit,
+		sum(a.mount),a.stationno,c.station,sum(a.hours),isnull(b.cuadate,''),isnull(b.uindate,'')
+	from view_cugu a
+	left join view_work b on (a.workno=b.noa)
+	left join station c on (a.stationno=c.noa)
+	where (patindex('[A-Z][A-Z]',upper(left(a.workno,2)))>0) and
+			 ((@t_xshowtgg='1') or (a.stationno between @t_bstationno and @t_estationno)) and
+			 (c.stationgno between @t_bstationgno and @t_estationgno) and
+			 (a.datea between @t_bdate and @t_edate)
+	group by a.workno,isnull(b.tggno,''),isnull(b.comp,''),b.productno,b.product,b.spec,b.style,b.unit,a.stationno,c.station,b.cuadate,b.uindate
+	order by a.stationno,b.productno
+	
+select
+	a.gno,a.noa,a.productno,a.products,a.spec,a.style,a.unit,a.stationno,a.stations,round(a.hours,3) hours,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.mount),1)),4,12)) mount,
+	a.cuadate,a.uindate,
+	case when (@t_bdate='' and @t_edate=char(255)) then '無設定日期'
+		 when (@t_bdate!='' and @t_edate=char(255)) then @t_bdate+' 至 全部日期'
+		 when (@t_bdate='' and @t_edate!=char(255)) then '全部日期 至 '+@t_edate
+		 when (@t_bdate!='' and @t_edate!=char(255)) then @t_bdate
+		 else @t_bdate + ' ~ ' + @t_edate
+	end showdate,
+	case when (@t_bstationno='' and @t_estationno=char(255)) then '無設定工作線別'
+		 when (@t_bstationno!='' and @t_estationno=char(255)) then isnull(station1.noa+' ','')+isnull(station1.station,@t_bstationno)+' 至 全部工作線別'
+		 when (@t_bstationno='' and @t_estationno!=char(255)) then '全部工作線別 至 '+isnull(station2.noa+' ','')+isnull(station2.station,@t_estationno)
+		 when (@t_bstationno!='' and @t_estationno!=char(255)) then isnull(station1.noa+' ','')+isnull(station1.station,@t_bstationno)
+		 else isnull(station1.noa+' ','') + isnull(station1.station,@t_bstationno) + ' ~ '+ isnull(station2.noa+' ','') + isnull(station2.station,@t_estationno)
+	end showstation1,
+	case when (@t_bstationgno='' and @t_estationgno=char(255)) then '無設定管理單位'
+		 when (@t_bstationgno!='' and @t_estationgno=char(255)) then isnull(stationg1.noa+' ','')+isnull(stationg1.namea,@t_bstationgno)+' 至 全部管理單位'
+		 when (@t_bstationgno='' and @t_estationgno!=char(255)) then '全部管理單位 至 '+isnull(stationg2.noa+' ','')+isnull(stationg2.namea,@t_estationgno)
+		 when (@t_bstationgno!='' and @t_estationgno!=char(255)) then isnull(stationg1.noa+' ','')+isnull(stationg1.namea,@t_bstationgno)
+		 else isnull(stationg1.noa+' ','') + isnull(stationg1.namea,@t_bstationgno) + ' ~ '+ isnull(stationg2.noa+' ','') + isnull(stationg2.namea,@t_estationgno)
+	end showstationg1	
+from @tmp a
+left join station station1 on (@t_bstationno=station1.noa)
+left join station station2 on (@t_estationno=station2.noa)
+left join stationg stationg1 on (@t_bstationgno=stationg1.noa)
+left join stationg stationg2 on (@t_estationgno=stationg2.noa)
+order by a.stationno,a.productno,a.noa;
+----------------------------------------------------------------------------------------------------------------------------------------------
+z_cugp6:--z_cugp6
+declare @t_ordeno nvarchar(50)
+set @t_ordeno = case when '#non' = [11] then '' else  [11] end
+
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+set @t_bdate = case when '#non' = [22] then '' else  [22] end
+set @t_edate = case when '#non' = [23] then CHAR(255) else  [23] end
+
+select '0' gno,
+isnull(STUFF((select ','+datea from view_ordes where CHARINDEX(noa,a.ordeno)>0 and productno=a.productno for XML path('')),1,1,''),'') datea ,
+isnull(STUFF((select ','+comp from view_ordes where CHARINDEX(noa,a.ordeno)>0 group by comp for XML path('')),1,1,''),'') comp,
+a.ordeno,a.productno,a.product,a.spec,a.mount
+,a.mount-isnull((select SUM(mount) from view_vccs where CHARINDEX(ordeno,a.ordeno)>0 and productno=a.productno),0) umount
+,b.stationgno,b.stationg,a.hours,cuadate,uindate,
+isnull(STUFF((select ','+datea from view_vccs where CHARINDEX(ordeno,a.ordeno)>0 and productno=a.productno for XML path('')),1,1,''),'') vccdate
+from view_work a left join station b on a.stationno=b.noa
+where a.ordeno!=''  
+and (len(@t_ordeno)=0 or  CHARINDEX(@t_ordeno,a.ordeno)>0)
+and isnull(STUFF((select ','+datea from view_ordes where CHARINDEX(noa,a.ordeno)>0 and productno=a.productno for XML path('')),1,1,''),'') between @t_bdate and @t_edate
+order by datea,comp,ordeno
+;
+----------------------------------------------------------------------------------------------------------------------------------------------
+z_cugp7:--z_cugp7
+declare @t_bstation nvarchar(50)
+declare @t_estation nvarchar(50)
+declare @t_bprocess nvarchar(50)
+declare @t_eprocess nvarchar(50)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+
+set @t_bstation = case when '#non' = [3] then '' else  [3] end
+set @t_estation = case when '#non' = [4] then CHAR(255) else  [4] end
+set @t_bprocess = case when '#non' = [5] then '' else  [5] end
+set @t_eprocess = case when '#non' = [6] then CHAR(255) else  [6] end
+set @t_bdate = case when '#non' = [17] then '' else  [17] end
+set @t_edate = case when '#non' = [18] then CHAR(255) else  [18] end
+
+
+select '0' gno,cuadate,stationno,station,processno,process
+,workno,productno,product products,spec,style,SUM(a.mount) mount
+,isnull((select SUM(mount) mount from view_workb where a.workno=a.workno and datea=a.cuadate),0) inmount
+,SUM(a.mount)-isnull((select SUM(mount) mount from view_workb where a.workno=a.workno and datea=a.cuadate),0) unmount
+,@t_bdate bdate,@t_edate edate
+from view_cugs a
+where workno like 'W[0-9]%' --left(workno,2)!='WJ' 
+and (stationno between @t_bstation and @t_estation)
+and (processno between @t_bprocess and @t_eprocess)
+and (cuadate between @t_bdate and @t_edate)
+group by cuadate,stationno,station,processno,process,workno,productno,product,spec,style
+having SUM(a.mount)>isnull((select SUM(mount) mount from view_workb where a.workno=a.workno and datea=a.cuadate),0)
+order by cuadate,stationno,processno,workno
+;

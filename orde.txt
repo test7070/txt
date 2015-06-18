@@ -1,0 +1,400 @@
+﻿post:--orde
+--訂單轉出貨單
+SET QUOTED_IDENTIFIER OFF
+declare @year nvarchar(20)=[1]--年度[1]
+declare @noa nvarchar(20)=[2]--單據編號[2]
+declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增[3]
+declare @project nvarchar(20)=[4] --客戶專案
+declare @t_err nvarchar(200)=''
+-----------------------------------------------------------------------
+declare @nowdate nvarchar(30) --今天日期
+set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
+
+declare @cmd nvarchar(max)
+declare @accy nvarchar(20)
+declare @vccno nvarchar(50)
+declare @invono nvarchar(50)
+set @accy=isnull((select accy from view_orde where noa=@noa),@year)
+set @vccno=isnull((select vccno from view_orde where noa=@noa),'')
+set @invono=isnull((select invono from view_vcc where noa=@vccno),'')
+
+if(@condition='0')
+begin
+	--刪除產生的vcc
+	set @cmd="delete vcc"+@accy+" where noa='"+@vccno+"'"
+	EXECUTE sp_executesql @cmd
+	set @cmd="delete vccs"+@accy+" where noa='"+@vccno+"'"
+	EXECUTE sp_executesql @cmd
+	set @cmd="delete vcca where noa='"+@invono+"'"
+	EXECUTE sp_executesql @cmd
+	set @cmd="delete vccas where noa='"+@invono+"'"
+	EXECUTE sp_executesql @cmd
+end
+
+declare @n_vccno nvarchar(50) --新的vccno
+declare @kind nvarchar(50) --ordekind
+
+--可開立發票
+declare @cvcca table(
+	noa nvarchar(20),
+	vccano nvarchar(20)
+)
+declare @vccarno nvarchar(20)
+declare @bvccano nvarchar(20)
+declare @evccano nvarchar(20)
+declare @xvccano nvarchar(20)
+
+if(@condition='1')
+begin
+	--檢查orde的vccno是否已有編號(表示修改)
+	if(LEN(@vccno)=0)
+	begin
+		--取得當天最後一個出貨單號
+		select @n_vccno=MAX(noa) from view_vcc where noa like 'D'+REPLACE(@nowdate,'/','')+'%'
+		--新的出貨單號(後面號碼+1)
+		set @n_vccno='D'+REPLACE(@nowdate,'/','')+right('000'+cast(cast(RIGHT(isnull(@n_vccno,'000'),3) as int)+1 as nvarchar(10)),3)
+	end
+	else
+	begin
+		set @n_vccno=@vccno
+	end
+	
+	if(@project="RB")
+	begin
+		--產生發票
+		set @kind=isnull((select kind from view_orde where noa=@noa),'')
+		if(@kind='隨貨單張')
+		begin
+			--抓取可開立的發票
+			declare cursor_table cursor for
+			select a.noa,b.binvono,b.einvono from vccar a left join vccars b on a.noa=b.noa 
+			where (@nowdate between a.bdate and a.edate) and isnull(a.iselectric,0)=1 order by a.noa,a.binvono
+			open cursor_table
+			fetch next from cursor_table
+			into @vccarno,@bvccano,@evccano
+			while(@@FETCH_STATUS <> -1)
+			begin
+				set @xvccano=@bvccano
+				while (@xvccano<=@evccano and (@xvccano between @bvccano and @evccano))
+				begin
+					if((select count(*) from vcca where noa=@xvccano)=0)
+					begin
+						insert @cvcca
+						select @vccarno,@xvccano
+					end
+					set @xvccano=LEFT(@xvccano,2)
+					+RIGHT('00000000'+cast(cast(RIGHT(@xvccano,8) as int)+1 as nvarchar(10)),8)
+				end
+	
+				fetch next from cursor_table
+				into @vccarno,@bvccano,@evccano
+			end
+			close cursor_table
+			deallocate cursor_table
+		
+			if((select count(*) from @cvcca)=0) 
+			begin
+				set @t_err='當期無可用發票'
+			end
+			
+			if(len(@t_err)=0)
+			begin
+				set @invono=(select top 1 vccano from @cvcca order by noa,vccano )
+				
+				insert vcca(noa,custno,comp,nick,serial,buyerno,buyer,datea,mon,cno,acomp,zip,address,taxtype,money,tax,total,trdno,worker,vccno)
+				select @invono,b.custno,b.comp,b.nick,b.coin,'',''
+				,@nowdate,case when isnull(b.mon,'')!='' then b.mon else left(@nowdate,6) end
+				,case when isnull(b.cno,'')!='' then b.cno else (select top 1 noa from acomp order by noa) end
+				,case when isnull(b.cno,'')!='' then b.acomp else (select top 1 acomp from acomp order by noa) end
+				,isnull((select top 1 zip_invo from cust where noa=b.custno),'')
+				,isnull((select top 1 addr_invo from cust where noa=b.custno),'')
+				,b.taxtype,b.money,b.tax,b.total
+				,b.noa,case when b.worker2!='' then b.worker2 else b.worker end,@n_vccno from view_orde b where noa=@noa
+				
+				insert vccas(noa,noq,custno,productno,product,unit,mount,price,money,datea)
+				select @invono,a.no2,a.custno,a.productno,a.product,a.unit,a.mount,a.price,a.total,@nowdate
+				from view_ordes a where a.noa=@noa
+			end
+		end
+		--將orde的內容轉至vcc
+		set @cmd="insert vcc"+@accy+"(noa,ordeno,typea,stype,datea,custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
+		,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,unpay,payed,memo,mon
+		,zipcode,zipname,storeno,store,invono)
+		select '"+@n_vccno+"' noa,noa ordeno,'1' typea,stype,'"+@nowdate+"',custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
+		,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,total unpay,0 payed,memo,mon
+		,gdate,gtime,postname,conform,'"+@invono+"'
+		from orde"+@accy+" where noa='"+@noa+"'"
+		EXECUTE sp_executesql @cmd
+		
+		set @cmd="insert vccs"+@accy+"(noa,noq,datea,typea,productno,product,unit,spec,style,mount,weight
+		,lengthb,width,dime,radius,size,price,total,memo,ordeno,no2,custno,storeno,store)
+		select '"+@n_vccno+"' noa,a.no2 noq,'"+@nowdate+"','1' typea,a.productno,a.product,a.unit
+		,a.spec,a.style,a.mount,a.weight,a.lengthb,a.width,a.dime,a.radius,a.size,a.price,a.total,a.memo,a.noa ordeno,a.no2,b.custno
+		,b.postname,b.conform
+		from ordes"+@accy+" a left join orde"+@accy+" b on a.noa=b.noa where a.noa='"+@noa+"'"
+		EXECUTE sp_executesql @cmd
+	end
+	else
+	begin
+		--將orde的內容轉至vcc(通用)
+		set @cmd="insert vcc"+@accy+"(noa,ordeno,typea,stype,datea,custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
+		,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,unpay,payed,memo,mon)
+		select '"+@n_vccno+"' noa,noa ordeno,'1' typea,stype,'"+@nowdate+"',custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
+		,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,total unpay,0 payed,memo,mon
+		from orde"+@accy+" where noa='"+@noa+"'"
+		EXECUTE sp_executesql @cmd
+		
+		set @cmd="insert vccs"+@accy+"(noa,noq,datea,typea,productno,product,unit,spec,style,mount,weight
+		,lengthb,width,dime,radius,size,price,total,memo,ordeno,no2,custno)
+		select '"+@n_vccno+"' noa,a.no2 noq,'"+@nowdate+"','1' typea,a.productno,a.product,a.unit
+		,a.spec,a.style,a.mount,a.weight,a.lengthb,a.width,a.dime,a.radius,a.size,a.price,a.total,a.memo,a.noa ordeno,a.no2,b.custno
+		from ordes"+@accy+" a left join orde"+@accy+" b on a.noa=b.noa where a.noa='"+@noa+"'"
+		EXECUTE sp_executesql @cmd
+	end
+		
+	if(LEN(@vccno)=0)
+	begin
+		--資料寫入dno 避免下次自動產生出現問題
+		insert dno(tablea,noa,usera)
+		select 'vcc',@n_vccno,'z001'
+		
+		--更新vccno
+		set @cmd="update orde"+@accy+" set vccno='"+@n_vccno+"' where noa='"+@noa+"'"
+		EXECUTE sp_executesql @cmd
+	end
+	
+	set @vccno=@n_vccno
+	
+end
+
+	select @vccno vccno,@invono invono,@t_err t_err
+;
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+orde2ordb:--ordb2ordb
+--訂單轉至請購單
+SET QUOTED_IDENTIFIER OFF
+declare @year nvarchar(20)=[1]--年度
+declare @sssno nvarchar(max)=[2] --採購員編號
+declare @ordbno nvarchar(max)=[3] --目前請購代號
+declare @ordbdata nvarchar(MAX)=[4]--轉請購資料
+declare @ordbum nvarchar(max) --目前請購序號
+
+declare @nowdate nvarchar(30) --今天日期
+set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
+
+declare @ordbdate nvarchar(30)--請購有效日
+set @ordbdate=CONVERT (VARCHAR(7), GETDATE()+10,12 )+0890000
+set @ordbdate=left(@ordbdate,3)+'/'+substring(@ordbdate,4,2)+'/'+right(@ordbdate,2)
+
+declare @accy nvarchar(20)=left(@nowdate,3)
+declare @cmd nvarchar(max)
+
+set @cmd="select @ordbum= isnull(right((select top 1 noa from view_ordb where CHARINDEX('"+@ordbno+"'+ REPLACE('"+@nowdate+"','/',''),noa)>0 order by noa desc),3),'0')"
+EXEC SP_EXECUTESQL @cmd, N'@ordbum nvarchar(max) OUTPUT', @ordbum OUTPUT
+-----------------------------------------------------------------------
+declare @string nvarchar(max)
+declare @n int
+
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #tmp(
+		idno int identity(0,1),
+		noa nvarchar(90),
+		no2 nvarchar(90),
+		mount float,
+		tggno nvarchar(90),
+		price float
+	)
+	
+	set @string = @ordbdata
+	while(1=1)
+	begin
+		set @n = PATINDEX('%##%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #tmp 
+				select dbo.split(@string,'^',0),dbo.split(@string,'^',1)
+				,cast(dbo.split(@string,'^',2) as float)
+				,dbo.split(@string,'^',3)
+				,cast(dbo.split(@string,'^',4) as float)
+			end
+			break
+		end
+		
+		insert into #tmp 
+		select dbo.split(LEFT(@string,@n-2),'^',0),dbo.split(LEFT(@string,@n-2),'^',1)
+		,cast(dbo.split(LEFT(@string,@n-2),'^',2) as float)
+		,dbo.split(LEFT(@string,@n-2),'^',3)
+		,cast(dbo.split(LEFT(@string,@n-2),'^',4) as float)
+		
+		set @string = SUBSTRING(@string,@n+2,LEN(@string)-@n)
+	end
+	
+	declare @tggno nvarchar(max)
+	declare @ordbnos nvarchar(max)=''
+	declare cursor_table cursor for 
+	select tggno from #tmp group by tggno order by tggno
+	open cursor_table 
+	fetch next from cursor_table 
+	into @tggno
+	while(@@FETCH_STATUS <> -1) 
+	begin
+		--bbm
+		EXEC("insert into ordb"+@accy+" (datea,odate,noa,kind,tggno,tgg,nick,paytype,trantype,tel,fax,cno,acomp,salesno,sales,worker,money,taxtype,total,memo,enda,isproj,cancel
+		,tax,weight,floata,mount,price,totalus,isctrlweight,ordgweight,ordeweight,signprocess,apv)
+		select '"+@ordbdate+"','"+@nowdate+"','"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
+		,'1' kind,'"+@tggno+"' tggno,isnull((select top 1 comp from tgg where noa='"+@tggno+"'),'') tgg
+		,isnull((select top 1 (case when isnull(nick,'')='' then left(comp,4) else nick end) from tgg where noa='"+@tggno+"'),'') nick
+		,isnull((select top 1 paytype from tgg where noa='"+@tggno+"'),'') paytype
+		,isnull((select top 1 trantype from tgg where noa='"+@tggno+"'),'') trantype
+		,isnull((select top 1 tel from tgg where noa='"+@tggno+"'),'') tel
+		,isnull((select top 1 fax from tgg where noa='"+@tggno+"'),'') fax
+		,isnull((select top 1 noa from acomp),'') cno,isnull((select top 1 acomp from acomp),'') acomp
+		,'"+@sssno+"' salesno
+		,isnull((select top 1 namea from sss where noa='"+@sssno+"'),'') sales
+		,isnull((select top 1 namea from nhpe where noa='"+@sssno+"'),'') worker
+		,0 money,'0' taxtype, 0 total,'"+@nowdate+"'+' 訂單作業轉來 'memo,0,1,0,0,0,0,0,0,0,0,0,0,0,'N'")
+		
+		--bbs
+		EXEC("insert into ordbs"+@accy+"(datea,noa,no3,productno,productno1,product,unit,mount,c1,notv,omount,stdmount,price
+		,total,tggno,enda,cancel,kind,memo,spec,ordeno,no2,apv,weight,c2,notv2,dime,width,lengthb,theory,radius,isnotdeal)
+		select '"+@ordbdate+"','"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3) noa
+		,right('000'+cast(ROW_NUMBER() OVER (ORDER BY b.productno DESC) as nvarchar(10)),3) no3
+		,b.productno,b.productno,b.product,b.unit,a.mount,0,a.mount,a.mount,0,a.price
+		,round(a.mount*a.price,0) total
+		,'"+@tggno+"',0,0, '1' kind,'','',a.noa,a.no2,'N',0,0,0,0,0,0,0,0,0
+		from #tmp a left join view_ordes b on a.noa+'-'+a.no2=b.noa+'-'+b.no2 where isnull(a.tggno,'')='"+@tggno+"'")
+		
+		EXEC("update ordb"+@accy+" set money=round((select sum(total) from view_ordbs where noa='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3)),0)
+		,total=round((select sum(total) from view_ordbs where noa='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3)),0)
+		,ordeno=(select top 1 ordeno from view_ordbs where noa='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3))
+		where noa ='"+@ordbno+"'+ REPLACE('"+@nowdate+"','/','')+right(('000'+cast(cast('"+@ordbum+"' as int)+1 as nvarchar(10))),3)
+		")
+		
+		set @ordbnos=@ordbnos+@ordbno+ REPLACE(@nowdate,'/','')+right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)+','
+		set @ordbum=right(('000'+cast(cast(@ordbum as int)+1 as nvarchar(10))),3)
+	
+		fetch next from cursor_table 
+		into @tggno
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+	
+	if(len(@ordbnos)>0)
+	begin
+		select @ordbnos ordbnos
+		EXEC("update orde"+@year+" set ordbno='"+@ordbnos+"' where noa in(select noa from #tmp group by noa)")
+	end
+
+;
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+apv:--orde_apv
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_userno nvarchar(max)
+	declare @t_ordeno nvarchar(max)
+	
+	set @t_userno = [1]
+	set @t_ordeno = [2]
+	
+	declare @namea nvarchar(20)
+	declare @credit float
+	declare @total float
+	declare @accy nvarchar(20)
+	declare @apv nvarchar(max)
+	declare @tmp table(
+		err int,
+		msg nvarchar(max),
+		ordeno nvarchar(max),
+		userno nvarchar(max),
+		namea nvarchar(max)
+	)
+	if (select COUNT(1) from @tmp)=0 and not exists(select * from nhpe where noa=@t_userno)
+	begin
+		insert into @tmp(err,msg)values(2,'【'+isnull(@t_userno,'')+'】查無使用者')
+	end
+	select @namea=namea,@credit=isnull(credit,0) from nhpe where noa=@t_userno
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0 and not exists(select noa from view_orde where noa=@t_ordeno)
+	begin
+		insert into @tmp(err,msg)values(3,'【'+isnull(@t_ordeno,'')+'】查無訂單')
+	end
+	select @accy=accy,@total=isnull(total,0),@apv=apv from view_orde where noa=@t_ordeno
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0 and LEN(ISNULL(@apv,''))>0
+	begin
+		insert into @tmp(err,msg)values(4,'訂單【'+@t_ordeno+'】已被【'+@apv+'】核准')
+	end
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0 and @credit<@total
+	begin
+		insert into @tmp(err,msg)values(5,'【'+isnull(@t_userno,'')+' '+isnull(@namea,'')+'】使用者額度不足')
+	end
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0 and (@credit>=@total and ISNULL(@credit,0)>0)
+	begin
+		set @cmd = "update orde"+@accy+" set apv=@namea where noa=@t_ordeno"
+		execute sp_executesql @cmd,N'@namea nvarchar(20),@t_ordeno nvarchar(20)'
+			,@namea=@namea,@t_ordeno=@t_ordeno
+		insert into @tmp(err,ordeno,userno,namea)values(1,@t_ordeno,@t_userno,@namea)
+		insert into drun(datea,timea,usera,action,noa,tablea,title,memo)
+		values(CONVERT(nvarchar,GETDATE(),111),left(CONVERT(nvarchar,GETDATE(),108),5),@t_userno,'apv',@t_ordeno,'orde','核準','')
+	end
+	
+	select * from @tmp;
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+conform:--orde_conform
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_userno nvarchar(max)
+	declare @t_ordeno nvarchar(max)
+	
+	set @t_userno = [1]
+	set @t_ordeno = [2]
+	
+	declare @namea nvarchar(20)
+	declare @credit float
+	declare @total float
+	declare @accy nvarchar(20)
+	declare @conform nvarchar(max)
+	declare @tmp table(
+		err int,
+		msg nvarchar(max),
+		ordeno nvarchar(max),
+		userno nvarchar(max),
+		namea nvarchar(max)
+	)
+	if (select COUNT(1) from @tmp)=0 and not exists(select * from nhpe where noa=@t_userno)
+	begin
+		insert into @tmp(err,msg)values(2,'【'+isnull(@t_userno,'')+'】查無使用者')
+	end
+	select @namea=namea,@credit=isnull(credit,0) from nhpe where noa=@t_userno
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0 and not exists(select noa from view_orde where noa=@t_ordeno)
+	begin
+		insert into @tmp(err,msg)values(3,'【'+isnull(@t_ordeno,'')+'】查無訂單')
+	end
+	select @accy=accy,@total=isnull(total,0),@conform=conform from view_orde where noa=@t_ordeno
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0 and LEN(ISNULL(@conform,''))>0
+	begin
+		insert into @tmp(err,msg)values(4,'訂單【'+@t_ordeno+'】已簽回')
+	end
+	-------------------------------------------------------------------------------------------------------
+	if (select COUNT(1) from @tmp)=0
+	begin
+		set @cmd = "update orde"+@accy+" set conform='*' where noa=@t_ordeno"
+		execute sp_executesql @cmd,N'@t_ordeno nvarchar(20)',@t_ordeno=@t_ordeno
+		insert into @tmp(err,ordeno,userno,namea)values(1,@t_ordeno,@t_userno,@namea)
+		insert into drun(datea,timea,usera,action,noa,tablea,title,memo)
+		values(CONVERT(nvarchar,GETDATE(),111),left(CONVERT(nvarchar,GETDATE(),108),5),@t_userno,'conform',@t_ordeno,'orde','簽回','')
+	end
+	select * from @tmp;

@@ -1,0 +1,132 @@
+hct_in:--hct_in 
+SET QUOTED_IDENTIFIER OFF
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+create table ##tmp(
+	filename nvarchar(50),
+	txt nvarchar(1000)
+) 
+
+declare @accy nvarchar(10)--現在年度
+declare @datea nvarchar(10)--現在日期
+declare @timea nvarchar(10)--現在時間
+set @datea=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+set @accy=left(@datea,3)
+set @timea=left(convert(varchar(10), GETDATE(), 108),5)
+
+-----------------------------------------------------------------------------
+insert ##tmp
+select cast(isnull(a.custno,'')+REPLICATE(' ',11) as varchar(11))
++'_'+cast(isnull(a.accno,'')+REPLICATE(' ',4)as varchar(4))
++'_'+replace(CONVERT(varchar(10), getdate(), 111),'/','')
+-----------------資料-------------------
+,cast(isnull(a.boatname,'')+REPLICATE(' ',10) as varchar(10))--查貨代號  
++REPLICATE(' ',20)--清單編號 
++cast(isnull(a.custno,'')+REPLICATE(' ',11) as varchar(11))--客戶代號 
++REPLICATE(' ',12)--收貨人代號
++cast(isnull(a.comp,'')+REPLICATE(' ',40) as varchar(40))--收貨人名稱 
++cast(isnull(a.atel,'')+REPLICATE(' ',15) as varchar(15))--收貨人電話1 
++cast(isnull(a.boat,'')+REPLICATE(' ',15) as varchar(15))--收貨人電話2
++cast(isnull(a.aaddr,'')+REPLICATE(' ',100) as varchar(100))--收貨人地址
++right(REPLICATE(' ',8)+cast(isnull(a.price,0) as varchar(8)),8)--代收貨款 
++REPLICATE(' ',8)--egant 
++replace(CONVERT(varchar(10), getdate(), 111),'/','')--發送日期 (應該是上傳日期)
++cast(isnull(a.uccno,'')+REPLICATE(' ',4) as varchar(4))--發送站代號 
++cast(isnull(a.accno,'')+REPLICATE(' ',4) as varchar(4))--到著站代號 
++REPLICATE(' ',4)--ekamt 
++right(REPLICATE(' ',4)+dbo.getComma(isnull(a.mount,0),0),4)--件數
++REPLICATE(' ',3)--追加件數 
++right(dbo.getComma(isnull(a.weight,0),2)+REPLICATE(' ',5),5)--重量
++REPLICATE(' ',7)--ebamt 
++REPLICATE(' ',5)--eramt 
++REPLICATE(' ',5)--esamt 
++REPLICATE(' ',5)--edamt
++REPLICATE(' ',5)--elamt
++REPLICATE(' ',2)--傳票區分 
++REPLICATE(' ',1)--商品種類 
++'1'--商品區分 
++REPLICATE(' ',8)--指定日期 
++REPLICATE(' ',6)--指定時間
++REPLICATE(' ',11)--供貨人代號 
++REPLICATE(' ',40)--供貨人名稱 
++REPLICATE(' ',15)--供貨人電話1 
++REPLICATE(' ',15)--供貨人電話2
++REPLICATE(' ',100)--供貨人地址 
++REPLICATE(' ',100)--備註 
++REPLICATE(' ',1)--esel 
++REPLICATE(' ',1)--eprint
++cast(isnull(a.caseend,'')+REPLICATE(' ',3) as varchar(3))--郵遞區號 
+from view_transef a
+where isnull(a.boatname,'')!='' and isnull(a.mon,'')='' and isnull(a.po,'')!=''
+
+-------------------------------------------------------------------------------------------------------------------
+declare @string varchar(500)=''
+declare @path varchar(500)=''
+declare @filename nvarchar(MAX)=''
+
+select filename from ##tmp group by filename
+
+--產生電子檔
+declare cursor_table cursor for
+select filename from ##tmp group by filename
+open cursor_table
+fetch next from cursor_table
+into @filename
+while(@@FETCH_STATUS <> -1)
+begin
+	--產生檔案
+	set @path='C:\inetpub\wwwroot\htm\htm\'+@filename+'.'+'txt'
+	set @string='bcp "SELECT txt FROM ##tmp a where filename='''+@filename+''' " queryout "C:\inetpub\wwwroot\htm\htm\'+@filename+'.'+'txt" -S"59.125.143.171,1799" -U"sa" -P"artsql963" -T -c -t'
+	
+	EXEC master..xp_cmdshell @string
+	
+	fetch next from cursor_table
+	into @filename
+end
+close cursor_table
+deallocate cursor_table
+
+------------------------------------------------------------------------------------------------------------------
+--更新已傳入大貨追
+EXEC("update transef"+@accy+" set mon='"+@datea+"' where isnull(mon,'')='' ")
+------------------------------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+;
+--*****************************************************************************************************
+hct_out:--hct_out
+declare @accy nvarchar(10)--現在年度
+declare @datea nvarchar(10)--現在日期
+declare @timea nvarchar(10)--現在時間
+set @datea=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+set @accy=left(@datea,3)
+set @timea=left(convert(varchar(10), GETDATE(), 108),5)
+
+--noa =datea+流水號
+--custno	作業項目a
+--comp		貨件編號b
+--datea		作業日期c
+--nick		作業時間d
+--salesno	作業人員代號e
+--checkno	所屬站點代號f
+--money	件數g
+--memo		備註h
+
+--新流水號取5碼
+declare @noa nvarchar(20)='FK'+REPLACE(@datea,'/','')
+set @noa=isnull(right((select MAX(noa) from borrc where noa like '%'+@noa),5),'00000')
+
+insert borrc(noa,custno,comp,datea,nick,salesno,checkno,money,memo)
+select 'FK'+REPLACE(@datea,'/','')+right('00000'+cast(CAST(@noa as int)+ROW_NUMBER() over (order by noa) as nvarchar(10)),5)
+,a,b,cast(cast(left(c,4) as int)-1911 as nvarchar(10))+'/'+left(right(c,4),2)+'/'+right(c,2)
+,left(d,2)+':'+right(left(d,4),2)+':'+right(d,2),e,f,cast(g as float),h
+from ztmpxls where a!='作業項目' 
+;
