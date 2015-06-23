@@ -787,3 +787,79 @@ select gno,storeno,stores,pno,product,unit
 from @tmp
 order by storeno,gno,pno
 ;
+--*****************************************************************************************
+z_cng6:--z_cng6
+SET QUOTED_IDENTIFIER OFF
+declare @t_bstoreno nvarchar(50) 
+declare @t_estoreno nvarchar(50)
+declare @t_edate nvarchar(50)
+
+set @t_bstoreno = case when '#non' = [8] then '' else [8] end
+set @t_estoreno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_edate = case when '#non' = [15] then '' else [15] end
+
+declare @t_stkdate nvarchar(30) --今天日期
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+
+if(len(@t_edate)=0)
+	set @t_edate=@t_stkdate
+----------------------------------------------------------------------------------------------------------------------------
+declare @cmd nvarchar(max)
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+	
+create table #tmp(
+	gno nvarchar(1), 
+	storeno nvarchar(50),
+	store nvarchar(100),
+	
+	productno nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(50),
+	mount float
+)
+
+--調出
+insert #tmp
+select '9',a.storeno,a.store,b.productno,b.product,b.unit,-1*b.mount 
+from view_cng a left join view_cngs b on a.noa=b.noa
+where a.datea<=@t_edate and isnull(a.storeno,'')!='' and a.typea='5'
+and (a.storeno between @t_bstoreno and @t_estoreno)
+
+--調入
+insert #tmp
+select '9',a.storeinno,a.storein,b.productno,b.product,b.unit,b.mount 
+from view_cng a left join view_cngs b on a.noa=b.noa
+where a.datea<=@t_edate and isnull(a.storeinno,'')!='' and a.typea='4'
+and (a.storeinno between @t_bstoreno and @t_estoreno)
+
+insert #tmp
+select '0',a.storeno,(select top 1 store from store where noa=a.storeno)
+,a.productno,(select top 1 product from view_ucaucc where noa=a.productno)
+,(select top 1 unit from view_ucaucc where noa=a.productno)
+,sum(mount)
+from #tmp a group by storeno,productno
+
+delete #tmp where gno='9'
+
+if((select count(*) from #tmp)>0)
+begin
+	insert #tmp(gno,storeno)
+	select '1',storeno from #tmp group by storeno
+end
+
+select productno pno
+,storeno sno
+,dbo.getComma(mount,0) mount
+,* from #tmp order by storeno,gno,productno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END;
