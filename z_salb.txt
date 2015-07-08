@@ -426,15 +426,14 @@ declare @tmp table(
 	moneye int
 )
 insert into @tmp
-	select
-		'0' gno,0 pageno,0 orderby,d.noa,d.namea,isnull(c.sa_health,0),isnull(c.sa_health,0)*4,
-		a.datea,a.title,b.money,0,0,0,0
+	select '0' gno,0 pageno,0 orderby,d.noa,d.namea,isnull(c.sa_health,0),isnull(c.sa_health,0)*4,a.datea,a.title,b.money,0,0,0,0
 	from salb a
 	left join salbs b on a.noa=b.noa
 	left join salinsures c on b.sssno=c.noa and a.mon=b.mon
 	left join sss d on b.sssno=d.noa
-	where charindex('薪資',a.title)=0 and left(a.datea,3)=@t_xyears
+	where left(a.mon,3)=@t_xyears and b.typea='50' and (charindex('獎金',a.title)>0 or charindex('獎金',b.memo)>0) 
 	order by d.noa,a.datea
+	
 declare @idno int
 declare @sssno nvarchar(50)
 declare @lastsssno nvarchar(50)
@@ -1449,3 +1448,115 @@ dbo.getComma(net,0) net,
 * 
 from @tmp where gno='0' order by cno,typea,typeb,typec,sssno
 ;
+--**************************************************************************************************
+z_salb11:--z_salb11
+declare @t_mon nvarchar(10)
+set @t_mon = case when '#non'=[1] then '' else [1] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	sssno nvarchar(50),
+	namea nvarchar(90),
+	datea nvarchar(20),
+	labsal float,--投保金額
+	lmoney float, --基本工資
+	a1 float, --本月獎金
+	a2 float, --全年累計獎金
+	m1 float, --獎金補充保費
+	b float, --兼職薪資
+	m2 float, --兼職補充保費
+	c float, --業務收入金額
+	m3 float, --業務補充保費
+	d float, --股利金額
+	m4 float, --股利補充保費
+	e float, --利息金額
+	m5 float, --利息補充保費
+	f float, --租金金額
+	m6 float, --租金補充保費
+	total float --補充保費小計
+)
+
+insert @tmp
+select '0',b.sssno,b.namea,a.datea
+,isnull((select top 1 salary from salinsures where noa=b.sssno and mon=@t_mon),isnull((select salary from labase where noa=b.sssno),0))
+,isnull((select top 1 lmoney from labhealths where class='1' and left(noa,6)<=@t_mon order by noa desc),0)
+,case when b.typea='50' and (charindex('獎金',a.title)>0 or charindex('獎金',b.memo)>0)  then b.money else 0 end
+,isnull((select sum(sb.money) from salb sa left join salbs sb on sa.noa=sb.noa where sb.sssno=b.sssno and sb.typea='50' and (charindex('獎金',sa.title)>0 or charindex('獎金',sb.memo)>0) and sa.datea<=a.datea),0),0
+,case when b.typea='50' and (charindex('兼職',a.title)>0 or charindex('兼職',b.memo)>0)  then b.money else 0 end,0
+,case when b.typea in ('9A','9B') then b.money else 0 end,0
+,case when b.typea='54' then b.money else 0 end,0
+,case when b.typea in ('5A','5B','5C','52') then b.money else 0 end,0
+,case when b.typea='51' then b.money else 0 end,0
+,0
+from salb a left join salbs b on a.noa=b.noa
+where a.mon=@t_mon
+
+--獎金補充保費(累計超過當月投保金額4倍)
+--1. 累計超過4倍投保金額之獎金＝(全年累計獎金－（投保金額）×4倍)
+--2. 本次獎金與累計超過4倍投保金額之獎金比較，以較小之金額為獎金之費基
+--3. 補充保險費＝獎金之費基×2% 獎金之費基超過1,000萬，以1,000萬元計算。
+update @tmp
+set m1=case when a2<=labsal*4 then 0 when abs(a2-(labsal*4))>(case when a1>10000000 then 10000000 else a1 end) then round((case when a1>10000000 then 10000000 else a1 end)*0.02,0) else round(abs(a2-(labsal*4))*0.02,0) end
+
+--兼職補充保費
+--1. 兼職薪資所得x2%=補充保險費
+--2. 所得給付日期於102年1月1日至103年8月31日期間，當不足5,000元時不收取補充保險費，當金額超過1,000萬元，以1,000萬元計算。
+--3. 所得給付日期於103年9月1日之後單次給付未達基本工資(103年7月1日公告為19,273元)時不收取補充保險費，當金額超過1,000萬元，以1,000萬元計算。
+update @tmp
+set m2=case when @t_mon<'102/01' then 0 
+when @t_mon between '102/01' and '103/08' then (case when b <5000 then 0 else round((case when b>10000000 then 10000000 else b end)*0.02,0) end)
+when @t_mon>='103/09' then (case when b<lmoney then 0 else round((case when b>10000000 then 10000000 else b end)*0.02,0) end) end
+
+--業務補充保費
+--1. 執行業務收入ｘ2%=補充保險費
+--2. 當不足5,000元時不收取補充保險費，當金額超過1,000萬元，以1,000萬元計算。
+update @tmp
+set m3=case when c<5000 then 0 else round((case when c>10000000 then 10000000 else c end)*0.02,0) end
+
+--股利補充保費
+--1.單次給付股利總額(含可扣抵稅額)ｘ2%=補充保險費
+--2.當單次給付股利總額不足5,000元時不收取補充保險費，當金額超過1,000萬元，以1,000萬元計
+update @tmp
+set m4=case when d<5000 then 0 else round((case when d>10000000 then 10000000 else c end)*0.02,0) end
+
+--利息補充保費
+--1. 單次給付利息ｘ2%=補充保險費
+--2. 當單次給付利息金額不足5,000元時不收取補充保險費，當金額超過1,000萬元，以1,000萬元計算。
+update @tmp
+set m5=case when e<5000 then 0 else round((case when e>10000000 then 10000000 else e end)*0.02,0) end
+
+----租金補充保費
+--1. 單次給付租金(未扣除必要損耗及費用)ｘ2%=補充保險費
+--2. 當單次給付租金金額不足5,000元時不收取補充保險費，當金額超過1,000萬元，以1,000萬元計算。
+
+update @tmp
+set m6=case when f<5000 then 0 else round((case when f>10000000 then 10000000 else f end)*0.02,0) end
+
+if((select count(*) from @tmp)>0)
+	insert @tmp
+	select '1',CHAR(255),CHAR(255),CHAR(255),SUM(labsal),null,SUM(a1),SUM(a2),SUM(m1) 
+	,SUM(b),SUM(m2),SUM(c),SUM(m3),SUM(d),SUM(m4),SUM(e),SUM(m5),SUM(f),SUM(m6),SUM(total) 
+	from @tmp
+
+--補充保費小計
+update @tmp
+set total=m1+m2+m3+m4+m5+m6
+
+select 
+dbo.getComma(labsal,0) labsal,
+dbo.getComma(lmoney,0) lmoney,
+dbo.getComma(a1,0) a1,
+dbo.getComma(a2,0) a2,
+dbo.getComma(m1,0) m1,
+dbo.getComma(b,0) b,
+dbo.getComma(m2,0) m2,
+dbo.getComma(c,0) c,
+dbo.getComma(m3,0) m3,
+dbo.getComma(d,0) d,
+dbo.getComma(m4,0) m4,
+dbo.getComma(e,0) e,
+dbo.getComma(m5,0) m5,
+dbo.getComma(f,0) f,
+dbo.getComma(m6,0) m6,
+dbo.getComma(total,0) total,
+* from @tmp order by gno,sssno,datea;
