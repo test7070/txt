@@ -1,4 +1,544 @@
 ﻿z_kpiborn1:--z_kpiborn1
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_bdate = case when '#non' = [2] then '[1]/01/01' else [2] end
+set @t_edate = case when '#non' = [3] then '[1]/01/31' else [3] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+   drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	kpitype int, ----0 = % , 1 = other
+	kpi_name nvarchar(max),
+	kpi_formula nvarchar(max),
+	kpi_value float,
+	kpi_unit nvarchar(max),
+	stationno nvarchar(MAX),
+	datea nvarchar(20)
+)
+
+declare @t_xdate nvarchar(20)=@t_bdate
+declare @t_count int=1
+
+while (@t_count<32)
+begin
+
+	insert into #tmp
+	select '0',0,'生產準時率','生產準時筆數/應生產筆數',cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),''
+	,a.stationno,@t_xdate
+	from (
+		select case when DATEDIFF(day ,CONVERT(datetime,cast(cast(left(a.uindate,3) as int)+1911 as nvarchar)+right(a.uindate,6)),CONVERT(datetime,cast(cast(left(a.enddate,3) as int)+1911 as nvarchar)+right(a.enddate,6))) <=0 then 1 else 0 end diffdate
+		,a.stationno
+		from view_work a 
+		where (a.cuadate =@t_xdate) and (len(ltrim(rtrim(a.uindate))) > 0) and isnull(a.enddate,'') != '' and a.stationno!=''
+	) a	group by a.stationno
+	
+	insert into #tmp
+	select '0',0,'生產良率','(良品-不良品)/良品',cast(a.mount-a.errmount as float)/cast(a.mount as float),''
+	,a.stationno,@t_xdate
+	from (
+		select sum(b.errmount) errmount,sum(b.mount) mount,a.stationno
+		from view_workb a
+		left join view_workbs b on a.noa = b.noa
+		where (a.datea = @t_xdate)
+		group by a.stationno
+	) a  
+
+	insert into #tmp
+	select '0',0,'機台稼動率','(負荷時間-停機時間)/負荷時間',case when a.borntime > 0 then (a.borntime-stoptime)/a.borntime else 0 end,''
+	,a.stationno,@t_xdate
+	from (
+		select sum(a.borntime) borntime,(sum(a.chgtime)+sum(a.faulttime)+sum(a.delaytime)+sum(a.waittime)+sum(a.waitfedtime)+	sum(a.lacksss)) stoptime,b.stationno
+		from view_cuws a
+		left join view_cuw b on a.noa = b.noa
+		where b.datea =@t_xdate
+		group by b.stationno
+	) a
+
+	insert into #tmp
+	select '0',1,'人員生產效率','總產值(數量)/員工總人數',cast( a.mount as float)/cast(ssstotal as float),' 單位/人'
+	,a.stationno,@t_xdate
+	from (
+		select sum(a.mount) mount,a.stationno
+		from view_work a 
+		where (a.cuadate=@t_xdate) and a.stationno!=''
+		group by a.stationno
+	) a outer apply (select count(*) ssstotal from sss where (outdate>=@t_xdate or ISNULL(outdate,'')=''))b
+
+	insert into #tmp
+	select '0',0,'生產逾期率','生產逾期筆數/應生產筆數',cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),''
+	,a.stationno,@t_xdate
+	from (
+		select case when DATEDIFF(day ,CONVERT(datetime,cast(cast(left(a.uindate,3) as int)+1911 as nvarchar)+right(a.uindate,6)),
+			CONVERT(datetime,cast(cast(left(a.enddate,3) as int)+1911 as nvarchar)+right(a.enddate,6))) >0 then 1 else 0 end diffdate
+			,a.stationno
+		from view_work a 
+		where (a.cuadate = @t_xdate) and
+		 (len(ltrim(rtrim(a.uindate))) > 0) and isnull(a.enddate,'') != '' and a.stationno!=''
+	) a group by a.stationno
+
+	insert into #tmp
+	select '0',0,'生產重工率','重工數量/應生產數',cast(a.rmount as float)/cast(a.mount as float),''
+	,a.stationno,@t_xdate
+	from (
+		select sum(a.mount) mount,sum(a.rmount) rmount,a.stationno
+		from view_work a 
+		where (a.cuadate =@t_xdate) and a.stationno!=''
+		group by a.stationno
+	) a
+
+	insert into #tmp
+	select '0',1,'生產製造費用比','製造費用/製造數量',cast(a.makes_money as float)/cast(a.mount as float),' /單位'
+	,a.stationno,@t_xdate
+	from (
+		select sum(a.makes*a.hours) makes_money,sum(a.mount) mount,a.stationno
+		from view_work a 
+		where (a.cuadate=@t_xdate) and a.stationno!=''
+		group by a.stationno
+	) a
+
+	insert into #tmp
+	select '0',1,'生產直接人工成本比','直接人工費用/製造數量',cast(a.wages_money as float)/cast(a.mount as float),' /單位'
+	,a.stationno,@t_xdate
+	from (
+		select sum(a.wages*a.hours) wages_money,sum(a.mount) mount,a.stationno
+		from view_work a 
+		where (a.cuadate =@t_xdate) and a.stationno!=''
+		group by a.stationno
+	) a
+	
+	
+	set @t_xdate=dbo.q_cdn(@t_xdate,1)
+	set @t_count=@t_count+1
+end
+
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+create table ##tmp(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	kpitype int, ----0 = % , 1 = other
+	kpi_name nvarchar(max),
+	kpi_formula nvarchar(max),
+	kpi_unit nvarchar(max),
+	stationno nvarchar(MAX),
+	d01 nvarchar(20),d02 nvarchar(20),d03 nvarchar(20),d04 nvarchar(20),d05 nvarchar(20),
+	d06 nvarchar(20),d07 nvarchar(20),d08 nvarchar(20),d09 nvarchar(20),d10 nvarchar(20),
+	d11 nvarchar(20),d12 nvarchar(20),d13 nvarchar(20),d14 nvarchar(20),d15 nvarchar(20),
+	d16 nvarchar(20),d17 nvarchar(20),d18 nvarchar(20),d19 nvarchar(20),d20 nvarchar(20),
+	d21 nvarchar(20),d22 nvarchar(20),d23 nvarchar(20),d24 nvarchar(20),d25 nvarchar(20),
+	d26 nvarchar(20),d27 nvarchar(20),d28 nvarchar(20),d29 nvarchar(20),d30 nvarchar(20),d31 nvarchar(20),
+	k01 float,k02 float,k03 float,k04 float,k05 float,
+	k06 float,k07 float,k08 float,k09 float,k10 float,
+	k11 float,k12 float,k13 float,k14 float,k15 float,
+	k16 float,k17 float,k18 float,k19 float,k20 float,
+	k21 float,k22 float,k23 float,k24 float,k25 float,
+	k26 float,k27 float,k28 float,k29 float,k30 float,k31 float
+) 
+
+set @t_xdate =@t_bdate
+set @t_count =1
+declare @t_field nvarchar(20)
+
+while (@t_count<32)
+begin
+	
+	-----------------------------------------------------------------------------------------
+	insert into #tmp
+	select '0',0,'生產準時率','生產準時筆數/應生產筆數',0,'',stationno,@t_xdate
+	from #tmp group by stationno
+	
+	insert into #tmp
+	select '0',0,'生產良率','(良品-不良品)/良品',0,'',stationno,@t_xdate
+	from #tmp group by stationno
+
+	insert into #tmp
+	select '0',0,'機台稼動率','(負荷時間-停機時間)/負荷時間',0,'',stationno,@t_xdate
+	from #tmp group by stationno
+
+	insert into #tmp
+	select '0',1,'人員生產效率','總產值(數量)/員工總人數',0,' 單位/人',stationno,@t_xdate
+	from #tmp group by stationno
+
+	insert into #tmp
+	select '0',0,'生產逾期率','生產逾期筆數/應生產筆數',0,'',stationno,@t_xdate
+	from #tmp group by stationno
+
+	insert into #tmp
+	select '0',0,'生產重工率','重工數量/應生產數',0,'',stationno,@t_xdate
+	from #tmp group by stationno
+
+	insert into #tmp
+	select '0',1,'生產製造費用比','製造費用/製造數量',0,' /單位',stationno,@t_xdate
+	from #tmp group by stationno
+	
+	insert #tmp
+	select '0',1,'生產直接人工成本比','直接人工費用/製造數量',0,' /單位',stationno,@t_xdate
+	from #tmp group by stationno	
+	----------------------------------------------------------------------------------------
+	
+	set @t_field= right('00'+cast(@t_count as nvarchar(10)),2)
+	
+	exec("insert ##tmp (gno,kpitype,kpi_name,kpi_formula,kpi_unit,stationno,d"+@t_field+",k"+@t_field+")
+	select '9',kpitype,kpi_name,kpi_formula,kpi_unit,stationno,'"+@t_xdate+"',kpi_value
+	from #tmp where datea='"+@t_xdate+"'
+	group by kpitype,kpi_name,kpi_formula,kpi_unit,stationno,kpi_value")
+		
+	set @t_xdate=dbo.q_cdn(@t_xdate,1)
+	set @t_count=@t_count+1
+end
+
+insert ##tmp (gno,kpitype,kpi_name,kpi_formula,kpi_unit,stationno
+,d01,d02,d03,d04,d05,d06,d07,d08,d09,d10
+,d11,d12,d13,d14,d15,d16,d17,d18,d19,d20
+,d21,d22,d23,d24,d25,d26,d27,d28,d29,d30,d31
+,k01,k02,k03,k04,k05,k06,k07,k08,k09,k10
+,k11,k12,k13,k14,k15,k16,k17,k18,k19,k20
+,k21,k22,k23,k24,k25,k26,k27,k28,k29,k30,k31
+)
+select '0',kpitype,kpi_name,kpi_formula,kpi_unit,stationno
+,MAX(d01),MAX(d02),MAX(d03),MAX(d04),MAX(d05),MAX(d06),MAX(d07),MAX(d08),MAX(d09),MAX(d10),
+MAX(d11),MAX(d12),MAX(d13),MAX(d14),MAX(d15),MAX(d16),MAX(d17),MAX(d18),MAX(d19),MAX(d20),
+MAX(d21),MAX(d22),MAX(d23),MAX(d24),MAX(d25),MAX(d26),MAX(d27),MAX(d28),MAX(d29),MAX(d30),MAX(d31)
+,SUM(k01),SUM(k02),SUM(k03),SUM(k04),SUM(k05),SUM(k06),SUM(k07),SUM(k08),SUM(k09),SUM(k10)
+,SUM(k11),SUM(k12),SUM(k13),SUM(k14),SUM(k15),SUM(k16),SUM(k17),SUM(k18),SUM(k19),SUM(k20)
+,SUM(k21),SUM(k22),SUM(k23),SUM(k24),SUM(k25),SUM(k26),SUM(k27),SUM(k28),SUM(k29),SUM(k30),SUM(k31)
+from ##tmp
+group by kpitype,kpi_name,kpi_formula,kpi_unit,stationno
+
+delete ##tmp where gno='9'
+
+insert ##tmp (gno,stationno)
+select '1',stationno from ##tmp group by stationno
+
+select gno,idno,kpi_name,kpi_formula
+,case when kpitype=0 then cast(isnull(round(k01,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k01,4),0) as nvarchar)+kpi_unit end k01
+,case when kpitype=0 then cast(isnull(round(k02,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k02,4),0) as nvarchar)+kpi_unit end k02
+,case when kpitype=0 then cast(isnull(round(k03,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k03,4),0) as nvarchar)+kpi_unit end k03
+,case when kpitype=0 then cast(isnull(round(k04,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k04,4),0) as nvarchar)+kpi_unit end k04
+,case when kpitype=0 then cast(isnull(round(k05,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k05,4),0) as nvarchar)+kpi_unit end k05
+,case when kpitype=0 then cast(isnull(round(k06,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k06,4),0) as nvarchar)+kpi_unit end k06
+,case when kpitype=0 then cast(isnull(round(k07,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k07,4),0) as nvarchar)+kpi_unit end k07
+,case when kpitype=0 then cast(isnull(round(k08,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k08,4),0) as nvarchar)+kpi_unit end k08
+,case when kpitype=0 then cast(isnull(round(k09,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k09,4),0) as nvarchar)+kpi_unit end k09
+,case when kpitype=0 then cast(isnull(round(k10,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k10,4),0) as nvarchar)+kpi_unit end k10
+,case when kpitype=0 then cast(isnull(round(k11,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k11,4),0) as nvarchar)+kpi_unit end k11
+,case when kpitype=0 then cast(isnull(round(k12,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k12,4),0) as nvarchar)+kpi_unit end k12
+,case when kpitype=0 then cast(isnull(round(k13,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k13,4),0) as nvarchar)+kpi_unit end k13
+,case when kpitype=0 then cast(isnull(round(k14,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k14,4),0) as nvarchar)+kpi_unit end k14
+,case when kpitype=0 then cast(isnull(round(k15,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k15,4),0) as nvarchar)+kpi_unit end k15
+,case when kpitype=0 then cast(isnull(round(k16,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k16,4),0) as nvarchar)+kpi_unit end k16
+,case when kpitype=0 then cast(isnull(round(k17,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k17,4),0) as nvarchar)+kpi_unit end k17
+,case when kpitype=0 then cast(isnull(round(k18,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k18,4),0) as nvarchar)+kpi_unit end k18
+,case when kpitype=0 then cast(isnull(round(k19,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k19,4),0) as nvarchar)+kpi_unit end k19
+,case when kpitype=0 then cast(isnull(round(k20,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k20,4),0) as nvarchar)+kpi_unit end k20
+,case when kpitype=0 then cast(isnull(round(k21,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k21,4),0) as nvarchar)+kpi_unit end k21
+,case when kpitype=0 then cast(isnull(round(k22,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k22,4),0) as nvarchar)+kpi_unit end k22
+,case when kpitype=0 then cast(isnull(round(k23,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k23,4),0) as nvarchar)+kpi_unit end k23
+,case when kpitype=0 then cast(isnull(round(k24,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k24,4),0) as nvarchar)+kpi_unit end k24
+,case when kpitype=0 then cast(isnull(round(k25,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k25,4),0) as nvarchar)+kpi_unit end k25
+,case when kpitype=0 then cast(isnull(round(k26,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k26,4),0) as nvarchar)+kpi_unit end k26
+,case when kpitype=0 then cast(isnull(round(k27,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k27,4),0) as nvarchar)+kpi_unit end k27
+,case when kpitype=0 then cast(isnull(round(k28,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k28,4),0) as nvarchar)+kpi_unit end k28
+,case when kpitype=0 then cast(isnull(round(k29,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k29,4),0) as nvarchar)+kpi_unit end k29
+,case when kpitype=0 then cast(isnull(round(k30,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k30,4),0) as nvarchar)+kpi_unit end k30
+,case when kpitype=0 then cast(isnull(round(k31,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k31,4),0) as nvarchar)+kpi_unit end k31
+,b.station stations,*
+from ##tmp a left join station b on a.stationno=b.noa order by a.stationno,a.gno,a.kpi_name
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+   drop table #tmp
+END
+;
+
+--*************************************************************************************************************
+z_kpiborn3:--z_kpiborn3
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_bdate = case when '#non' = [2] then '[1]/01/01' else [2] end
+set @t_edate = case when '#non' = [3] then '[1]/01/31' else [3] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+   drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	kpitype int, ----0 = % , 1 = other
+	kpi_name nvarchar(max),
+	kpi_formula nvarchar(max),
+	kpi_value float,
+	kpi_unit nvarchar(max),
+	stationgno nvarchar(MAX),
+	datea nvarchar(20)
+)
+
+declare @t_xdate nvarchar(20)=@t_bdate
+declare @t_count int=1
+
+while (@t_count<32)
+begin
+
+	insert into #tmp
+	select '0',0,'生產準時率','生產準時筆數/應生產筆數',cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),''
+	,a.stationgno,@t_xdate
+	from (
+		select case when DATEDIFF(day ,CONVERT(datetime,cast(cast(left(a.uindate,3) as int)+1911 as nvarchar)+right(a.uindate,6)),CONVERT(datetime,cast(cast(left(a.enddate,3) as int)+1911 as nvarchar)+right(a.enddate,6))) <=0 then 1 else 0 end diffdate
+		,b.stationgno
+		from view_work a left join station b on a.stationno=b.noa
+		where (a.cuadate =@t_xdate) and (len(ltrim(rtrim(a.uindate))) > 0) and isnull(a.enddate,'') != '' and a.stationno!=''
+	) a	group by a.stationgno
+	
+	insert into #tmp
+	select '0',0,'生產良率','(良品-不良品)/良品',cast(a.mount-a.errmount as float)/cast(a.mount as float),''
+	,a.stationgno,@t_xdate
+	from (
+		select sum(b.errmount) errmount,sum(b.mount) mount,c.stationgno
+		from view_workb a
+		left join view_workbs b on a.noa = b.noa
+		left join station c on a.stationno=c.noa
+		where (a.datea = @t_xdate)
+		group by c.stationgno
+	) a  
+
+	insert into #tmp
+	select '0',0,'機台稼動率','(負荷時間-停機時間)/負荷時間',case when a.borntime > 0 then (a.borntime-stoptime)/a.borntime else 0 end,''
+	,a.stationgno,@t_xdate
+	from (
+		select sum(a.borntime) borntime,(sum(a.chgtime)+sum(a.faulttime)+sum(a.delaytime)+sum(a.waittime)+sum(a.waitfedtime)+	sum(a.lacksss)) stoptime,c.stationgno
+		from view_cuws a
+		left join view_cuw b on a.noa = b.noa
+		left join station c on b.stationno=c.noa
+		where b.datea =@t_xdate
+		group by c.stationgno
+	) a
+
+	insert into #tmp
+	select '0',1,'人員生產效率','總產值(數量)/員工總人數',cast( a.mount as float)/cast(ssstotal as float),' 單位/人'
+	,a.stationgno,@t_xdate
+	from (
+		select sum(a.mount) mount,b.stationgno
+		from view_work a left join station b on a.stationno=b.noa
+		where (a.cuadate=@t_xdate) and a.stationno!=''
+		group by b.stationgno
+	) a outer apply (select count(*) ssstotal from sss where (outdate>=@t_xdate or ISNULL(outdate,'')=''))b
+
+	insert into #tmp
+	select '0',0,'生產逾期率','生產逾期筆數/應生產筆數',cast(sum(a.diffdate) as float)/cast(count(a.diffdate) as float),''
+	,a.stationgno,@t_xdate
+	from (
+		select case when DATEDIFF(day ,CONVERT(datetime,cast(cast(left(a.uindate,3) as int)+1911 as nvarchar)+right(a.uindate,6)),
+			CONVERT(datetime,cast(cast(left(a.enddate,3) as int)+1911 as nvarchar)+right(a.enddate,6))) >0 then 1 else 0 end diffdate
+			,b.stationgno
+		from view_work a left join station b on a.stationno=b.noa
+		where (a.cuadate = @t_xdate) and
+		 (len(ltrim(rtrim(a.uindate))) > 0) and isnull(a.enddate,'') != '' and a.stationno!=''
+	) a group by a.stationgno
+
+	insert into #tmp
+	select '0',0,'生產重工率','重工數量/應生產數',cast(a.rmount as float)/cast(a.mount as float),''
+	,a.stationgno,@t_xdate
+	from (
+		select sum(a.mount) mount,sum(a.rmount) rmount,b.stationgno
+		from view_work a left join station b on a.stationno=b.noa
+		where (a.cuadate =@t_xdate) and a.stationno!=''
+		group by b.stationgno
+	) a
+
+	insert into #tmp
+	select '0',1,'生產製造費用比','製造費用/製造數量',cast(a.makes_money as float)/cast(a.mount as float),' /單位'
+	,a.stationgno,@t_xdate
+	from (
+		select sum(a.makes*a.hours) makes_money,sum(a.mount) mount,b.stationgno
+		from view_work a left join station b on a.stationno=b.noa
+		where (a.cuadate=@t_xdate) and a.stationno!=''
+		group by b.stationgno
+	) a
+
+	insert into #tmp
+	select '0',1,'生產直接人工成本比','直接人工費用/製造數量',cast(a.wages_money as float)/cast(a.mount as float),' /單位'
+	,a.stationgno,@t_xdate
+	from (
+		select sum(a.wages*a.hours) wages_money,sum(a.mount) mount,b.stationgno
+		from view_work a left join station b on a.stationno=b.noa
+		where (a.cuadate =@t_xdate) and a.stationno!=''
+		group by b.stationgno
+	) a
+	
+	
+	set @t_xdate=dbo.q_cdn(@t_xdate,1)
+	set @t_count=@t_count+1
+end
+
+
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+create table ##tmp(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	kpitype int, ----0 = % , 1 = other
+	kpi_name nvarchar(max),
+	kpi_formula nvarchar(max),
+	kpi_unit nvarchar(max),
+	stationgno nvarchar(MAX),
+	d01 nvarchar(20),d02 nvarchar(20),d03 nvarchar(20),d04 nvarchar(20),d05 nvarchar(20),
+	d06 nvarchar(20),d07 nvarchar(20),d08 nvarchar(20),d09 nvarchar(20),d10 nvarchar(20),
+	d11 nvarchar(20),d12 nvarchar(20),d13 nvarchar(20),d14 nvarchar(20),d15 nvarchar(20),
+	d16 nvarchar(20),d17 nvarchar(20),d18 nvarchar(20),d19 nvarchar(20),d20 nvarchar(20),
+	d21 nvarchar(20),d22 nvarchar(20),d23 nvarchar(20),d24 nvarchar(20),d25 nvarchar(20),
+	d26 nvarchar(20),d27 nvarchar(20),d28 nvarchar(20),d29 nvarchar(20),d30 nvarchar(20),d31 nvarchar(20),
+	k01 float,k02 float,k03 float,k04 float,k05 float,
+	k06 float,k07 float,k08 float,k09 float,k10 float,
+	k11 float,k12 float,k13 float,k14 float,k15 float,
+	k16 float,k17 float,k18 float,k19 float,k20 float,
+	k21 float,k22 float,k23 float,k24 float,k25 float,
+	k26 float,k27 float,k28 float,k29 float,k30 float,k31 float
+) 
+
+set @t_xdate =@t_bdate
+set @t_count =1
+declare @t_field nvarchar(20)
+
+while (@t_count<32)
+begin
+	
+	-----------------------------------------------------------------------------------------
+	insert into #tmp
+	select '0',0,'生產準時率','生產準時筆數/應生產筆數',0,'',stationgno,@t_xdate
+	from #tmp group by stationgno
+	
+	insert into #tmp
+	select '0',0,'生產良率','(良品-不良品)/良品',0,'',stationgno,@t_xdate
+	from #tmp group by stationgno
+
+	insert into #tmp
+	select '0',0,'機台稼動率','(負荷時間-停機時間)/負荷時間',0,'',stationgno,@t_xdate
+	from #tmp group by stationgno
+
+	insert into #tmp
+	select '0',1,'人員生產效率','總產值(數量)/員工總人數',0,' 單位/人',stationgno,@t_xdate
+	from #tmp group by stationgno
+
+	insert into #tmp
+	select '0',0,'生產逾期率','生產逾期筆數/應生產筆數',0,'',stationgno,@t_xdate
+	from #tmp group by stationgno
+
+	insert into #tmp
+	select '0',0,'生產重工率','重工數量/應生產數',0,'',stationgno,@t_xdate
+	from #tmp group by stationgno
+
+	insert into #tmp
+	select '0',1,'生產製造費用比','製造費用/製造數量',0,' /單位',stationgno,@t_xdate
+	from #tmp group by stationgno
+	
+	insert #tmp
+	select '0',1,'生產直接人工成本比','直接人工費用/製造數量',0,' /單位',stationgno,@t_xdate
+	from #tmp group by stationgno	
+	----------------------------------------------------------------------------------------
+	
+	set @t_field= right('00'+cast(@t_count as nvarchar(10)),2)
+	
+	exec("insert ##tmp (gno,kpitype,kpi_name,kpi_formula,kpi_unit,stationgno,d"+@t_field+",k"+@t_field+")
+	select '9',kpitype,kpi_name,kpi_formula,kpi_unit,stationgno,'"+@t_xdate+"',kpi_value
+	from #tmp where datea='"+@t_xdate+"'
+	group by kpitype,kpi_name,kpi_formula,kpi_unit,stationgno,kpi_value")
+		
+	set @t_xdate=dbo.q_cdn(@t_xdate,1)
+	set @t_count=@t_count+1
+end
+
+insert ##tmp (gno,kpitype,kpi_name,kpi_formula,kpi_unit,stationgno
+,d01,d02,d03,d04,d05,d06,d07,d08,d09,d10
+,d11,d12,d13,d14,d15,d16,d17,d18,d19,d20
+,d21,d22,d23,d24,d25,d26,d27,d28,d29,d30,d31
+,k01,k02,k03,k04,k05,k06,k07,k08,k09,k10
+,k11,k12,k13,k14,k15,k16,k17,k18,k19,k20
+,k21,k22,k23,k24,k25,k26,k27,k28,k29,k30,k31
+)
+select '0',kpitype,kpi_name,kpi_formula,kpi_unit,stationgno
+,MAX(d01),MAX(d02),MAX(d03),MAX(d04),MAX(d05),MAX(d06),MAX(d07),MAX(d08),MAX(d09),MAX(d10),
+MAX(d11),MAX(d12),MAX(d13),MAX(d14),MAX(d15),MAX(d16),MAX(d17),MAX(d18),MAX(d19),MAX(d20),
+MAX(d21),MAX(d22),MAX(d23),MAX(d24),MAX(d25),MAX(d26),MAX(d27),MAX(d28),MAX(d29),MAX(d30),MAX(d31)
+,SUM(k01),SUM(k02),SUM(k03),SUM(k04),SUM(k05),SUM(k06),SUM(k07),SUM(k08),SUM(k09),SUM(k10)
+,SUM(k11),SUM(k12),SUM(k13),SUM(k14),SUM(k15),SUM(k16),SUM(k17),SUM(k18),SUM(k19),SUM(k20)
+,SUM(k21),SUM(k22),SUM(k23),SUM(k24),SUM(k25),SUM(k26),SUM(k27),SUM(k28),SUM(k29),SUM(k30),SUM(k31)
+from ##tmp
+group by kpitype,kpi_name,kpi_formula,kpi_unit,stationgno
+
+delete ##tmp where gno='9'
+
+insert ##tmp (gno,stationgno)
+select '1',stationgno from ##tmp group by stationgno
+
+select gno,idno,kpi_name,kpi_formula
+,case when kpitype=0 then cast(isnull(round(k01,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k01,4),0) as nvarchar)+kpi_unit end k01
+,case when kpitype=0 then cast(isnull(round(k02,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k02,4),0) as nvarchar)+kpi_unit end k02
+,case when kpitype=0 then cast(isnull(round(k03,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k03,4),0) as nvarchar)+kpi_unit end k03
+,case when kpitype=0 then cast(isnull(round(k04,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k04,4),0) as nvarchar)+kpi_unit end k04
+,case when kpitype=0 then cast(isnull(round(k05,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k05,4),0) as nvarchar)+kpi_unit end k05
+,case when kpitype=0 then cast(isnull(round(k06,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k06,4),0) as nvarchar)+kpi_unit end k06
+,case when kpitype=0 then cast(isnull(round(k07,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k07,4),0) as nvarchar)+kpi_unit end k07
+,case when kpitype=0 then cast(isnull(round(k08,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k08,4),0) as nvarchar)+kpi_unit end k08
+,case when kpitype=0 then cast(isnull(round(k09,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k09,4),0) as nvarchar)+kpi_unit end k09
+,case when kpitype=0 then cast(isnull(round(k10,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k10,4),0) as nvarchar)+kpi_unit end k10
+,case when kpitype=0 then cast(isnull(round(k11,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k11,4),0) as nvarchar)+kpi_unit end k11
+,case when kpitype=0 then cast(isnull(round(k12,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k12,4),0) as nvarchar)+kpi_unit end k12
+,case when kpitype=0 then cast(isnull(round(k13,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k13,4),0) as nvarchar)+kpi_unit end k13
+,case when kpitype=0 then cast(isnull(round(k14,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k14,4),0) as nvarchar)+kpi_unit end k14
+,case when kpitype=0 then cast(isnull(round(k15,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k15,4),0) as nvarchar)+kpi_unit end k15
+,case when kpitype=0 then cast(isnull(round(k16,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k16,4),0) as nvarchar)+kpi_unit end k16
+,case when kpitype=0 then cast(isnull(round(k17,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k17,4),0) as nvarchar)+kpi_unit end k17
+,case when kpitype=0 then cast(isnull(round(k18,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k18,4),0) as nvarchar)+kpi_unit end k18
+,case when kpitype=0 then cast(isnull(round(k19,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k19,4),0) as nvarchar)+kpi_unit end k19
+,case when kpitype=0 then cast(isnull(round(k20,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k20,4),0) as nvarchar)+kpi_unit end k20
+,case when kpitype=0 then cast(isnull(round(k21,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k21,4),0) as nvarchar)+kpi_unit end k21
+,case when kpitype=0 then cast(isnull(round(k22,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k22,4),0) as nvarchar)+kpi_unit end k22
+,case when kpitype=0 then cast(isnull(round(k23,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k23,4),0) as nvarchar)+kpi_unit end k23
+,case when kpitype=0 then cast(isnull(round(k24,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k24,4),0) as nvarchar)+kpi_unit end k24
+,case when kpitype=0 then cast(isnull(round(k25,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k25,4),0) as nvarchar)+kpi_unit end k25
+,case when kpitype=0 then cast(isnull(round(k26,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k26,4),0) as nvarchar)+kpi_unit end k26
+,case when kpitype=0 then cast(isnull(round(k27,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k27,4),0) as nvarchar)+kpi_unit end k27
+,case when kpitype=0 then cast(isnull(round(k28,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k28,4),0) as nvarchar)+kpi_unit end k28
+,case when kpitype=0 then cast(isnull(round(k29,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k29,4),0) as nvarchar)+kpi_unit end k29
+,case when kpitype=0 then cast(isnull(round(k30,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k30,4),0) as nvarchar)+kpi_unit end k30
+,case when kpitype=0 then cast(isnull(round(k31,4),0)*100 as nvarchar) + '%' else cast(isnull(round(k31,4),0) as nvarchar)+kpi_unit end k31
+,b.namea stationgs,*
+from ##tmp a left join stationg b on a.stationgno=b.noa order by a.stationgno,a.gno,a.kpi_name
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+   drop table #tmp
+END
+;
+----************************************************************************************************************
+x_kpiborn1:--原始 z_kpiborn1
 declare @t_bdate nvarchar(20)
 declare @t_edate nvarchar(20)
 set @t_bdate = case when '#non' = [2] then '[1]/01/01' else [2] end
@@ -100,7 +640,8 @@ select gno,idno,kpi_name,kpi_formula,
 	case when kpitype=0 then cast(isnull(round(kpi_value,4),0)*100 as nvarchar) + '%' else cast(isnull(round(kpi_value,4),0) as nvarchar)+kpi_unit end kpi_value,
 	@t_bdate t_bdate,@t_edate t_edate
 from @kpi_tmp order by kpi_name;
-----************************************************************************************************************
+
+--**************************************************************************************************************
 z_kpiborn2:--z_kpiborn2
 declare @t_bdate nvarchar(20)
 declare @t_edate nvarchar(20)

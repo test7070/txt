@@ -794,6 +794,7 @@ declare @t_xmon nvarchar(20)
 set @t_xmon = case when '#non' = [18] then '' else [18] end
 --*********************************************************************************
 --103/10/03 監理部車輛分類為 車頭 A、大貨兼曳C03、板台B、大貨車C01、C02...、全拖板 B16
+--104/06/23 素娟 確定報停不判斷 當月只要遷入還是報廢 遷出 繳銷 都算車還在
 	
 declare @result table(
 		gno nvarchar(1),
@@ -832,6 +833,7 @@ declare @result table(
 
 declare @cmd nvarchar(MAX)
 
+--當月存在的車輛
 set @cmd='select ''0'' gno,a.noa,a.cardealno,ISNULL(c.nick,''''),a.carno,a.carownerno,b.namea,a.indate,a.outdate, 
 a.suspdate,a.enddate,a.wastedate,a.carspecno,ISNULL(f.spec,''''),a.caryear,ISNULL(a.weight3,''''),a.carbrandno,isnull(d.brand,'''')
 ,0,0,0,0,0,0,0,0
@@ -843,55 +845,73 @@ left join carowner b on b.noa = a.carownerno
 left join cardeal c on c.noa = a.cardealno 
 left join carbrand d on d.noa = a.carbrandno 
 left join carspec f on f.noa = a.carspecno 
-where ((@t_enddate!='''' and a.indate<=@t_enddate) or  (@t_xmon!='''' and  left(a.indate,6)<=@t_xmon)) and (a.cardealno between @t_bcardealno and @t_ecardealno)
+where (a.cardealno between @t_bcardealno and @t_ecardealno)
 and a.carownerno!='''' '
 
 if(@t_xcarspec!='')
 set @cmd=@cmd+'and CHARINDEX(a.carspecno,'''+@t_xcarspec+''')>0'
 --(a.carspecno between @t_bcarspecno and @t_ecarspecno)
 
-if(PATINDEX('%遷出%',@t_pdate)=0)
-	set @cmd=@cmd+' and (isnull(outdate,'''')='''' or (@t_enddate!='''' and @t_enddate<=a.outdate) or (@t_xmon!='''' and @t_xmon<left(a.outdate,6)))'
-if(PATINDEX('%報停%',@t_pdate)=0 and @t_xmon='')
-	set @cmd=@cmd+' and (isnull(a.suspdate,'''')='''' or (@t_enddate!='''' and @t_enddate<=a.suspdate) or (@t_xmon!='''' and @t_xmon<=left(a.suspdate,6)))'
-if(PATINDEX('%報廢%',@t_pdate)=0)
-	set @cmd=@cmd+' and (isnull(a.enddate,'''')='''' or (@t_enddate!='''' and @t_enddate<=a.enddate) or (@t_xmon!='''' and @t_xmon<left(a.enddate,6)))'
-if(PATINDEX('%繳銷%',@t_pdate)=0)
-	set @cmd=@cmd+' and (isnull(a.wastedate,'''')='''' or (@t_enddate!='''' and @t_enddate<=a.wastedate) or (@t_xmon!='''' and @t_xmon<left(a.wastedate,6)))'
-
-if(@t_xmon='')
+if(@t_enddate!='')
 begin
-	if(len(@t_pdate)>0)
-	set @cmd=@cmd+' and (1=0 '
+ set @cmd=@cmd+' and (a.indate<=@t_enddate)'
+end
+
+--正常情況下 只顯示小於截止日並不含遷出報停報廢繳銷
+if(@t_enddate!='' and len(@t_pdate)=0 and @t_xmon='')
+begin
+	--遷出
+	set @cmd=@cmd+' and (isnull(outdate,'''')='''' or @t_enddate<=a.outdate)'
+	--報停
+	set @cmd=@cmd+' and (isnull(a.suspdate,'''')='''' or @t_enddate<=a.suspdate)'
+	--報廢
+	set @cmd=@cmd+' and (isnull(a.enddate,'''')='''' or @t_enddate<=a.enddate)'
+	--繳銷
+	set @cmd=@cmd+' and (isnull(a.wastedate,'''')='''' or @t_enddate<=a.wastedate)'
+end
+
+--正常情況下 顯示期間內的車
+if(len(@t_pdate)>0 and @t_xmon='')
+begin
+	set @cmd=@cmd+'and ( 1=1 '
 	if(PATINDEX('%遷出%',@t_pdate)!=0)
-		set @cmd=@cmd+' or (outdate between @t_bdate and @t_edate)'
+		set @cmd=@cmd+' and (len(isnull(a.outdate,''''))=0 or (a.outdate between @t_bdate and @t_edate)) '
 	if(PATINDEX('%報停%',@t_pdate)!=0)
-		set @cmd=@cmd+' or (a.suspdate between @t_bdate and @t_edate)'
+		set @cmd=@cmd+' and (len(isnull(a.suspdate,''''))=0 or (a.suspdate between @t_bdate and @t_edate)) '
 	if(PATINDEX('%報廢%',@t_pdate)!=0)
-		set @cmd=@cmd+' or (a.enddate between @t_bdate and @t_edate)'
+		set @cmd=@cmd+' and (len(isnull(a.enddate,''''))=0 or (a.enddate between @t_bdate and @t_edate)) '
 	if(PATINDEX('%繳銷%',@t_pdate)!=0)
-		set @cmd=@cmd+' or (a.wastedate between @t_bdate and @t_edate)'
+		set @cmd=@cmd+' and (len(isnull(a.wastedate,''''))=0 or (a.wastedate between @t_bdate and @t_edate)) '
 	if(PATINDEX('%遷入%',@t_pdate)!=0)
-		set @cmd=@cmd+' or (a.indate between @t_bdate and @t_edate)'
-	if(len(@t_pdate)>0)
+		set @cmd=@cmd+' and (len(isnull(a.indate,''''))=0 or (a.indate between @t_bdate and @t_edate)) '
 	set @cmd=@cmd+' )'
 end
-else
+
+--anacara情況下(報停忽略) 當月
+if(@t_xmon!='' and len(@t_pdate)=0)
 begin
-	if(len(@t_pdate)>0)
-		set @cmd=@cmd+'and ( 1=1 '
-	if(PATINDEX('%遷出%',@t_pdate)!=0)
-		set @cmd=@cmd+' and (len(isnull(a.outdate,''''))=0 or isnull(left(a.outdate,6),'''')>=@t_xmon or (left(a.outdate,6)!=left(@t_bdate,6) and a.outdate between @t_bdate and @t_edate) ) '
-	--if(PATINDEX('%報停%',@t_pdate)!=0)
-		--set @cmd=@cmd+' and (len(isnull(a.suspdate,''''))=0 or isnull(left(a.suspdate,6),'''')>=@t_xmon or a.suspdate between @t_bdate and @t_edate )'
-	if(PATINDEX('%報廢%',@t_pdate)!=0)
-		set @cmd=@cmd+' and (len(isnull(a.enddate,''''))=0 or isnull(left(a.enddate,6),'''')>=@t_xmon or (left(a.enddate,6)!=left(@t_bdate,6) and a.enddate between @t_bdate and @t_edate) )'
-	if(PATINDEX('%繳銷%',@t_pdate)!=0)
-		set @cmd=@cmd+' and (len(isnull(a.wastedate,''''))=0 or isnull(left(a.wastedate,6),'''')>=@t_xmon or (left(a.wastedate,6)!=left(@t_bdate,6) and a.wastedate between @t_bdate and @t_edate) )'
-	if(PATINDEX('%遷入%',@t_pdate)!=0)
-		set @cmd=@cmd+' and (a.indate <= @t_edate )'
-	if(len(@t_pdate)>0)
-	set @cmd=@cmd+' )'
+	--遷入
+	set @cmd=@cmd+' and (left(a.indate,6)<=@t_xmon)'
+	--遷出
+	set @cmd=@cmd+' and (isnull(outdate,'''')='''' or @t_xmon<=left(a.outdate,6))'
+	--報廢
+	set @cmd=@cmd+' and (isnull(a.enddate,'''')='''' or @t_xmon<=left(a.enddate,6))'
+	--繳銷
+	set @cmd=@cmd+' and (isnull(a.wastedate,'''')='''' or @t_xmon<=left(a.wastedate,6))'
+end
+
+--anacara情況下 顯示期間內的車
+if(len(@t_pdate)>0 and @t_xmon!='')
+begin
+	--遷入
+	set @cmd=@cmd+' and (left(a.indate,6)<=@t_xmon)'
+	--遷出
+	set @cmd=@cmd+' and (isnull(outdate,'''')='''' or @t_xmon<=left(a.outdate,6) or (a.outdate between @t_bdate and @t_edate))'
+	--報廢
+	set @cmd=@cmd+' and (isnull(a.enddate,'''')='''' or @t_xmon<=left(a.enddate,6) or (a.enddate between @t_bdate and @t_edate))'
+	--繳銷
+	set @cmd=@cmd+' and (isnull(a.wastedate,'''')='''' or @t_xmon<=left(a.wastedate,6) or (a.wastedate between @t_bdate and @t_edate)) '
+
 end
 
 declare @ssscount int
@@ -938,47 +958,96 @@ while(@@FETCH_STATUS <> -1)
 	--palmount=(select COUNT(*) from @result where gno='0' and PATINDEX('%-%',carno)>0 and len(carno)=5 and cno=@cno)
 	--where cno=@cno and gno='1'
 	
-	update @result
-	set carmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and a.cno=@cno),
-	palmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and a.cno=@cno),
-	camount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and a.cno=@cno),
-	cbmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and a.cno=@cno),
-	bmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and a.cno=@cno),
-	dmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('D',b.carspecno)=1 and a.cno=@cno),
-	emount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('E',b.carspecno)=1 and a.cno=@cno),
-	omount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and (isnull(b.carspecno,'')='' or left(b.carspecno,1) not in ('A','B','C','D','E')) and a.cno=@cno)
+	if(@t_xmon='')
+	begin
+		update @result
+		set carmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and a.cno=@cno),
+		palmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and a.cno=@cno),
+		camount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and a.cno=@cno),
+		cbmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and a.cno=@cno),
+		bmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and a.cno=@cno),
+		dmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('D',b.carspecno)=1 and a.cno=@cno),
+		emount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('E',b.carspecno)=1 and a.cno=@cno),
+		omount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and (isnull(b.carspecno,'')='' or left(b.carspecno,1) not in ('A','B','C','D','E')) and a.cno=@cno)
+		
+		,a1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		--,a2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,a3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,a2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,a3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
+		
+		,b1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		--,b2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,b3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,b2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,b3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
+		
+		,c1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		--,c2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,c3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,c2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,c3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
+		
+		,d1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate ) and a.cno=@cno)
+		--,d2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,d3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,d2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,d3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
+		
+		,e1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		--,e2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,e3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,e2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,e3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
+		
+		where cno=@cno and gno='1'
+	end
+	else
+	begin
+		--排除當月計算
+		update @result
+		set carmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and a.cno=@cno),
+		palmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and a.cno=@cno),
+		camount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and a.cno=@cno),
+		cbmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and a.cno=@cno),
+		bmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and a.cno=@cno),
+		dmount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('D',b.carspecno)=1 and a.cno=@cno),
+		emount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('E',b.carspecno)=1 and a.cno=@cno),
+		omount=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and (isnull(b.carspecno,'')='' or left(b.carspecno,1) not in ('A','B','C','D','E')) and a.cno=@cno)
+		
+		,a1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
+		--,a2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,a3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,a2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,a3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))) and a.cno=@cno)
+		
+		,b1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
+		--,b2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,b3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,b2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,b3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))) and a.cno=@cno)
+		
+		,c1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
+		--,c2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,c3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,c2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,c3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))) and a.cno=@cno)
+		
+		,d1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
+		--,d2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,d3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,d2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,d3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))) and a.cno=@cno)
+		
+		,e1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
+		--,e2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
+		--,e3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
+		,e2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
+		,e3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))) and a.cno=@cno)
+		
+		where cno=@cno and gno='1'
 	
-	,a1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
-	--,a2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
-	--,a3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
-	,a2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
-	,a3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
-	
-	,b1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
-	--,b2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
-	--,b3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
-	,b2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
-	,b3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
-	
-	,c1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
-	--,c2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
-	--,c3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
-	,c2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
-	,c3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
-	
-	,d1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
-	--,d2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
-	--,d3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
-	,d2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
-	,d3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
-	
-	,e1=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)) and a.cno=@cno)
-	--,e2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))) and a.cno=@cno)
-	--,e3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate) and a.cno=@cno)
-	,e2=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate) and a.cno=@cno)
-	,e3=(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)) and a.cno=@cno)
-	
-	where cno=@cno and gno='1'
+	end
 
 	fetch next from cursor_table 
 	into @cno
@@ -988,48 +1057,97 @@ deallocate cursor_table
 
 if(select COUNT(*) from @result where gno='1')>1
 begin
-	insert into @result 
-	select '3' gno,char(255),char(255),'',COUNT(distinct carno),'','','','','','','','','','','','',''
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 )
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16')
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' )
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03')
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' ) 
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('D',b.carspecno)=1 )
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('E',b.carspecno)=1 )
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and (isnull(b.carspecno,'')='' or left(b.carspecno,1) not in ('A','B','C','D','E')) )
-	,sum(manage)
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
+	if(@t_xmon='')
+	begin
+		insert into @result 
+		select '3' gno,char(255),char(255),'',COUNT(distinct carno),'','','','','','','','','','','','',''
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16')
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03')
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' ) 
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('D',b.carspecno)=1 )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('E',b.carspecno)=1 )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and (isnull(b.carspecno,'')='' or left(b.carspecno,1) not in ('A','B','C','D','E')) )
+		,sum(manage)
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
+		
+		from @result where gno='0'
 	
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
-	
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
-	
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
-	
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
-	--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
-	,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate)))
-	
-	from @result where gno='0'
+	end
+	else
+	begin
+		insert into @result 
+		select '3' gno,char(255),char(255),'',COUNT(distinct carno),'','','','','','','','','','','','',''
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16')
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03')
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' ) 
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('D',b.carspecno)=1 )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('E',b.carspecno)=1 )
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and (isnull(b.carspecno,'')='' or left(b.carspecno,1) not in ('A','B','C','D','E')) )
+		,sum(manage)
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('A',b.carspecno)=1 and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('B',b.carspecno)=1 and b.carspecno!='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and b.carspecno='B16' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))))
+		
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.indate,'')!='' and (isnull(b.indate,'') between @t_bdate and @t_edate and left(b.indate,6)!=left(@t_bdate,6)))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and ((isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate))  or (isnull(b.enddate,'')!='' and (isnull(b.enddate,'') between @t_bdate and @t_edate)) or (isnull(b.wastedate,'')!='' and (isnull(b.wastedate,'') between @t_bdate and @t_edate))))
+		--,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.outdate,'')!='' and (isnull(b.outdate,'') between @t_bdate and @t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and isnull(b.suspdate,'')!='' and (isnull(b.suspdate,'') between @t_bdate and @t_edate) and (isnull(b.outdate,'')='' or isnull(b.outdate,'')>@t_edate) and (isnull(b.enddate,'')='' or isnull(b.enddate,'')>@t_edate)  and (isnull(b.wastedate,'')='' or isnull(b.wastedate,'')>@t_edate))
+		,(select COUNT(*) from @result a left join car2 b on a.carno=b.noa where a.gno='0' and charindex('C',b.carspecno)=1 and b.carspecno!='C03' and ((isnull(b.outdate,'')!='' and isnull(b.outdate,'') between @t_bdate and @t_edate and left(b.outdate,6)!=left(@t_edate,6)) or (isnull(b.enddate,'')!='' and isnull(b.enddate,'') between @t_bdate and @t_edate and left(b.enddate,6)!=left(@t_edate,6)) or (isnull(b.wastedate,'')!='' and isnull(b.wastedate,'') between @t_bdate and @t_edate and left(b.wastedate,6)!=left(@t_edate,6))))
+		
+		from @result where gno='0'
+	end
 	
 	update @result
 	set gno='2'
@@ -1037,9 +1155,45 @@ begin
 	
 end
 
-select *
-from @result
-order by cno,gno,carkindno,noa;
+if(@t_xmon='')
+begin
+	select *
+	from @result
+	order by cno,gno,carkindno,noa
+end
+else
+begin
+	select 
+	case when indate!='' and (left(indate,6)=@t_xmon or left(indate,6)=left(@t_bdate,6) or left(indate,6)=left(@t_edate,6)) 
+	then '<font color="red">'+indate+'</font>' else indate end indate,
+	case when outdate!='' and (left(outdate,6)=@t_xmon or left(outdate,6)=left(@t_bdate,6) or left(outdate,6)=left(@t_edate,6)) 
+	then '<font color="red">'+outdate+'</font>' else outdate end outdate,
+	case when sxdate!='' and (left(sxdate,6)=@t_xmon or left(sxdate,6)=left(@t_bdate,6) or left(sxdate,6)=left(@t_edate,6)) 
+	then '<font color="red">'+sxdate+'</font>' else sxdate end sxdate,
+	case when exdate!='' and (left(exdate,6)=@t_xmon or left(exdate,6)=left(@t_bdate,6) or left(exdate,6)=left(@t_edate,6)) 
+	then '<font color="red">'+exdate+'</font>' else exdate end exdate,
+	case when wasted!='' and (left(wasted,6)=@t_xmon or left(wasted,6)=left(@t_bdate,6) or left(wasted,6)=left(@t_edate,6)) 
+	then '<font color="red">'+wasted+'</font>' else wasted end wasted,
+	
+	case when a1>0 then '<font color="red">'+cast(a1 as nvarchar(10))+'</font>' else cast(a1 as nvarchar(10)) end a1,
+	case when a2>0 then '<font color="red">'+cast(a2 as nvarchar(10))+'</font>' else cast(a2 as nvarchar(10)) end a2,
+	case when a3>0 then '<font color="red">'+cast(a3 as nvarchar(10))+'</font>' else cast(a3 as nvarchar(10)) end a3,
+	case when b1>0 then '<font color="red">'+cast(b1 as nvarchar(10))+'</font>' else cast(b1 as nvarchar(10)) end b1,
+	case when b2>0 then '<font color="red">'+cast(b2 as nvarchar(10))+'</font>' else cast(b2 as nvarchar(10)) end b2,
+	case when b3>0 then '<font color="red">'+cast(b3 as nvarchar(10))+'</font>' else cast(b3 as nvarchar(10)) end b3,
+	case when c1>0 then '<font color="red">'+cast(c1 as nvarchar(10))+'</font>' else cast(c1 as nvarchar(10)) end c1,
+	case when c2>0 then '<font color="red">'+cast(c2 as nvarchar(10))+'</font>' else cast(c2 as nvarchar(10)) end c2,
+	case when c3>0 then '<font color="red">'+cast(c3 as nvarchar(10))+'</font>' else cast(c3 as nvarchar(10)) end c3,
+	case when d1>0 then '<font color="red">'+cast(d1 as nvarchar(10))+'</font>' else cast(d1 as nvarchar(10)) end d1,
+	case when d2>0 then '<font color="red">'+cast(d2 as nvarchar(10))+'</font>' else cast(d2 as nvarchar(10)) end d2,
+	case when d3>0 then '<font color="red">'+cast(d3 as nvarchar(10))+'</font>' else cast(d3 as nvarchar(10)) end d3,
+	case when e1>0 then '<font color="red">'+cast(e1 as nvarchar(10))+'</font>' else cast(e1 as nvarchar(10)) end e1,
+	case when e2>0 then '<font color="red">'+cast(e2 as nvarchar(10))+'</font>' else cast(e2 as nvarchar(10)) end e2,
+	case when e3>0 then '<font color="red">'+cast(e3 as nvarchar(10))+'</font>' else cast(e3 as nvarchar(10)) end e3,
+	* from @result
+	order by cno,gno,carkindno,noa
+end
+;
 
 --***************************************************************************************
 z_car28:--z_car28車籍資料列印
@@ -1487,6 +1641,8 @@ declare @tmp table(
 		carno nvarchar(20),
 		carowner nvarchar(50),
 		datea nvarchar(20),
+		cmoneys float,
+		vmoneys float,
 		moneys float,
 		kind nvarchar(20),
 		recno float
@@ -1495,7 +1651,7 @@ declare @tmp table(
 declare @cmd nvarchar(MAX)
 
 set @cmd='select ''0'' gno,a.insurerno,a.insurer,a.noa,c.namea,(case when isnull(a.stopdate,'''')!='''' then a.stopdate else a.edate end)
-,a.money,a.kind,ROW_NUMBER()over(PARTITION BY a.insurer order by a.noa) recno 
+,a.cmoney,a.vmoney,a.money,a.kind,ROW_NUMBER()over(PARTITION BY a.insurer order by a.noa) recno 
 from carInsure a 
 left join car2 b on a.noa = b.noa 
 left join carOwner c on c.noa = b.carownerno 
@@ -1527,12 +1683,14 @@ execute sp_executesql @cmd,N'@t_bdate nvarchar(20),@t_edate nvarchar(20),@t_bins
 		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_binsurerno=@t_binsurerno,@t_einsurerno=@t_einsurerno
 
 insert into @tmp
-select '1' gno,xinsurerno,'','','','',SUM(moneys),'',max(recno)
+select '1' gno,xinsurerno,'','','','',SUM(cmoneys),SUM(vmoneys),SUM(moneys),'',max(recno)
 from @tmp
 group by xinsurerno
 
 select gno,xinsurerno,insurer,carno,carowner,datea,
-reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,moneys),1)),4,12)) moneys,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cmoneys),1)),4,30)) cmoneys,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,vmoneys),1)),4,30)) vmoneys,
+reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,moneys),1)),4,30)) moneys,
 kind,recno
 from @tmp
 order by xinsurerno,gno,carno,datea;
