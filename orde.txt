@@ -477,3 +477,172 @@ conform:--orde_conform
 		values(CONVERT(nvarchar,GETDATE(),111),left(CONVERT(nvarchar,GETDATE(),108),5),@t_userno,'conform',@t_ordeno,'orde','簽回','')
 	end
 	select * from @tmp;
+------------------------------------------------------------------------------------------------------------------
+orde_ordc_rc2_gu:--orde_ordc_rc2_gu 判斷轉採購單或已進貨
+SET QUOTED_IDENTIFIER OFF
+
+declare @t_accy nvarchar(50)
+declare @t_noa nvarchar(50)
+
+set @t_accy = case when '#non' = [1] then '104' else [1] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+
+select sum(isnull(cb.mount,0)) ordcmount,sum(isnull(rs.mount,0))rc2mount 
+from view_ordc ca left join view_ordcs cb on ca.noa=cb.noa 
+left join view_rc2s rs on cb.noa=rs.ordeno and cb.no2=rs.no2 
+where ca.quatno=@t_noa --and isnull(rs.noa,'')!=''
+;
+----------------------------------------------------------------------------------
+orde2ordc_gu:--orde2ordc_gu 轉採購單
+SET QUOTED_IDENTIFIER OFF
+
+declare @t_accy nvarchar(50)
+declare @t_noa nvarchar(50)
+declare @t_mount nvarchar(20)
+declare @t_worker nvarchar(50)
+declare @t_stkdate nvarchar(30)
+
+set @t_accy = case when '#non' = [1] then '104' else [1] end
+set @t_noa = case when '#non' = [2] then '' else [2] end
+set @t_mount = case when '#non' = [3] then '0' else [3] end
+set @t_worker = case when '#non' = [4] then '' else [4] end
+
+set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+---------------------------------------------------------------------------------
+declare @tmpa table(
+	productno nvarchar(50),
+	product nvarchar(200),
+	spec nvarchar(50),
+	gdemand float
+)
+
+--uca
+insert @tmpa
+select b.productno,b.product,b.spec,b.mount*a.mount
+from view_ordes a left join ucas b on a.productno=b.noa 
+where a.noa=@t_noa and isnull(b.noa,'')!='' and isnull(a.productno,'')!=''
+
+--ucc
+insert @tmpa
+select a.productno,a.product,a.spec,a.mount
+from view_ordes a left join ucc b on a.productno=b.noa 
+where a.noa=@t_noa and  isnull(b.noa,'')='' and isnull(a.productno,'')!=''
+
+declare @cmd nvarchar(max) 
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	tggno nvarchar(50),
+	tgg nvarchar(100),
+	productno nvarchar(50),
+	product nvarchar(200),
+	spec nvarchar(50),
+	gdemand float,
+	stkmount float,
+	ordcmount float,
+	safemount float,
+	ndemand float,
+	
+	sordc float,
+	src2 float,
+	sunrc2 float
+)
+
+insert #tmp (gno,productno,product,spec,gdemand)
+select '0',productno,MAX(product),MAX(spec),sum(gdemand)
+from @tmpa group by productno
+
+update a
+set tggno=isnull(b.tggno,''),tgg=isnull(b.tgg,'')
+,stkmount=isnull(c.mount,0),ordcmount=isnull(d.mount,0),safemount=isnull(b.safemount,0)
+,sordc=isnull(e.mount,0),src2=isnull(f.mount,0),sunrc2=isnull(e.mount,0)-isnull(f.mount,0)
+from #tmp a
+left join ucc b on a.productno=b.noa
+outer apply (select sum(mount) mount from stkucc(@t_stkdate,'','') where productno=a.productno)c
+outer apply (select sum(cb.mount)mount from view_ordc ca left join view_ordcs cb on ca.noa=cb.noa where isnull(ca.enda,0)!=1 and isnull(cb.enda,0)!=1 and cb.productno=a.productno and isnull(ca.quatno,'')='' and ca.quatno!=@t_noa )d
+outer apply (select sum(cb.mount)mount from view_ordc ca left join view_ordcs cb on ca.noa=cb.noa where ca.quatno=@t_noa and productno=a.productno )e
+outer apply (select sum(rs.mount)mount from view_ordc ca left join view_ordcs cb on ca.noa=cb.noa left join view_rc2s rs on cb.noa=rs.ordeno and cb.no2=rs.no2 where ca.quatno=@t_noa and cb.productno=a.productno and rs.productno=a.productno)f
+
+update a
+set ndemand=case when (a.gdemand-a.stkmount-a.ordcmount+a.safemount)<=0 then 0 else (a.gdemand-a.stkmount-a.ordcmount+a.safemount) end
+from #tmp a
+
+--select
+--dbo.getComma(gdemand,0)gdemand
+--,dbo.getComma(stkmount,0)stkmount
+--,dbo.getComma(ordcmount,0)ordcmount
+--,dbo.getComma(safemount,0)safemount
+--,dbo.getComma(ndemand,0)ndemand
+--,dbo.getComma(sordc,0)sordc
+--,dbo.getComma(src2,0)src2
+--,dbo.getComma(sunrc2,0)sunrc2
+--,product products
+--,*
+--from #tmp order by gno,tggno,productno
+
+--刪除已產生的採購單
+declare @accy nvarchar(90)
+set @accy=isnull((select top 1 accy from view_ordc where quatno=@t_noa),@t_accy)
+EXEC("delete a from ordcs"+@accy+" a left join ordc"+@accy+" b on a.noa=b.noa where b.quatno='"+@t_noa+"' ")
+EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
+
+--新增採購單
+declare @tggno nvarchar(90)
+declare @ordcno nvarchar(90)
+
+BEGIN TRY
+	declare cursor_table cursor for 
+	select tggno from #tmp group by tggno
+	open cursor_table 
+	fetch next from cursor_table 
+	into @tggno
+	while(@@FETCH_STATUS <> -1) 
+	begin
+		
+		--新的採購單號
+		select @ordcno=MAX(noa) from view_ordc where noa like 'P'+REPLACE(@t_stkdate,'/','')+'%'
+		set @ordcno='P'+REPLACE(@t_stkdate,'/','')+right('000'+cast(cast(RIGHT(isnull(@ordcno,'000'),3) as int)+1 as nvarchar(10)),3)
+		
+		EXEC("insert ordc"+@accy+"(noa,quatno,kind,odate,datea,cno,acomp,tggno,tgg,nick,trantype,salesno,sales,paytype,tel,fax
+		,post,addr,money,taxtype,tax,total,floata,totalus,isproj,cancel,enda,worker)
+		select '"+@ordcno+"' noa,'"+@t_noa+"' quatno,'1' kind,'"+@t_stkdate+"' odate
+		,dbo.q_cdn('"+@t_stkdate+"',20)datea,(select top 1 noa from acomp order by noa)cno,(select top 1 acomp from acomp order by noa )acomp
+		,noa tggno,comp tgg,nick nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp
+		,0 money,'0' taxtype,0 tax,0 total,0 floata,0 totalus,1 isproj,0 cancel,0 enda,'"+@t_worker+"' worker
+		from (select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
+		union all select '','','','','','','','','','','' )tmp
+		where noa='"+@tggno+"'")
+		
+		EXEC("insert ordcs"+@accy+"(noa,no2,productno,product,spec,unit,mount,omount,stdmount,price,total,c1,notv,cancel,enda,tggno)
+		select '"+@ordcno+"',right('000'+cast(ROW_NUMBER() over (order by a.productno) as nvarchar(10)),3)
+		,a.productno,a.product,a.spec,b.unit,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end mount
+		,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end omount,b.stdmount,b.inprice
+		,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end*b.inprice total,0 c1
+		,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end notv,0 cancel,0 enda,'"+@tggno+"' tggno
+		from #tmp a left join ucc b on a.productno=b.noa where a.tggno='"+@tggno+"'")
+
+		fetch next from cursor_table 
+		into @tggno
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+END TRY
+BEGIN CATCH
+	close cursor_table 
+	deallocate cursor_table 
+END CATCH
+
+--產生筆數
+select count(*) counts from view_ordc where quatno=@t_noa
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END;
