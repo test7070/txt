@@ -527,7 +527,7 @@ where a.noa=@t_noa and isnull(b.noa,'')!='' and isnull(a.productno,'')!=''
 insert @tmpa
 select a.productno,a.product,a.spec,a.mount
 from view_ordes a left join ucc b on a.productno=b.noa 
-where a.noa=@t_noa and  isnull(b.noa,'')='' and isnull(a.productno,'')!=''
+where a.noa=@t_noa and  isnull(b.noa,'')!='' and isnull(a.productno,'')!=''
 
 declare @cmd nvarchar(max) 
 IF OBJECT_ID('tempdb..#tmp')is not null
@@ -551,7 +551,8 @@ create table #tmp(
 	
 	sordc float,
 	src2 float,
-	sunrc2 float
+	sunrc2 float,
+	rc2days float 
 )
 
 insert #tmp (gno,productno,product,spec,gdemand)
@@ -562,6 +563,7 @@ update a
 set tggno=isnull(b.tggno,''),tgg=isnull(b.tgg,'')
 ,stkmount=isnull(c.mount,0),ordcmount=isnull(d.mount,0),safemount=isnull(b.safemount,0)
 ,sordc=isnull(e.mount,0),src2=isnull(f.mount,0),sunrc2=isnull(e.mount,0)-isnull(f.mount,0)
+,rc2days=case when isnull(b.[days],0)=0 then 1 else b.[days] end
 from #tmp a
 left join ucc b on a.productno=b.noa
 outer apply (select sum(mount) mount from stkucc(@t_stkdate,'','') where productno=a.productno)c
@@ -610,23 +612,30 @@ BEGIN TRY
 		set @ordcno='P'+REPLACE(@t_stkdate,'/','')+right('000'+cast(cast(RIGHT(isnull(@ordcno,'000'),3) as int)+1 as nvarchar(10)),3)
 		
 		EXEC("insert ordc"+@accy+"(noa,quatno,kind,odate,datea,cno,acomp,tggno,tgg,nick,trantype,salesno,sales,paytype,tel,fax
-		,post,addr,money,taxtype,tax,total,floata,totalus,isproj,cancel,enda,worker)
+		,post,addr,money,taxtype,tax,total,floata,totalus,isproj,cancel,enda,worker,trandate)
 		select '"+@ordcno+"' noa,'"+@t_noa+"' quatno,'1' kind,'"+@t_stkdate+"' odate
 		,dbo.q_cdn('"+@t_stkdate+"',20)datea,(select top 1 noa from acomp order by noa)cno,(select top 1 acomp from acomp order by noa )acomp
 		,noa tggno,comp tgg,nick nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp
 		,0 money,'0' taxtype,0 tax,0 total,0 floata,0 totalus,1 isproj,0 cancel,0 enda,'"+@t_worker+"' worker
+		,dbo.q_cdn('"+@t_stkdate+"',isnull((select MAX(rc2days) from #tmp where tggno='"+@tggno+"'),0))
 		from (select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
 		union all select '','','','','','','','','','','' )tmp
 		where noa='"+@tggno+"'")
 		
-		EXEC("insert ordcs"+@accy+"(noa,no2,productno,product,spec,unit,mount,omount,stdmount,price,total,c1,notv,cancel,enda,tggno,datea)
+		EXEC("insert ordcs"+@accy+"(noa,no2,productno,product,spec,unit,mount,omount,stdmount,price,total,c1,notv,cancel,enda,tggno,datea,trandate)
 		select '"+@ordcno+"',right('000'+cast(ROW_NUMBER() over (order by a.productno) as nvarchar(10)),3)
 		,a.productno,a.product,a.spec,b.unit,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end mount
 		,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end omount,b.stdmount,b.inprice
 		,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end*b.inprice total,0 c1
 		,case when '"+@t_mount+"'='0' then a.gdemand else a.ndemand end notv,0 cancel,0 enda,'"+@tggno+"' tggno
 		,dbo.q_cdn('"+@t_stkdate+"',20)datea
+		,dbo.q_cdn('"+@t_stkdate+"',isnull((select MAX(rc2days) from #tmp where tggno='"+@tggno+"'),0))
 		from #tmp a left join ucc b on a.productno=b.noa where a.tggno='"+@tggno+"'")
+		
+		EXEC(" update ordc"+@accy+" 
+		set money=isnull((select sum(total) from view_ordcs where noa='"+@ordcno+"'),0) 
+		,total=isnull((select sum(total) from view_ordcs where noa='"+@ordcno+"'),0) 
+		where noa='"+@ordcno+"'")
 
 		fetch next from cursor_table 
 		into @tggno
