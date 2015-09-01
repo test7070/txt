@@ -13,6 +13,7 @@ zxls_twport:--zxls_twport  港務局
 		sel int identity(1,1),
 		recno int,
 		[date] datetime,
+		noa nvarchar(20),
 		noq nvarchar(20),
 		typea nvarchar(max),
 		dtime nvarchar(max), --Time
@@ -84,7 +85,7 @@ zxls_twport:--zxls_twport  港務局
 	end
 	close cursor_table
 	deallocate cursor_table
-	
+
 	update @tmp set straddr= case when typea='in' then straddr+'-公用碼頭' else '公用碼頭-'+straddr end
 	update @tmp set straddrno=b.noa,price=c.custprice,price2=c.driverprice,price3=c.driverprice2
 		,salesno=c.salesno,sales=c.sales
@@ -110,45 +111,57 @@ zxls_twport:--zxls_twport  港務局
 	update @tmp set discount=1
 	--update @tmp set discount=ISNULL(b.discount,1)
 	--from @tmp a
-	--left join calctypes b on a.calctype=b.noa+b.noq			
-	--------------------------------------------------------------------------------------------------------------------------------------------
-	declare @datea nvarchar(20) = ''
-	select top 1 @datea=trandate from @tmp order by sel
-	set @string = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-	set @noa = ''
-	declare @maxnoa nvarchar(20) = ''
-	select @noa = noa from twport where noa like REPLACE(@datea,'/','')+'[0-9,A-Z][0-9][0-9]' 
-	
-	if len(@noa)=0
-	begin
-		set @noa = REPLACE(@datea,'/','')+'001'
-	end
-	else
-	begin
-		declare @nn nvarchar(3) = right(@noa,3)
-		declare @mm int = (charindex(left(@nn,1),@string)-1)*100 + cast(right(@nn,2) as int) + 1
-		set @nn = SUBSTRING(@string,floor(@mm/100)+1,1)+ right('00'+CAST(@mm%100 as nvarchar),2)
-		set @noa = REPLACE(@datea,'/','') + @nn
-	end
-	
-	update @tmp set noq=right('000'+CAST(b.recno as nvarchar),3)
-	from @tmp a
-	left join (select sel,ROW_NUMBER()over(order by caseno)recno from @tmp)b on a.sel=b.sel
-	
+	--left join calctypes b on a.calctype=b.noa+b.noq	
 	update @tmp set custno='A239',comp=b.comp,nick=b.nick
 	from @tmp a
 	left join cust b on b.noa='A239'
 	update @tmp set carteamno='01' --貨櫃
 		,productno=case when casetype="20''" then 'C001' when casetype="40''" then 'C003' else '' end
 		,product=case when casetype="20''" then '20"貨櫃' when casetype="40''" then '40"貨櫃' else '' end
-	--------------------------------------------------------------------------------------------------------------------------------------------
-	--雙拖  第2筆不算單價
+		
 	update @tmp set [date] = CAST( cast(dbo.ChineseEraName2AD(trandate) as nvarchar)+' '+dtime as datetime)
 	
 	update @tmp set recno=b.recno
 	from @tmp a
-	left join (select ROW_NUMBER()over(order by carno,[date],sel) recno,sel from @tmp) b on a.sel=b.sel
-		
+	left join (select ROW_NUMBER()over(partition by trandate order by carno,[date],sel) recno,sel from @tmp) b on a.sel=b.sel		
+	--------------------------------------------------------------------------------------------------------------------------------------------
+	declare @datea nvarchar(20) = ''
+	select top 1 @datea=trandate from @tmp order by sel
+	set @string = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	set @noa = ''
+	declare @maxnoa nvarchar(20) = ''
+	
+	declare @trandate nvarchar(20)
+	
+	declare cursor_table cursor for
+	select trandate from @tmp group by trandate 
+	open cursor_table
+	fetch next from cursor_table
+	into @trandate
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @noa = ''
+		select @noa = noa from twport where noa like REPLACE(@trandate,'/','')+'[0-9,A-Z][0-9][0-9]' 
+		if len(@noa)=0
+		begin
+			set @noa = REPLACE(@trandate,'/','')+'001'
+		end
+		else
+		begin
+			declare @nn nvarchar(3) = right(@noa,3)
+			declare @mm int = (charindex(left(@nn,1),@string)-1)*100 + cast(right(@nn,2) as int) + 1
+			set @nn = SUBSTRING(@string,floor(@mm/100)+1,1)+ right('00'+CAST(@mm%100 as nvarchar),2)
+			set @noa = REPLACE(@trandate,'/','') + @nn
+		end
+		update @tmp set noa=@noa where trandate=@trandate
+		fetch next from cursor_table
+		into @trandate
+	end
+	close cursor_table
+	deallocate cursor_table
+	update @tmp set noq=right('000'+CAST(recno as nvarchar),3)
+	--------------------------------------------------------------------------------------------------------------------------------------------
+	--雙拖  第2筆不算單價
 	declare @sel int
 	declare @recno int
 	declare @carno nvarchar(20)
@@ -186,15 +199,18 @@ zxls_twport:--zxls_twport  港務局
 	deallocate cursor_table
 	--------------------------------------------------------------------------------------------------------------------------------------------
 	insert into twport(noa,datea,memo,worker,worker2,qtime)
-	select @noa,@datea,'',@worker,'',@curdate
+	select noa,trandate,'',@worker,'',@curdate
+	from @tmp
+	group by noa,trandate
+	
 	insert into twports(noa,noq,datea,trandate,mon,mon2,carno,driverno,driver,custno,comp,nick
 		,calctype,carteamno,straddrno,straddr,uccno,product
 		,inmount,pton,mount,price,total
 		,outmount,pton2,mount2,price2,price3,discount,total2
 		,tolls,reserve,gross,[weight],caseno,caseno2,casetype
-		,po,custorde,bmiles,emiles,miles,gps,salesno,sales,memo,validation
+		,po,custorde,bmiles,emiles,miles,gps,salesno,sales,memo,[validation]
 		,dtime)
-	select @noa,noq,trandate,trandate,LEFT(trandate,6),LEFT(trandate,6),carno,driverno,driver,custno,comp,nick
+	select noa,noq,trandate,trandate,LEFT(trandate,6),LEFT(trandate,6),carno,driverno,driver,custno,comp,nick
 		,calctype,carteamno,straddrno,straddr,productno,product
 		,1,0,1,price,ROUND(price,0)
 		,1,0,1,price2,price3,discount,ROUND((price2+price3)*discount,0)
