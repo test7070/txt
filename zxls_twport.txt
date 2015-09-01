@@ -6,11 +6,13 @@ zxls_twport:--zxls_twport  港務局
 	declare @filename nvarchar(max) = [3]
 	declare @curdate nvarchar(max) = convert(nvarchar,getDate(),120)
 	--------------------------------------------------------------------------------------
-	set @filename = REVERSE(replace(Upper(@filename),'HCTF',''))
+	set @filename = REVERSE(replace(Upper(@filename),'TWPORT',''))
 	set @filename = REVERSE(substring(@filename,charindex('.',@filename)+1,len(@filename)))
 	--------------------------------------------------------------------------------------
 	declare @tmp table(
 		sel int identity(1,1),
+		recno int,
+		[date] datetime,
 		noq nvarchar(20),
 		typea nvarchar(max),
 		dtime nvarchar(max), --Time
@@ -139,6 +141,49 @@ zxls_twport:--zxls_twport  港務局
 	update @tmp set carteamno='01' --貨櫃
 		,productno=case when casetype="20''" then 'C001' when casetype="40''" then 'C003' else '' end
 		,product=case when casetype="20''" then '20"貨櫃' when casetype="40''" then '40"貨櫃' else '' end
+	--------------------------------------------------------------------------------------------------------------------------------------------
+	--雙拖  第2筆不算單價
+	update @tmp set [date] = CAST( cast(dbo.ChineseEraName2AD(trandate) as nvarchar)+' '+dtime as datetime)
+	
+	update @tmp set recno=b.recno
+	from @tmp a
+	left join (select ROW_NUMBER()over(order by carno,[date],sel) recno,sel from @tmp) b on a.sel=b.sel
+		
+	declare @sel int
+	declare @recno int
+	declare @carno nvarchar(20)
+	declare @date datetime
+	declare @n int
+	declare @target int
+	
+	declare cursor_table cursor for
+	select sel,recno,carno,[date] 
+	from @tmp 
+	where LEFT(casetype,2)='20'
+	order by recno
+	open cursor_table
+	fetch next from cursor_table
+	into @sel,@recno,@carno,@date
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @target = -1
+		select top 1 @target=sel from @tmp 
+		where carno=@carno and recno>@recno and DATEDIFF(mi,@date,[date])<5 and sel!=@sel
+		order by recno
+		
+		if @target!=-1
+		begin
+			update @tmp set price=0,price2=0,price3=0,memo='雙拖' where sel=@target
+			--select top 1 * from @tmp 
+			--where carno=@carno and recno>@recno and DATEDIFF(mi,@date,[date])<5
+			--order by recno
+		end
+		
+		fetch next from cursor_table
+		into @sel,@recno,@carno,@date
+	end
+	close cursor_table
+	deallocate cursor_table
 	--------------------------------------------------------------------------------------------------------------------------------------------
 	insert into twport(noa,datea,memo,worker,worker2,qtime)
 	select @noa,@datea,'',@worker,'',@curdate
