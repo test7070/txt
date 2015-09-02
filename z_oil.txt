@@ -1,3 +1,116 @@
+z_oil09:--z_oil09	
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_bdate nvarchar(10) = case when '#non'=[4] then '' else [4] end
+	declare @t_edate nvarchar(10) = case when '#non'=[5] then char(255) else [5] end
+	declare @t_carno nvarchar(max) = case when '#non'=[6] then '' else [6] end
+---------------------------------------------------------------------------------
+	declare @tmp table(
+		recno int,
+		gno nvarchar(20),
+		carno nvarchar(20),
+		product nvarchar(20),
+		mount float,
+		[money] float,
+		miles float,
+		rate float,
+		etc float,
+		adblue float, --尿素
+		[money2] float,
+		total float
+	)
+	declare @carno nvarchar(20)
+	declare @mount float
+	declare @money float
+	declare @miles float
+	declare @oilstation nvarchar(50)
+	declare @product nvarchar(20)
+
+	declare cursor_table cursor for
+	select isnull(carno,''),sum(isnull(mount,0)),sum(isnull([money],0)),sum(isnull(miles,0))
+		,isnull(oilstation,''),isnull(product,'') 
+	from oil 
+	where oildate between @t_bdate and @t_edate
+	and (len(@t_carno)=0 or CHARINDEX(','+carno+',',','+@t_carno+',')>0) 
+	group by isnull(carno,''),isnull(oilstation,''),isnull(product,'') 
+	having not(sum(isnull(mount,0))=0 and sum(isnull([money],0))=0 and sum(isnull(miles,0))=0)
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@mount,@money,@miles,@oilstation,@product
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from @tmp where carno=@carno)
+		begin
+			insert into @tmp(gno,carno)values('1',@carno)
+		end
+		if CHARINDEX('尿素',@oilstation)>0
+		begin
+			update @tmp set adblue = ISNULL(adblue,0)+@mount,money2=ISNULL([money2],0)+@money 
+			where carno=@carno
+		end
+		else 
+		begin
+			update @tmp set product=@product 
+				,mount = ISNULL(mount,0)+@mount
+				,[money]=ISNULL([money],0)+@money 
+				,miles=ISNULL(miles,0)+@miles
+			where carno=@carno
+		end
+		
+		fetch next from cursor_table
+		into @carno,@mount,@money,@miles,@oilstation,@product
+	end
+	close cursor_table
+	deallocate cursor_table
+---------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select carno,SUM(ISNULL([money],0)) 
+	from etc
+	where datea between @t_bdate and @t_edate
+	and (len(@t_carno)=0 or CHARINDEX(','+carno+',',@t_carno)>0) 
+	group by carno
+	having SUM(ISNULL([money],0))!=0
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@money
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from @tmp where carno=@carno)
+		begin
+			insert into @tmp(gno,carno)values('1',@carno)
+		end
+		update @tmp set etc=@money where carno=@carno
+		
+		fetch next from cursor_table
+		into @carno,@money
+	end
+	close cursor_table
+	deallocate cursor_table
+---------------------------------------------------------------------------------
+	insert into @tmp(gno,carno,mount,[money],etc,adblue,money2)
+	select '2',CHAR(255),SUM(ISNULL(mount,0)),SUM(ISNULL([money],0)),SUM(ISNULL([etc],0))
+		,SUM(ISNULL([adblue],0)),SUM(ISNULL([money2],0))
+	from @tmp
+
+	update @tmp set recno=b.recno,total=ISNULL(a.[money],0)+ISNULL(a.[etc],0)+ISNULL(a.[money2],0)
+		,rate = case when ISNULL(a.[mount],0)=0 then 0 else round(a.miles/a.mount,2) end
+	from @tmp a
+	left join (select carno,ROW_NUMBER()over(order by gno,carno) recno from @tmp) b on a.carno=b.carno
+	
+	select *
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+cast(recno as nvarchar)+'</a>' rr 
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+carno+'</a>' b01 
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+product+'</a>' b02 
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma(mount,2)+'</a>' b03
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([money],0)+'</a>' b04
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([miles],0)+'</a>' b05 
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([rate],2)+'</a>' b06
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([etc],0)+'</a>' b07
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([adblue],2)+'</a>' b08
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([money2],0)+'</a>' b09
+		,'<a style="font-family:'+ "'Times New Roman','標楷體', serif"+char(59)+'">'+dbo.getComma([total],0)+'</a>' b10
+	from @tmp
+	order by recno;
+
 z_oil08:--z_oil08	
 	SET QUOTED_IDENTIFIER OFF
 	declare @t_bdate nvarchar(10) = case when '#non'=[4] then '' else [4] end
@@ -92,33 +205,6 @@ z_oil3:--z_oil3
 	set @t_emon = case when '#non'=[12] then char(255) else [12] end
 	set @t_carkind = case when '#non'=[13] then '' else [13] end
 	set @t_oilstation = case when '#non'=[14] then '' else [14] end
-	-------------------------------------------------------------------------------
-	declare @string nvarchar(max)
-	declare @n int
-	IF OBJECT_ID('tempdb..#oilstation')is not null
-	BEGIN
-		set @cmd = 'drop table #oilstation'
-		EXECUTE sp_executesql @cmd
-	END
-	create table #oilstation(
-		noa nvarchar(20)
-	)
-	set @string = @t_oilstation
-	while(1=1)
-	begin
-		set @n = PATINDEX('%,%',@string)
-		if @n=0
-		begin
-			if LEN(@string)>0
-			begin
-				insert into #oilstation select @string
-			end
-			break
-		end
-		insert into #oilstation select LEFT(@string,@n-1)	
-		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
-	end
-	
 	------------------------------------------------------------------------------- 
 	declare @oilstationno nvarchar(20)
 	declare @oilstation nvarchar(20)
@@ -158,15 +244,14 @@ z_oil3:--z_oil3
 	)
 	--OILIN
 	declare cursor_table cursor for
-	select a.oilstationno,ISNULL(c.station,''),isnull(c.isl,0),isnull(c.ism,0),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.[money],0))
+	select a.oilstationno,ISNULL(b.station,''),isnull(b.isl,0),isnull(b.ism,0),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.[money],0))
 	from oilin a
-	left join #oilstation b on a.oilstationno=b.noa
-	left join oilstation c on b.noa=c.noa
-	where (b.noa is not null) 
+	left join oilstation b on a.oilstationno=b.noa
+	where ( len(@t_oilstation)=0 or CHARINDEX(','+a.oilstationno+',',','+@t_oilstation+',')>0)
 	and ((len(@t_bdate) = 0 and len(@t_bxoildate) > 0 and a.datea < @t_bxoildate) or (len(@t_bxoildate) = 0 and len(@t_bdate) > 0 and a.datea < @t_bdate) or
 	     (len(@t_bdate) > 0 and len(@t_bxoildate) > 0 and a.datea < @t_bxoildate) 
 	     or (len(@t_bdate) = 0 and len(@t_bdate) = 0 and a.datea < @t_bxoildate ))
-	group by a.oilstationno,ISNULL(c.station,''),isnull(c.isl,0),isnull(c.ism,0)
+	group by a.oilstationno,ISNULL(b.station,''),isnull(b.isl,0),isnull(b.ism,0)
 	open cursor_table
 	fetch next from cursor_table
 	into @oilstationno,@oilstation,@isl,@ism,@mount,@money
@@ -186,15 +271,14 @@ z_oil3:--z_oil3
 	deallocate cursor_table
 	--OIL
 	declare cursor_table cursor for
-	select a.oilstationno,ISNULL(c.station,''),isnull(c.isl,0),isnull(c.ism,0),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.[money],0))
+	select a.oilstationno,ISNULL(b.station,''),isnull(b.isl,0),isnull(b.ism,0),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.[money],0))
 	from oil a
-	left join #oilstation b on a.oilstationno=b.noa
-	left join oilstation c on b.noa=c.noa
-	where (b.noa is not null) 
+	left join oilstation b on a.oilstationno=b.noa
+	where ( len(@t_oilstation)=0 or CHARINDEX(','+a.oilstationno+',',','+@t_oilstation+',')>0)
 	and ((len(@t_bdate) = 0 and len(@t_bxoildate) > 0 and a.oildate < @t_bxoildate) or (len(@t_bxoildate) = 0 and len(@t_bdate) > 0 and a.datea < @t_bdate) or
 	     (len(@t_bdate) > 0 and len(@t_bxoildate) > 0 and a.oildate < @t_bxoildate and a.datea < @t_bdate) 
 	     or (len(@t_bdate) = 0 and len(@t_bdate) = 0 and a.oildate < @t_bxoildate and a.datea < @t_bdate))
-	group by a.oilstationno,ISNULL(c.station,''),isnull(c.isl,0),isnull(c.ism,0)
+	group by a.oilstationno,ISNULL(b.station,''),isnull(b.isl,0),isnull(b.ism,0)
 	open cursor_table
 	fetch next from cursor_table
 	into @oilstationno,@oilstation,@isl,@ism,@mount,@money
@@ -214,34 +298,32 @@ z_oil3:--z_oil3
 	deallocate cursor_table
 	---------------------------------------------------------------------------------------------------------
 	insert into @tmp2
-	select '0','1',a.oilstationno,ISNULL(c.station,''),isnull(a.oildate,'')
-	,sum(cast(case when a.product!='高柴' then isnull(a.mount,0) else 0 end as decimal(10,2))) 
-	,sum((case when a.product!='高柴' then isnull(a.[money],0) else 0 end)) 
-	,sum(cast(case when a.product='高柴' then isnull(a.mount,0) else 0 end as decimal(10,2))) 
-	,sum((case when a.product='高柴' then isnull(a.[money],0) else 0 end))
+	select '0','1',a.oilstationno,ISNULL(b.station,''),isnull(a.oildate,'')
+	,sum(cast(case when charindex('柴',a.product)=0 then isnull(a.mount,0) else 0 end as decimal(10,2))) 
+	,sum((case when charindex('柴',a.product)=0 then isnull(a.[money],0) else 0 end)) 
+	,sum(cast(case when charindex('柴',a.product)>0 then isnull(a.mount,0) else 0 end as decimal(10,2))) 
+	,sum((case when charindex('柴',a.product)>0 then isnull(a.[money],0) else 0 end))
 	,SUM(ISNULL(a.mount,0))
 	,SUM(ISNULL(a.[money],0)) 
 	,0,0,0,0
 	from oil a
-	left join #oilstation b on a.oilstationno=b.noa
-	left join oilstation c on b.noa=c.noa
-	where (b.noa is not null) 
+	left join oilstation b on a.oilstationno=b.noa
+	where ( len(@t_oilstation)=0 or CHARINDEX(','+a.oilstationno+',',','+@t_oilstation+',')>0)
 	and ((len(@t_bdate) = 0 and len(@t_bxoildate) > 0 and (a.oildate between @t_bxoildate and @t_exoildate)) or (len(@t_bxoildate) = 0 and len(@t_bdate) > 0 and (a.datea between @t_bdate and @t_edate)) or
 	     (len(@t_bdate) > 0 and len(@t_bxoildate) > 0 and (a.oildate between @t_bxoildate and @t_exoildate) and (a.datea between @t_bdate and @t_edate)) 
 	     or (len(@t_bdate) = 0 and len(@t_bdate) = 0 and (a.oildate between @t_bxoildate and @t_exoildate) and (a.datea between @t_bdate and @t_edate)))
-	group by a.oilstationno,ISNULL(c.station,''),isnull(a.oildate,'')
+	group by a.oilstationno,ISNULL(b.station,''),isnull(a.oildate,'')
 	--OILIN
 	declare cursor_table cursor for
-	select a.oilstationno,ISNULL(c.station,''),isnull(a.datea,''),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.[money],0))
+	select a.oilstationno,ISNULL(b.station,''),isnull(a.datea,''),SUM(ISNULL(a.mount,0)),SUM(ISNULL(a.[money],0))
 	from oilin a
-	left join #oilstation b on a.oilstationno=b.noa
-	left join oilstation c on b.noa=c.noa
-	where (b.noa is not null) 
+	left join oilstation b on a.oilstationno=b.noa
+	where ( len(@t_oilstation)=0 or CHARINDEX(','+a.oilstationno+',',','+@t_oilstation+',')>0)
 	and ((len(@t_bdate) = 0 and len(@t_bxoildate) > 0 and (a.datea between @t_bxoildate and @t_exoildate)) or (len(@t_bxoildate) = 0 and len(@t_bdate) > 0 and (a.datea between @t_bdate and @t_edate)) or
 	     (len(@t_bdate) > 0 and len(@t_bxoildate) > 0 and(a.datea between @t_bxoildate and @t_exoildate)) 
 	     or (len(@t_bdate) = 0 and len(@t_bdate) = 0 and (a.datea between @t_bxoildate and @t_exoildate)))
-	group by a.oilstationno,ISNULL(c.station,''),isnull(a.datea,'')
-	order by a.oilstationno,ISNULL(c.station,''),isnull(a.datea,'')
+	group by a.oilstationno,ISNULL(b.station,''),isnull(a.datea,'')
+	order by a.oilstationno,ISNULL(b.station,''),isnull(a.datea,'')
 	open cursor_table
 	fetch next from cursor_table
 	into @oilstationno,@oilstation,@datea,@mount,@money
