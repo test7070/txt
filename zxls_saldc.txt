@@ -10,6 +10,7 @@ declare @t_work int=2
 declare @t_gowork nvarchar(10)='08:00:59' --正常上班時間+公司規定
 declare @t_offwork nvarchar(10)='17:30:00' --正常下班時間-公司規定
 declare @t_overtime nvarchar(10)='18:30:00' --加班判斷時間-因通常加班會加一個小時以上
+declare @t_gowork2 nvarchar(10)='13:30:59' --中午上班時間
 
 declare @tt_gowork nvarchar(10)='08:30:59' --中鋼上班
 declare @tt_offwork nvarchar(10)='17:00:00' --中鋼下班
@@ -147,17 +148,22 @@ begin
 	and isnull(b.typea,'')='中鋼外務'
 	
 	--遲到 --06/30更新 跨天請假
+	--104/09/03 更新 早上請假 中午上班判斷
 	update a
-	set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+(
-	case when (select COUNT(*) from salvacause where sssno=a.sssno and bdate=a.noa and btime='08:00')>0
-	or (select COUNT(*) from salvacause where sssno=a.sssno and @t_date between bdate and edate and left(a.clockin,5)>=btime)>0
-	then '請假' else '遲到' end)
+	set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)
+	+(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
+		or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
+		or (c.etime='12:00' and  a.clockin<=@t_gowork2)--早上請假 中午來
+		or (bdate is not null and edate is not null and a.noa!=bdate and a.noa!=edate) --跨天請假
+		then '請假' else '遲到' end)
 	from #bbs a left join sss b on a.sssno=b.noa
-	where a.clockin>@t_gowork
+	outer apply (select top 1 * from salvacause where sssno=a.sssno and a.noa between bdate and edate) c
+	where (a.clockin>@t_gowork or a.clockin>@t_gowork2)
 	and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
 	or @t_date in(select noa from holiday where isnull(iswork,0)=1))
 	and CHARINDEX('外勤-晚 進',a.memo)=0
 	and isnull(b.typea,'')!='中鋼外務'
+	
 	
 	update a
 	set memo=a.memo+(case when len(a.memo)>0 then ',' else '' end)+(
@@ -352,6 +358,7 @@ begin
 		where b.noa!='' and b.sssno!='' and a.clockout!='' and a.clockout>=(case when isnull(b.clockout,'00:00:00')='' then '00:00:00' else isnull(b.clockout,'00:00:00') end)
 		
 		--更新備註1030924 --1031031調整 如果有請假 早退和遲到 換成請假
+		--104/09/03 更新 早上請假 中午上班判斷
 		update a
 		set memo=
 		--原始memo
@@ -360,41 +367,41 @@ begin
 		--逗號
 		+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo
 		,',請假',''),'請假',''),',外勤-晚 進',''),'外勤-晚 進',''),',遲到',''),'遲到',''),',外勤-早 退',''),'外勤-早 退',''),',早退',''),'早退',''),',沒有打卡資料',''),'沒有打卡資料',''))>0 
-		and len((case when a.clockin>@t_gowork and 
+		and len((case when (a.clockin>@t_gowork or a.clockin>@t_gowork2) and 
 		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
 		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
 		then
-			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:00')>0 
-			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockin,5)>=btime)>0
-			then '請假'
-			 when (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
-			 else '遲到' end)
+			(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
+			or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
+			or (c.etime='12:00' and  a.clockin<=@t_gowork2)--早上請假 中午來
+			or (bdate is not null and edate is not null and a.noa!=bdate and a.noa!=edate) --跨天請假
+			then '請假' else '遲到' end)
 		else ''	end
 		))>0
 		then ',' else '' end)
 		+
 		--遲到 
-		(case when a.clockin>@t_gowork and 
+		(case when (a.clockin>@t_gowork or a.clockin>@t_gowork2) and 
 		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
 		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
 		then
-			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:00')>0 
-			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockin,5)>=btime)>0
-			then '請假'
-			 when (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
-			 else '遲到' end)
+			(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
+			or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
+			or (c.etime='12:00' and  a.clockin<=@t_gowork2)--早上請假 中午來
+			or (bdate is not null and edate is not null and a.noa!=bdate and a.noa!=edate) --跨天請假
+			then '請假' else '遲到' end)
 		else ''	end
 		)+
 		--逗號
-		(case when len((case when a.clockin>@t_gowork and 
+		(case when len((case when (a.clockin>@t_gowork or a.clockin>@t_gowork2) and 
 		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
 		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
 		then
-			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:00')>0 
-			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockin,5)>=btime)>0
-			then '請假'
-			 when (select COUNT(*) from trips where datea=a.noa and sssno=a.sssno and btime<='08:00')>0 then '外勤-晚 進'
-			 else '遲到' end)
+			(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
+			or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
+			or (c.etime='12:00' and  a.clockin<=@t_gowork2)--早上請假 中午來
+			or (bdate is not null and edate is not null and a.noa!=bdate and a.noa!=edate) --跨天請假
+			then '請假' else '遲到' end)
 		else ''	end
 		))>0 
 		and len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo
@@ -412,6 +419,7 @@ begin
 			 else '早退' end)
 		else '' end)
 		from salpresents a left join sss b on a.sssno=b.noa
+		outer apply (select top 1 * from salvacause where sssno=a.sssno and a.noa between bdate and edate) c
 		where a.noa=@t_date and (len(isnull(a.clockin,''))>0 or len(isnull(a.clockout,''))>0)
 		and isnull(b.typea,'')!='中鋼外務' 
 		
