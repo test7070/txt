@@ -570,8 +570,10 @@ declare @tmp table(
 	cno nvarchar(50), 
 	pno nvarchar(50), 
 	product nvarchar(50), 
-	unit nvarchar(10), 
-	mount float 
+	unit nvarchar(10),
+	mount float, 
+	price float,
+	total float
 ) 
 declare @tmpa table( 
 	tablea nvarchar(50),
@@ -584,7 +586,8 @@ declare @tmpa table(
 --期初抓ucca 
 insert into @tmpa
 select 'ucce',b.mon+'/00',a.noa,b.cno,b.beginmount
-from ucca a right join uccas b on a.noa=b.noa 
+from ucca a
+right join uccas b on a.noa=b.noa
 where b.mon!='' and b.mon+'/00'<=@t_enddate and b.mon+'_'+a.noa+'_'+b.cno in(
 select MAX(b.mon)+'_'+a.noa+'_'+b.cno
 from ucca a right join uccas b on a.noa=b.noa where b.mon!='' and b.mon+'/00'<=@t_enddate
@@ -594,7 +597,8 @@ group by a.noa,b.cno) and (len(@t_cno)=0 or b.cno=@t_cno)
 --有期初-插入期初之後且資料起始日之前的資料
 insert @tmpa
 select 'rc2a',ra.datea,rb.productno,ra.cno,rb.mount
-from rc2a ra left join rc2as rb on ra.noa=rb.noa 
+from rc2a ra
+left join rc2as rb on ra.noa=rb.noa
 where ra.cno+'_'+rb.productno in(select cno+'_'+pno from @tmpa where tablea='ucce')
 and ra.datea<=@t_enddate
 and ra.datea>=(select datea from @tmpa where pno=rb.productno and cno=ra.cno and tablea='ucce')
@@ -640,12 +644,35 @@ insert into @tmp (gno,cno,pno,product,unit,mount)
 select '0'gno,cno,pno
 ,(select product from ucca where noa=a.pno)
 ,(select unit from ucca where noa=a.pno)
-,SUM(mount) 
+,SUM(mount)
 from @tmpa a 
 where pno between @t_bproductno and @t_eproductno
-group by cno,pno 
+group by cno,pno
 
 delete @tmp where gno='9' 
+
+declare @cno nvarchar(50)
+declare @pno nvarchar(50)
+declare @maxmon nvarchar(50)
+
+declare cursor_table cursor for 
+select cno,pno from @tmp
+open cursor_table 
+fetch next from cursor_table 
+into @cno,@pno
+while(@@FETCH_STATUS <> -1) 
+begin
+	set @maxmon = (select MAX(mon) from uccacosts where cno = @cno and productno = @pno) 
+	print @maxmon
+	update @tmp set price = (select price from uccacosts where cno = @cno and productno = @pno and mon = @maxmon) where cno = @cno and pno = @pno
+	
+	fetch next from cursor_table 
+	into @cno,@pno
+end 
+close cursor_table 
+deallocate cursor_table
+
+update @tmp set total = mount * price
 
 insert into @tmp (gno,cno,mount) 
 select '1',cno,sum(mount) from @tmp group by cno 
@@ -655,7 +682,7 @@ select '2',cno from @tmp group by cno
 
 select 
 gno,cno,(select nick from acomp where noa=a.cno) acomp,pno,product,unit 
-,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount 
+,dbo.getComma(mount,2) mount,dbo.getComma(price,2) price,dbo.getComma(total,0) total
 from @tmp a order by cno,gno,pno ;
 
 --------------------------------------------------------------------------------------------------------------------------------------------------------
