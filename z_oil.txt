@@ -1538,3 +1538,145 @@ from @result order by pagemount,gno;
 	isnull(reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)),0) money
 	from @tmp 
 	order by oilstationno,mon,gno;
+	
+
+
+--*****************************************************************************
+z_oil10:--z_oil10
+
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+declare @t_bmon nvarchar(10)
+declare @t_emon nvarchar(10)
+
+set @t_bdriverno = case when '#non'=[7] then '' else [7] end
+set @t_edriverno = case when '#non'=[8]then char(255) else [8] end
+set @t_bmon = case when '#non'=[11] then '' else [11] end
+set @t_emon = case when '#non'=[12] then char(255) else [12] end
+---------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #result
+END
+---------------------------------------------------------------------------------
+SET QUOTED_IDENTIFIER OFF
+
+declare @hcmd nvarchar(max) --控制日期
+declare @icmd nvarchar(max)	--控制資料
+declare @scmd nvarchar(max)	--控制資料
+declare @pcmd nvarchar(max)	--控制換行
+--暫存資料
+create table #tmp( 
+	datea nvarchar(10),
+	driverno nvarchar(20),
+	driver nvarchar(50),
+	mount float,
+	miles float,
+	rate float
+)
+insert into #tmp
+select datea,driverno,driver,SUM(mount),SUM(miles),0
+from oil
+where (LEFT(datea,6) between @t_bmon and @t_emon) and (driverno between @t_bdriverno and @t_edriverno)
+group by datea,driverno,driver
+
+update #tmp set rate = case when mount != 0 then ROUND(miles/mount,2) else 0 end
+
+--輸出資料
+create table #result(
+	gno nvarchar(1),
+	rec int,
+	datea nvarchar(10),
+	o01 nvarchar(10),m01 nvarchar(10),r01 nvarchar(10),
+	o02 nvarchar(10),m02 nvarchar(10),r02 nvarchar(10),
+	o03 nvarchar(10),m03 nvarchar(10),r03 nvarchar(10),
+	o04 nvarchar(10),m04 nvarchar(10),r04 nvarchar(10),
+	o05 nvarchar(10),m05 nvarchar(10),r05 nvarchar(10),
+	o06 nvarchar(10),m06 nvarchar(10),r06 nvarchar(10),
+	o07 nvarchar(10),m07 nvarchar(10),r07 nvarchar(10),
+	o08 nvarchar(10),m08 nvarchar(10),r08 nvarchar(10),
+	o09 nvarchar(10),m09 nvarchar(10),r09 nvarchar(10),
+	o10 nvarchar(10),m10 nvarchar(10),r10 nvarchar(10)
+)
+
+declare @bdate nvarchar(10) = @t_bmon+'/01' --每個月第一天
+declare @edate nvarchar(10) --每個月最後一天
+declare @days nvarchar(max)= '' --每個月天數
+declare @cnt int --#result當前資料數
+declare @rec int = 0 --#result資料區隔
+
+while(LEFT(@bdate,6) <= @t_emon)
+begin 
+	set @bdate = dbo.ChineseEraName2AD(@bdate) --民國->西元
+	set @edate = CONVERT(char, DATEADD(DAY,-1,DATEADD(mm,DATEDIFF(m,0,@bdate)+1,0)), 111)
+	set @bdate = dbo.AD2ChineseEraName(@bdate) --西元->民國
+	set @edate = dbo.AD2ChineseEraName(@edate) 
+	set @cnt = (select COUNT(*) from #tmp where (datea between @bdate and @edate))
+	
+	while (@cnt > 0)
+	begin
+		set @rec = @rec + 1
+		set @days  = @days+','+CAST(DATEDIFF(DAY,dbo.ChineseEraName2AD(@bdate),dbo.ChineseEraName2AD(@edate))+1 as nvarchar(5))	
+		set @hcmd = "select '0',"+CAST(@rec as nvarchar(5))+",''"
+		set @icmd = "insert into #result (gno,rec,datea"
+		set @scmd = "select '1',"+CAST(@rec as nvarchar(5))+",datea"	
+		set @pcmd = "select '2',"+CAST(@rec as nvarchar(5))+",''"
+		
+		declare @driverno nvarchar(20)
+		declare @bdriverno nvarchar(20)
+		declare @edriverno nvarchar(20)
+		declare @driver nvarchar(50)
+		declare @rno int = 0 --#result欄位位置
+		
+		declare cursor_table cursor for 
+		select DISTINCT top 10 driverno,driver from #tmp where (datea between @bdate and @edate) order by driverno,driver
+		open cursor_table 
+		fetch next from cursor_table 
+		into @driverno,@driver
+		while(@@FETCH_STATUS <> -1) 
+		begin
+			set @rno = @rno + 1
+			set @hcmd = @hcmd+",'"+@driver+"'"+",'"+@driver+"'"+",'"+@driver+"'"
+			set @icmd = @icmd+",o"+RIGHT('0'+CAST(@rno as nvarchar(5)),2)+",m"+RIGHT('0'+CAST(@rno as nvarchar(5)),2)+",r"+RIGHT('0'+CAST(@rno as nvarchar(5)),2)   	
+			set @scmd = @scmd+",(select mount from #tmp a where a.datea=b.datea and a.driver ='"+@driver+"')"+
+							  ",(select miles from #tmp a where a.datea=b.datea and a.driver ='"+@driver+"')"+
+							  ",(select rate  from #tmp a where a.datea=b.datea and a.driver ='"+@driver+"')"
+			set @pcmd = @pcmd+",SUM(isnull(CAST(o"+RIGHT('0'+CAST(@rno as nvarchar(5)),2)+" as float),0))"+",SUM(isnull(CAST(m"+RIGHT('0'+CAST(@rno as nvarchar(5)),2)+" as float),0))"+",''"
+			
+			--前10筆資料最大最小司機編號
+			set @bdriverno = (select MIN(a.driverno) from (select DISTINCT top 10 driverno,driver from #tmp where (datea between @bdate and @edate) order by driverno,driver) a)	
+			set @edriverno = (select MAX(a.driverno) from (select DISTINCT top 10 driverno,driver from #tmp where (datea between @bdate and @edate) order by driverno,driver) a)	
+			
+			fetch next from cursor_table 
+			into @driverno,@driver
+		end 
+		close cursor_table 
+		deallocate cursor_table 
+		
+		set @hcmd = @icmd+") "+@hcmd
+		execute sp_executesql @hcmd
+		
+		set @scmd = @icmd+") "+@scmd+"from #tmp b where (b.datea between '"+@bdate+"' and '" +@edate+"') group by datea order by datea"
+		execute sp_executesql @scmd		
+		
+		set @pcmd = @icmd+") "+@pcmd+" from #result where gno = '1'and rec ="+CAST(@rec as nvarchar(5))+""
+		execute sp_executesql @pcmd
+		
+		--刪除前10筆資料		
+		delete #tmp where (driverno between @bdriverno and @edriverno) and (datea between @bdate and @edate)
+		
+		set @cnt = (select COUNT(*) from #tmp where (datea between @bdate and @edate))
+	end
+	
+	--下個月的第一天(西元->民國)
+	set @bdate = dbo.AD2ChineseEraName(CONVERT(char, DATEADD(DAY, 1, dbo.ChineseEraName2AD(@edate)), 111))
+end
+
+select * from #result
+
+drop table #tmp
+drop table #result;
