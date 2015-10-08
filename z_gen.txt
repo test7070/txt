@@ -1181,7 +1181,32 @@ z_gen3:--z_gen3
 	set @t_aberrant = case when '#non'=[13] then '' else [13] end
 	
 	--*****************************************************************************************	
-declare @tmp table( 
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpr')is not null
+BEGIN
+	set @cmd = 'drop table #tmpr'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpv')is not null
+BEGIN
+	set @cmd = 'drop table #tmpv'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
 	gno nvarchar(1),
 	pno nvarchar(50),
 	product nvarchar(50),
@@ -1209,7 +1234,7 @@ declare @tmp table(
 --rc2進貨--vcc銷貨 
 
 --期初
-declare @tmpa table( 
+create table #tmpa( 
 	tablea nvarchar(50),
 	datea nvarchar(10),
 	pno nvarchar(50),
@@ -1222,31 +1247,42 @@ declare @tmpa table(
 --ucc.typea 1 產品
 
 --期初抓ucce
-insert @tmpa--插入期初最後盤點(以查詢日的最後一次盤存)
-select 'ucce',a.datea,b.productno,b.storeno,b.mount,b.eweight,b.total 
-from view_ucce a left join view_ucces b on a.noa=b.noa 
-left join view_ucaucc c on b.productno=c.noa
-where a.datea<@t_edate and a.datea+'_'+b.productno+'_'+b.storeno in(
-select MAX(a.datea)+'_'+b.productno+'_'+b.storeno
-from view_ucce a left join view_ucces b on a.noa=b.noa where a.datea<@t_edate
-group by b.productno,b.storeno) and (c.typea='1')
+insert #tmpa--插入期初最後盤點(以查詢日的最後一次盤存)
+--select 'ucce',a.datea,b.productno,b.storeno,b.mount,b.eweight,b.total 
+--from view_ucce a left join view_ucces b on a.noa=b.noa 
+--left join view_ucaucc c on b.productno=c.noa
+--where a.datea<@t_edate and a.datea+'_'+b.productno+'_'+b.storeno in(
+--select MAX(a.datea)+'_'+b.productno+'_'+b.storeno
+--from view_ucce a left join view_ucces b on a.noa=b.noa where a.datea<@t_edate
+--group by b.productno,b.storeno) and (c.typea='1')
+
+select 'ucce',ua.datea,ub.productno,ub.storeno,ub.mount,ub.eweight,ub.total 
+from view_ucce ua left join view_ucces ub on ua.noa=ub.noa 
+left join view_ucaucc uc on ub.productno=uc.noa 
+where ua.datea<@t_edate and exists( 
+	select MAX(a.datea)+'_'+b.productno+'_'+b.storeno 
+	from view_ucce a left join view_ucces b on a.noa=b.noa where a.datea<@t_edate 
+	group by b.productno,b.storeno
+	having MAX(a.datea)=ua.datea and b.productno=ub.productno and b.storeno=ub.storeno
+) and (uc.typea='1') 
 
 --有盤點-插入盤點之後且資料起始日之前的資料
 
 --進貨
-insert @tmpa
+insert #tmpa
 select 'rc2',ra.datea,rb.productno,rb.storeno
 ,(case when ra.typea='1' then 1 else -1 end)*rb.mount
 ,(case when ra.typea='1' then 1 else -1 end)*rb.weight
 ,(case when ra.typea='1' then 1 else -1 end)*rb.total/(case when ra.taxtype='3' then 1.05 else 1 end) 
 from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa 
 left join view_ucaucc c on rb.productno=c.noa where
-rb.storeno+'_'+rb.productno in(select storeno+'_'+pno from @tmpa where tablea='ucce')
-and ra.datea<@t_bdate and ra.datea>=(select datea from @tmpa where pno=rb.productno and storeno=rb.storeno and tablea='ucce')
+--rb.storeno+'_'+rb.productno in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+exists(select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=rb.storeno and pno=rb.productno) 
+and ra.datea<@t_bdate and ra.datea>=(select datea from #tmpa where pno=rb.productno and storeno=rb.storeno and tablea='ucce')
 and rb.productno!='' and (c.typea='1')
 
 --銷售
-insert @tmpa
+insert #tmpa
 select 'vcc',va.datea,vb.productno,vb.storeno
 ,-1*(case when va.typea='1' then 1 else -1 end)*vb.mount
 ,-1*(case when va.typea='1' then 1 else -1 end)*vb.weight
@@ -1254,43 +1290,47 @@ select 'vcc',va.datea,vb.productno,vb.storeno
 isnull((select price from view_costs where productno=vb.productno and mon=left(va.datea,6)),0) 
 from view_vcc va left join view_vccs vb on va.noa=vb.noa 
 left join view_ucaucc c on vb.productno=c.noa where
-vb.storeno+'_'+vb.productno in(select storeno+'_'+pno from @tmpa where tablea='ucce')
-and va.datea<@t_bdate and va.datea>=(select datea from @tmpa where pno=vb.productno and storeno=vb.storeno and tablea='ucce')
+--vb.storeno+'_'+vb.productno in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+exists (select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=vb.storeno and pno=vb.productno) 
+and va.datea<@t_bdate and va.datea>=(select datea from #tmpa where pno=vb.productno and storeno=vb.storeno and tablea='ucce')
 and vb.productno!='' and (c.typea='1')
 
 --調整
-insert @tmpa
+insert #tmpa
 select 'ina',ia.datea,ib.productno,ia.storeno,ib.mount,ib.weight,ib.total
 from view_ina ia left join view_inas ib on ia.noa=ib.noa 
 left join view_ucaucc c on ib.productno=c.noa where
-ia.storeno+'_'+ib.productno in(select storeno+'_'+pno from @tmpa where tablea='ucce')
-and ia.datea<@t_bdate and ia.datea>=(select datea from @tmpa where pno=ib.productno and storeno=ia.storeno and tablea='ucce')
+--ia.storeno+'_'+ib.productno in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+exists (select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=ia.storeno and pno=ib.productno) 
+and ia.datea<@t_bdate and ia.datea>=(select datea from #tmpa where pno=ib.productno and storeno=ia.storeno and tablea='ucce')
 and ib.productno!='' and (c.typea='1')
 
-insert @tmpa
+insert #tmpa
 select 'get',ga.datea,gb.productno,ga.storeno,-1*gb.mount,-1*gb.weight,-1*gb.mount
 *isnull((select price from view_costs where productno=gb.productno and mon=left(ga.datea,6)),0) 
 from view_get ga left join view_gets gb on ga.noa=gb.noa 
 left join view_ucaucc c on gb.productno=c.noa where
-ga.storeno+'_'+gb.productno in(select storeno+'_'+pno from @tmpa where tablea='ucce')
-and ga.datea<@t_bdate and ga.datea>=(select datea from @tmpa where pno=gb.productno and storeno=ga.storeno and tablea='ucce')
+--ga.storeno+'_'+gb.productno in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+exists (select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=ga.storeno and pno=ga.productno) 
+and ga.datea<@t_bdate and ga.datea>=(select datea from #tmpa where pno=gb.productno and storeno=ga.storeno and tablea='ucce')
 and gb.productno!='' and (c.typea='1')
 
 
 --無盤點-插入資料起始日之前的資料
 --進貨
-insert @tmpa
+insert #tmpa
 select 'rc2',ra.datea,rb.productno,rb.storeno
 ,(case when ra.typea='1' then 1 else -1 end)*rb.mount
 ,(case when ra.typea='1' then 1 else -1 end)*rb.weight
 ,(case when ra.typea='1' then 1 else -1 end)*rb.total/(case when ra.taxtype='3' then 1.05 else 1 end) 
 from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa 
 left join view_ucaucc c on rb.productno=c.noa where
-rb.storeno+'_'+rb.productno not in(select storeno+'_'+pno from @tmpa where tablea='ucce')
+--rb.storeno+'_'+rb.productno not in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+not exists(select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=rb.storeno and pno=rb.productno) 
 and ra.datea<@t_bdate and rb.productno!='' and (c.typea='1')
 
 --銷售
-insert @tmpa
+insert #tmpa
 select 'vcc',va.datea,vb.productno,vb.storeno
 ,-1*(case when va.typea='1' then 1 else -1 end)*vb.mount
 ,-1*(case when va.typea='1' then 1 else -1 end)*vb.weight
@@ -1298,69 +1338,105 @@ select 'vcc',va.datea,vb.productno,vb.storeno
 isnull((select price from view_costs where productno=vb.productno and mon=left(va.datea,6)),0) 
 from view_vcc va left join view_vccs vb on va.noa=vb.noa 
 left join view_ucaucc c on vb.productno=c.noa where
-vb.storeno+'_'+vb.productno not in(select storeno+'_'+pno from @tmpa where tablea='ucce')
+--vb.storeno+'_'+vb.productno not in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+not exists (select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=vb.storeno and pno=vb.productno) 
 and va.datea<@t_bdate and vb.productno!='' and (c.typea='1')
 
 --調整
-insert @tmpa
+insert #tmpa
 select 'ina',ia.datea,ib.productno,ia.storeno,ib.mount,ib.weight,ib.total
 from view_ina ia left join view_inas ib on ia.noa=ib.noa 
 left join view_ucaucc c on ib.productno=c.noa where
-ia.storeno+'_'+ib.productno not in(select storeno+'_'+pno from @tmpa where tablea='ucce')
+--ia.storeno+'_'+ib.productno not in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+not exists (select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=ia.storeno and pno=ib.productno) 
 and ia.datea<@t_bdate and ib.productno!='' and (c.typea='1')
 
-insert @tmpa
+insert #tmpa
 select 'get',ga.datea,gb.productno,ga.storeno,-1*gb.mount,-1*gb.weight,-1*gb.mount
 *isnull((select price from view_costs where productno=gb.productno and mon=left(ga.datea,6)),0) 
 from view_get ga left join view_gets gb on ga.noa=gb.noa 
 left join view_ucaucc c on gb.productno=c.noa where
-ga.storeno+'_'+gb.productno not in(select storeno+'_'+pno from @tmpa where tablea='ucce')
+--ga.storeno+'_'+gb.productno not in(select storeno+'_'+pno from #tmpa where tablea='ucce')
+not exists (select storeno+'_'+pno from #tmpa where tablea='ucce' and storeno=ga.storeno and pno=ga.productno) 
 and ga.datea<@t_bdate and gb.productno!='' and (c.typea='1')
 
----------------------------------------------------
+---------------------------------------------------------------------
+--declare @pno nvarchar(90)
+--declare @MAXMON nvarchar(50)
+--declare @MINMON nvarchar(50)
+--declare cursor_table cursor for
+----檢查每個月數量為0 則清空金額
+--select pno,MAX(LEFT(datea,6)),MIN(LEFT(datea,6)) from #tmpa group by pno
+--open cursor_table
+--fetch next from cursor_table
+--into @pno,@MAXMON,@MINMON
+--while(@@FETCH_STATUS <> -1)
+--begin
+--	while (@MINMON<=@MAXMON)
+--	begin
+--		if(select sum(mount) mount
+--		from #tmpa where pno=@pno and left(datea,6)<=@MINMON)<=0
+--		begin
+--			update #tmpa
+--			set money=0
+--			where pno=@pno and left(datea,6)<=@MINMON
+--		end
+		
+--		set @MINMON=cast(cast(LEFT(@MINMON,3)as int)+1911 as nvarchar(20))+'/'+right(@MINMON,2)+'/01'
+--		set @MINMON=CONVERT (VARCHAR(7),DATEADD(m,+1,@MINMON),12 )+0890000
+--		set @MINMON=left(@MINMON,3)+'/'+substring(@MINMON,4,2)
+		
+--	end
+	
+--	fetch next from cursor_table
+--	into @pno,@MAXMON,@MINMON
+--end
+--close cursor_table
+--deallocate cursor_table
+
 declare @pno nvarchar(90)
-declare @MAXMON nvarchar(50)
-declare @MINMON nvarchar(50)
+declare @t_pno nvarchar(90)='!@#$%^&*'
+declare @datea nvarchar(90)
+declare @typea nvarchar(90)
+declare @mount decimal(18, 4)
+declare @t_mount decimal(18, 4)=0
 declare cursor_table cursor for
---檢查每個月數量為0 則清空金額
-select pno,MAX(LEFT(datea,6)),MIN(LEFT(datea,6)) from @tmpa group by pno
+--檢查每次進出貨數量為0 則清空金額
+select pno,datea,mount,tablea from #tmpa order by pno,datea
 open cursor_table
 fetch next from cursor_table
-into @pno,@MAXMON,@MINMON
+into @pno,@datea,@mount,@typea
 while(@@FETCH_STATUS <> -1)
 begin
-	while (@MINMON<=@MAXMON)
+	if(@pno!=@t_pno)
+		set @t_mount=0
+	
+	set @t_mount=@t_mount+((case when @typea in ('vcc','ina') then -1 else 1 end)*isnull(@mount,0))
+	
+	if(@t_mount=0)
 	begin
-		if(select sum(mount) mount
-		from @tmpa where pno=@pno and left(datea,6)<=@MINMON)<=0
-		begin
-			update @tmpa
-			set money=0
-			where pno=@pno and left(datea,6)<=@MINMON
-		end
-		
-		set @MINMON=cast(cast(LEFT(@MINMON,3)as int)+1911 as nvarchar(20))+'/'+right(@MINMON,2)+'/01'
-		set @MINMON=CONVERT (VARCHAR(7),DATEADD(m,+1,@MINMON),12 )+0890000
-		set @MINMON=left(@MINMON,3)+'/'+substring(@MINMON,4,2)
-		
+		update #tmpa
+		set money=0
+		where pno=@pno and datea<=@datea
 	end
+
+	set @t_pno=@pno
 	
 	fetch next from cursor_table
-	into @pno,@MAXMON,@MINMON
+	into @pno,@datea,@mount,@typea
 end
 close cursor_table
 deallocate cursor_table
-
+---------------------------------------------------------------------
 --插入期初庫存
-insert into @tmp(gno,pno,product,unit,bmount,bweight,bmoney)
+insert into #tmp(gno,pno,product,unit,bmount,bweight,bmoney)
 select '0',a.pno,MAX(b.product),MAX(b.unit)
 ,sum(a.mount),sum(a.weight),sum(a.money) 
-from @tmpa a left join view_ucaucc b on a.pno=b.noa
+from #tmpa a left join view_ucaucc b on a.pno=b.noa
 where (a.pno between @t_bpno and @t_epno) and (b.typea='1')
 group by a.pno
-
 ------------------------------------------------------------------
-declare @tmpr table( 
+create table #tmpr(
 	pno nvarchar(50),
 	product nvarchar(100),
 	unit nvarchar(50),
@@ -1370,51 +1446,55 @@ declare @tmpr table(
 ) 
 
 --插入有盤存的進料數量
-insert into @tmpr
+insert into #tmpr
 select rb.productno,MAX(c.product),MAX(c.unit)
 ,sum((case when ra.typea='1' then 1 else -1 end)*rb.mount)
 ,sum((case when ra.typea='1' then 1 else -1 end)*rb.weight) 
 ,sum((case when ra.typea='1' then 1 else -1 end)*rb.total/(case when ra.taxtype='3' then 1.05 else 1 end))
 from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa 
 left join view_ucaucc c on rb.productno=c.noa
-where rb.productno in(select pno from @tmpa where tablea='ucce')
-and ra.datea>(select MAX(datea) from @tmpa where pno=rb.productno)
+where --rb.productno in(select pno from #tmpa where tablea='ucce')
+exists(select pno from #tmpa where tablea='ucce' and pno=rb.productno) 
+and ra.datea>(select MAX(datea) from #tmpa where pno=rb.productno)
 and ra.datea<=@t_edate and (rb.productno between @t_bpno and @t_epno) and rb.productno!=''
 and (c.typea='1') group by rb.productno
 
-insert into @tmpr
+insert into #tmpr
 select ib.productno,MAX(c.product),MAX(c.unit),sum(ib.mount),sum(ib.weight) ,sum(ib.total)
 from view_ina ia left join view_inas ib on ia.noa=ib.noa 
 left join view_ucaucc c on ib.productno=c.noa
-where ib.productno in(select pno from @tmpa where tablea='ucce')
-and ia.datea>(select MAX(datea) from @tmpa where pno=ib.productno)
+where --ib.productno in(select pno from #tmpa where tablea='ucce')
+exists (select pno from #tmpa where tablea='ucce' and pno=ib.productno) 
+and ia.datea>(select MAX(datea) from #tmpa where pno=ib.productno)
 and ia.datea<=@t_edate and (ib.productno between @t_bpno and @t_epno) and ib.productno!=''
 and (c.typea='1') group by ib.productno
 
 --插入沒有盤存的進料數量
-insert into @tmpr
+insert into #tmpr
 select rb.productno,MAX(c.product),MAX(c.unit)
 ,sum((case when ra.typea='1' then 1 else -1 end)*rb.mount)
 ,sum((case when ra.typea='1' then 1 else -1 end)*rb.weight) 
 ,sum((case when ra.typea='1' then 1 else -1 end)*rb.total/(case when ra.taxtype='3' then 1.05 else 1 end))
 from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa 
 left join view_ucaucc c on rb.productno=c.noa
-where rb.productno not in(select pno from @tmpa where tablea='ucce')
+where --rb.productno not in(select pno from #tmpa where tablea='ucce')
+not exists(select pno from #tmpa where tablea='ucce' and pno=rb.productno) 
 and (ra.datea between @t_bdate and @t_edate)
 and (rb.productno between @t_bpno and @t_epno)  and rb.productno!=''
 and (c.typea='1') group by rb.productno
 
-insert into @tmpr
+insert into #tmpr
 select ib.productno,MAX(c.product),MAX(c.unit),sum(ib.mount),sum(ib.weight) ,sum(ib.total)
 from view_ina ia left join view_inas ib on ia.noa=ib.noa 
 left join view_ucaucc c on ib.productno=c.noa
-where ib.productno not in(select pno from @tmpa where tablea='ucce')
+where --ib.productno not in(select pno from #tmpa where tablea='ucce')
+not exists(select pno from #tmpa where tablea='ucce' and pno=ib.productno) 
 and (ia.datea between @t_bdate and @t_edate)
 and (ib.productno between @t_bpno and @t_epno) and ib.productno!=''
 and (c.typea='1') group by ib.productno
 
 ------------------------------------------------------------------
-declare @tmpv table( 
+create table #tmpv(
 	pno nvarchar(50),
 	product nvarchar(100),
 	unit nvarchar(50),
@@ -1424,104 +1504,108 @@ declare @tmpv table(
 ) 
 
 --插入有盤存的銷售數量
-insert into @tmpv
+insert into #tmpv
 select vb.productno,MAX(c.product),MAX(c.unit)
 ,sum((case when va.typea='1' then 1 else -1 end)*vb.mount)
 ,sum((case when va.typea='1' then 1 else -1 end)*vb.weight) 
 ,sum((case when va.typea='1' then 1 else -1 end)*vb.total/(case when va.taxtype='3' then 1.05 else 1 end))
 from view_vcc va left join view_vccs vb on va.noa=vb.noa 
 left join view_ucaucc c on vb.productno=c.noa
-where vb.productno in(select pno from @tmpa where tablea='ucce')
-and va.datea>(select MAX(datea) from @tmpa where pno=vb.productno)
+where --vb.productno in(select pno from #tmpa where tablea='ucce')
+exists(select pno from #tmpa where tablea='ucce' and pno=vb.productno) 
+and va.datea>(select MAX(datea) from #tmpa where pno=vb.productno)
 and va.datea<=@t_edate and (vb.productno between @t_bpno and @t_epno) and vb.productno!=''
 and (c.typea='1') group by vb.productno
 
 --插入沒有盤存的銷售數量
-insert into @tmpv
+insert into #tmpv
 select vb.productno,MAX(c.product),MAX(c.unit)
 ,sum((case when va.typea='1' then 1 else -1 end)*vb.mount)
 ,sum((case when va.typea='1' then 1 else -1 end)*vb.weight) 
 ,sum((case when va.typea='1' then 1 else -1 end)*vb.total/(case when va.taxtype='3' then 1.05 else 1 end))
 from view_vcc va left join view_vccs vb on va.noa=vb.noa 
 left join view_ucaucc c on vb.productno=c.noa
-where vb.productno not in(select pno from @tmpa where tablea='ucce')
+where --vb.productno not in(select pno from #tmpa where tablea='ucce')
+not exists(select pno from #tmpa where tablea='ucce' and pno=vb.productno) 
 and (va.datea between @t_bdate and @t_edate)
 and (vb.productno between @t_bpno and @t_epno) and vb.productno!=''
 and (c.typea='1') group by vb.productno
 
 --插入有盤存的調整數量
-insert into @tmpv
+insert into #tmpv
 select gb.productno,c.product,c.unit,gb.mount,gb.weight
 ,gb.mount*isnull((select price from view_costs where productno=gb.productno and mon=left(ga.datea,6)),0)
 from view_get ga left join view_gets gb on ga.noa=gb.noa 
 left join view_ucaucc c on gb.productno=c.noa
-where gb.productno in(select pno from @tmpa where tablea='ucce')
-and ga.datea>(select MAX(datea) from @tmpa where pno=gb.productno)
+where --gb.productno in(select pno from #tmpa where tablea='ucce')
+exists(select pno from #tmpa where tablea='ucce' and pno=gb.productno) 
+and ga.datea>(select MAX(datea) from #tmpa where pno=gb.productno)
 and ga.datea<=@t_edate and (gb.productno between @t_bpno and @t_epno) and gb.productno!=''
 and (c.typea='1') --group by gb.productno
 
 --插入沒有盤存的調整數量
-insert into @tmpv
+insert into #tmpv
 select gb.productno,c.product,c.unit,gb.mount,gb.weight
 ,gb.mount*isnull((select price from view_costs where productno=gb.productno and mon=left(ga.datea,6)),0)
 from view_get ga left join view_gets gb on ga.noa=gb.noa 
 left join view_ucaucc c on gb.productno=c.noa
-where gb.productno not in(select pno from @tmpa where tablea='ucce')
+where --gb.productno not in(select pno from #tmpa where tablea='ucce')
+not exists(select pno from #tmpa where tablea='ucce' and pno=gb.productno) 
 and (ga.datea between @t_bdate and @t_edate)
 and (gb.productno between @t_bpno and @t_epno) and gb.productno!=''
 and (c.typea='1') --group by gb.productno
 
 ----------------------------------------------------------
 --插入沒有期初的資料
-insert into @tmp(gno,pno,product,unit,bmount,bweight,bmoney)
+insert into #tmp(gno,pno,product,unit,bmount,bweight,bmoney)
 select '0',*,0,0,0 from 
-(select pno,product,unit from @tmpr union
-select pno,product,unit from @tmpv )tmps where pno not in (select pno from @tmp)
+(select pno,product,unit from #tmpr union
+select pno,product,unit from #tmpv )tmps where pno not in (select pno from #tmp)
 
 --更新資料
 update a
-set a.rcmount=isnull((select sum(rmount) from @tmpr where pno=a.pno),0)
-,a.rcweight=isnull((select sum(rweight) from @tmpr where pno=a.pno),0)
-,a.rcmoney=isnull((select sum(rmoney) from @tmpr where pno=a.pno),0)
-,a.vcmount=isnull((select sum(vmount) from @tmpv where pno=a.pno),0)
-,a.vcweight=isnull((select sum(vweight) from @tmpv where pno=a.pno),0)
-,a.vcmoney=isnull((select sum(vmoney) from @tmpv where pno=a.pno),0)
-from @tmp a
+set a.rcmount=isnull((select sum(rmount) from #tmpr where pno=a.pno),0)
+,a.rcweight=isnull((select sum(rweight) from #tmpr where pno=a.pno),0)
+,a.rcmoney=isnull((select sum(rmoney) from #tmpr where pno=a.pno),0)
+,a.vcmount=isnull((select sum(vmount) from #tmpv where pno=a.pno),0)
+,a.vcweight=isnull((select sum(vweight) from #tmpv where pno=a.pno),0)
+,a.vcmoney=isnull((select sum(vmoney) from #tmpv where pno=a.pno),0)
+from #tmp a
 
-update @tmp set bmoney=0 where bmount<=0
-update @tmp set bmoney=0 where bmoney<=0
+update #tmp set bmoney=0 where bmount<=0
+update #tmp set bmoney=0 where bmoney<=0
 
 --計算成本
-update @tmp
+update #tmp
 set vccost=
 case when bmount+rcmount=0 then 0 else round((bmoney+rcmoney)/(bmount+rcmount),2)*vcmount end
 
 --毛利率
-update @tmp
+update #tmp
 set profit=case when vcmoney=0 then 0 else ((vcmoney-vccost)/vcmoney)*100 end
 
 --計算期末 
-update @tmp 
+update #tmp 
 set lmount=bmount+rcmount-vcmount,lweight=bweight+rcweight-vcweight
 ,lmoney=case when (bmoney+rcmoney-vccost)<=0 then 0 else (bmoney+rcmoney-vccost) end
 
-update @tmp set lprice=case when lmount=0 then 0 else lmoney/lmount end 
-update @tmp set lmoney=0 where lprice<=0
+update #tmp set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+update #tmp set lmoney=0 where lprice<=0
 
 --刪除全部資料都為0
-delete @tmp
+delete #tmp
 where bmount=0 and bmoney=0  and rcmount=0 and rcmoney=0 and vcmount=0 and vcmoney=0 and vccost=0-- and bweight=0 and brweight=0 and rcweight=0 and vcweight=0
 
 --異常
 if(len(@t_aberrant)!=0) 
-delete @tmp where lmount>=0 and lmoney>=0 --and lweight>=0 
+delete #tmp where lmount>=0 and lmoney>=0 --and lweight>=0 
 
-insert into @tmp
+insert into #tmp
 select '1','','','',sum(bmount),sum(bweight),sum(bmoney)
 ,sum(rcmount),sum(rcweight),sum(rcmoney)
 ,sum(vcmount),sum(vcweight),sum(vcmoney),sum(vccost),case when sum(vcmoney)=0 then 0 else ((sum(vcmoney)-sum(vccost))/sum(vcmoney))*100 end
 ,sum(lmount),sum(lweight),0,sum(lmoney)
-from @tmp
+from #tmp
 
 select 
 gno,pno,product,unit
@@ -1544,7 +1628,31 @@ gno,pno,product,unit
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lprice,2)),1)),0,30)) lprice
 ,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(lmoney,0)),1)),4,12)) lmoney
 
-from @tmp order by gno,pno;
+from #tmp order by gno,pno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpr')is not null
+BEGIN
+	set @cmd = 'drop table #tmpr'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpv')is not null
+BEGIN
+	set @cmd = 'drop table #tmpv'
+	EXECUTE sp_executesql @cmd
+END
+;
 --*********************************************************************************************
 z_gen4:--z_gen4
 	declare @t_bdate nvarchar(10)
