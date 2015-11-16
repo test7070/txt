@@ -118,11 +118,12 @@
 		rate float,
 		[money] float,
 		tax float,
-		total float
+		total float,
+		other bit --判斷稅率是否有多1%用的
 	)
-	insert into @tmpa(gno,recno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	insert into @tmpa(gno,recno,cno,acomp,custno,comp,taxrate,[money],tax,total,other)
 	select '1',ROW_NUMBER()over(partition by custno order by cno )
-		,cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
+		,cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total),0
 	from @tmpx
 	group by cno,acomp,custno,comp,taxrate
 	--------------------------------------------------------------------------------------------
@@ -139,10 +140,10 @@
 	declare @rate nvarchar(max)
 	
 	declare cursor_table cursor for
-	select custno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	select custno,recno,taxrate,[money],tax from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
 	open cursor_table
 	fetch next from cursor_table
-	into @custno,@recno,@taxrate,@money
+	into @custno,@recno,@taxrate,@money,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		while CHARINDEX(SPACE(1),@taxrate)>0
@@ -152,20 +153,34 @@
 			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
 			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
 	
-			update @tmpa set [money]=[money]+cast(@value as float)
-			where not(custno=@custno and recno=@recno) and custno=@custno
-			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+			if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float) where custno=@custno
+			end	
+			else
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float)
+				where not(custno=@custno and recno=@recno) and custno=@custno
+				and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			end
 		end
 
 		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
 		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
-		update @tmpa set [money]=[money]+cast(@value as float)
-		where not(custno=@custno and recno=@recno) and custno=@custno
-		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float),tax=tax+@tax,other=1 where custno=@custno
+		end	
+		else
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(custno=@custno and recno=@recno) and custno=@custno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+		end
 		
 		delete @tmpa where custno=@custno and recno=@recno
 		fetch next from cursor_table
-		into @custno,@recno,@taxrate,@money
+		into @custno,@recno,@taxrate,@money,@tax
 	end
 	close cursor_table
 	deallocate cursor_table
@@ -173,6 +188,7 @@
 	
 	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
 		,rate = cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100
+		where other=0
 	---------------------------------------------------------------------------------------------------------------------------
 	insert into @tmpz(gno,custno,comp,taxrate,money1,tax1)
 	select '1',a.custno,a.comp,b.taxrate,sum([money]),sum(tax) 
@@ -184,19 +200,19 @@
 	--   2222222
 	delete @tmpa
 
-	insert into @tmpa(gno,recno,cno,acomp,custno,comp,taxrate,[money],tax,total)
+	insert into @tmpa(gno,recno,cno,acomp,custno,comp,taxrate,[money],tax,total,other)
 	select '1',ROW_NUMBER()over(partition by custno order by cno )
-		,cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total) 
+		,cno,acomp,custno,comp,taxrate,sum([money]),sum(round(tax,2)),SUM(total),0
 	from @tmpy
 	group by cno,acomp,custno,comp,taxrate
 	--------------------------------------------------------------------------------------------
 	update @tmpa set [money]=round(total/ 1.05,0)where CHARINDEX('2聯',taxrate)>0 
 
 	declare cursor_table cursor for
-	select custno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	select custno,recno,taxrate,[money],tax from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
 	open cursor_table
 	fetch next from cursor_table
-	into @custno,@recno,@taxrate,@money
+	into @custno,@recno,@taxrate,@money,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		while CHARINDEX(SPACE(1),@taxrate)>0
@@ -206,26 +222,41 @@
 			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
 			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
 	
-			update @tmpa set [money]=[money]+cast(@value as float)
-			where not(custno=@custno and recno=@recno) and custno=@custno
-			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+			if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float) where custno=@custno
+			end	
+			else
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float)
+				where not(custno=@custno and recno=@recno) and custno=@custno
+				and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			end
 		end
 
 		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
 		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
-		update @tmpa set [money]=[money]+cast(@value as float)
-		where not(custno=@custno and recno=@recno) and custno=@custno
-		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float),tax=tax+@tax,other=1  where custno=@custno
+		end	
+		else
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(custno=@custno and recno=@recno) and custno=@custno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+		end
 		
 		delete @tmpa where custno=@custno and recno=@recno
 		fetch next from cursor_table
-		into @custno,@recno,@taxrate,@money
+		into @custno,@recno,@taxrate,@money,@tax
 	end
 	close cursor_table
 	deallocate cursor_table
 	
 	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
 		,rate = cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100
+		where other=0
 	---------------------------------------------------------------------------------------------------------------------------
 	update @tmpz set money2=b.[money],tax2=b.tax
 	from @tmpz a
@@ -269,7 +300,6 @@ z_vccadc05a:--z_vccadc05a
 	declare @t_emon nvarchar(10) = case when '#non'=[2] then char(255) else [2] end 
 	declare @t_bcustno nvarchar(20) = case when '#non' = [7] then '' else [7] end
 	declare @t_ecustno nvarchar(20) = case when '#non' = [8] then CHAR(255) else [8] end
-	----------------------------------------------------------------------
 	----------------------------------------------------------------------
 	declare @tmp table(
 		noa nvarchar(20),
@@ -331,7 +361,7 @@ z_vccadc05a:--z_vccadc05a
 	group by cno,acomp,custno,comp,taxrate
 	--------------------------------------------------------------------------------------------
 	update @tmpa set [money]=round(total/ 1.05,0)where CHARINDEX('2聯',taxrate)>0 
-	
+		
 	declare @cno nvarchar(20)
 	declare @recno int
 	declare @taxrate nvarchar(max)
@@ -343,10 +373,10 @@ z_vccadc05a:--z_vccadc05a
 	declare @rate nvarchar(max)
 	
 	declare cursor_table cursor for
-	select cno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	select cno,recno,taxrate,[money],tax from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
 	open cursor_table
 	fetch next from cursor_table
-	into @cno,@recno,@taxrate,@money
+	into @cno,@recno,@taxrate,@money,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		while CHARINDEX(SPACE(1),@taxrate)>0
@@ -355,26 +385,40 @@ z_vccadc05a:--z_vccadc05a
 			set @taxrate = SUBSTRING(@taxrate,CHARINDEX(SPACE(1),@taxrate)+1,len(@taxrate)-len(@string))
 			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
 			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
-	
+
+			if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float) where cno=@cno
+			end	
+			else
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float)
+				where not(cno=@cno and recno=@recno) and cno=@cno
+				and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			end
+		end
+
+		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
+		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
+		if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float),tax=tax+@tax,taxrate='' where cno=@cno
+		end	
+		else
+		begin
 			update @tmpa set [money]=[money]+cast(@value as float)
 			where not(cno=@cno and recno=@recno) and cno=@cno
 			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
 		end
 
-		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
-		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
-		update @tmpa set [money]=[money]+cast(@value as float)
-		where not(cno=@cno and recno=@recno) and cno=@cno
-		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
-		
 		delete @tmpa where cno=@cno and recno=@recno
 		fetch next from cursor_table
-		into @cno,@recno,@taxrate,@money
+		into @cno,@recno,@taxrate,@money,@tax
 	end
 	close cursor_table
 	deallocate cursor_table
 	
-	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
+	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0) where len(taxrate)>0
 	------------------------------------------------
 	declare @tmpb table(
 		recno int,
@@ -486,10 +530,10 @@ z_vccadc03a:--z_vccadc03a
 	declare @rate nvarchar(max)
 	
 	declare cursor_table cursor for
-	select cno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	select cno,recno,taxrate,[money],tax from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
 	open cursor_table
 	fetch next from cursor_table
-	into @cno,@recno,@taxrate,@money
+	into @cno,@recno,@taxrate,@money,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		while CHARINDEX(SPACE(1),@taxrate)>0
@@ -499,25 +543,40 @@ z_vccadc03a:--z_vccadc03a
 			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
 			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
 	
-			update @tmpa set [money]=[money]+cast(@value as float)
-			where not(cno=@cno and recno=@recno) and cno=@cno
-			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float) where cno=@cno
+			end	
+			else
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float)
+				where not(cno=@cno and recno=@recno) and cno=@cno
+				and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			end
 		end
 
 		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
 		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
-		update @tmpa set [money]=[money]+cast(@value as float)
-		where not(cno=@cno and recno=@recno) and cno=@cno
-		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float),tax=tax+@tax,taxrate='' where cno=@cno
+		end	
+		else
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(cno=@cno and recno=@recno) and cno=@cno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+		end
 		
 		delete @tmpa where cno=@cno and recno=@recno
 		fetch next from cursor_table
-		into @cno,@recno,@taxrate,@money
+		into @cno,@recno,@taxrate,@money,@tax
 	end
 	close cursor_table
 	deallocate cursor_table
 	
 	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
+	where len(taxrate)>0
 	------------------------------------------------
 	insert into @tmpa(gno,cno,[money],tax)
 	select '2',cno,SUM([money]),SUM(round(tax,1)) from @tmpa where gno='1' group by cno
@@ -614,10 +673,10 @@ z_vccadc04a:--z_vccadc04a
 	declare @rate nvarchar(max)
 	
 	declare cursor_table cursor for
-	select custno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	select custno,recno,taxrate,[money],tax from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
 	open cursor_table
 	fetch next from cursor_table
-	into @custno,@recno,@taxrate,@money
+	into @custno,@recno,@taxrate,@money,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		while CHARINDEX(SPACE(1),@taxrate)>0
@@ -627,25 +686,40 @@ z_vccadc04a:--z_vccadc04a
 			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
 			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
 	
-			update @tmpa set [money]=[money]+cast(@value as float)
-			where not(custno=@custno and recno=@recno) and custno=@custno
-			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+			if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float) where custno=@custno
+			end	
+			else
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float)
+				where not(custno=@custno and recno=@recno) and custno=@custno
+				and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			end
 		end
 
 		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
 		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
-		update @tmpa set [money]=[money]+cast(@value as float)
-		where not(custno=@custno and recno=@recno) and custno=@custno
-		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float),tax=tax+@tax,taxrate='' where custno=@custno
+		end	
+		else
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(custno=@custno and recno=@recno) and custno=@custno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+		end
 		
 		delete @tmpa where custno=@custno and recno=@recno
 		fetch next from cursor_table
-		into @custno,@recno,@taxrate,@money
+		into @custno,@recno,@taxrate,@money,@tax
 	end
 	close cursor_table
 	deallocate cursor_table
 	
 	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
+	where len(taxrate)>0
 	---------------------------------------------------------------------------------------------------------------------------
 	declare @tmpb table(
 		recno int,
@@ -681,7 +755,6 @@ z_vccadc02a:--z_vccadc02a
 	declare @t_emon nvarchar(10) = case when '#non'=[2] then char(255) else [2] end 
 	declare @t_bcustno nvarchar(20) = case when '#non' = [7] then '' else [7] end
 	declare @t_ecustno nvarchar(20) = case when '#non' = [8] then CHAR(255) else [8] end
-	----------------------------------------------------------------------
 	----------------------------------------------------------------------
 	declare @tmp table(
 		noa nvarchar(20),
@@ -758,10 +831,10 @@ z_vccadc02a:--z_vccadc02a
 	declare @rate nvarchar(max)
 	
 	declare cursor_table cursor for
-	select custno,recno,taxrate,[money] from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
+	select custno,recno,taxrate,[money],tax from @tmpa where CHARINDEX(SPACE(1),taxrate)>0
 	open cursor_table
 	fetch next from cursor_table
-	into @custno,@recno,@taxrate,@money
+	into @custno,@recno,@taxrate,@money,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin		
 		while CHARINDEX(SPACE(1),@taxrate)>0
@@ -771,25 +844,40 @@ z_vccadc02a:--z_vccadc02a
 			set @value = substring(@string,0,CHARINDEX('_',@string)-1)
 			set @rate = replace(substring(@string,CHARINDEX('_',@string)+1,len(@string)-CHARINDEX('-',@string)),'%','')
 	
-			update @tmpa set [money]=[money]+cast(@value as float)
-			where not(custno=@custno and recno=@recno) and custno=@custno
-			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+			if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float) where custno=@custno
+			end	
+			else
+			begin
+				update @tmpa set [money]=[money]+cast(@value as float)
+				where not(custno=@custno and recno=@recno) and custno=@custno
+				and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+			end
 		end
 
 		set @value = substring(@taxrate,0,CHARINDEX('_',@taxrate)-1)
 		set @rate = replace(substring(@taxrate,CHARINDEX('_',@taxrate)+1,len(@taxrate)-CHARINDEX('-',@taxrate)),'%','')
-		update @tmpa set [money]=[money]+cast(@value as float)
-		where not(custno=@custno and recno=@recno) and custno=@custno
-		and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate
+		if not( charindex('2聯',@taxrate)>0 or charindex('資售',@taxrate)>0 or charindex('折讓單',@taxrate)>0	)
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float),tax=tax+@tax,taxrate='' where custno=@custno
+		end	
+		else
+		begin
+			update @tmpa set [money]=[money]+cast(@value as float)
+			where not(custno=@custno and recno=@recno) and custno=@custno
+			and rtrim(Ltrim(replace(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''),'%','')))=@rate	
+		end
 		
 		delete @tmpa where custno=@custno and recno=@recno
 		fetch next from cursor_table
-		into @custno,@recno,@taxrate,@money
+		into @custno,@recno,@taxrate,@money,@tax
 	end
 	close cursor_table
 	deallocate cursor_table
 	
 	update @tmpa set tax=ROUND( [money] * cast(replace(rtrim(Ltrim(replace(replace(replace(taxrate,'2聯',''),'資售',''),'折讓單',''))),'%','') as float) / 100,0)
+	where len(taxrate)>0
 	---------------------------------------------------------------------------------------------------------------------------
 	insert into @tmpa(gno,pno,custno,[money],tax,total)
 	select '2',ROW_NUMBER()over(order by case when custno='0000' then 9999999999 else SUM([money]) end desc)
