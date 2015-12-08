@@ -82,6 +82,7 @@ zxls_csc:--zxls_csc  中鋼外銷    可重覆上傳
 	declare @k nvarchar(max)
 	
 	declare @nick nvarchar(20)
+	declare @weight3 float
 ---------------------------------------------------------------------------------------------
 	declare cursor_table cursor for
 	select a,b,c,d,e,f,g,h,i,j,k from ztmpxls order by CAST(noa as int)
@@ -120,16 +121,48 @@ zxls_csc:--zxls_csc  中鋼外銷    可重覆上傳
 				select top 1 @price=custprice,@price2=driverprice,@price3=driverprice2 
 				from addrs where noa=@straddrno and datea<=@datea order by datea desc
 				
-				--D01公司車  E01外車
-				select @carno='',@driverno='',@driver='',@calctype='E01',@discount=0
 				select @carno=carno,@driverno=driverno
-					,@calctype = case when cartype='2' then case when carspecno='C03' then 'D02' else 'D01' end else 'E01' end 
-					,@discount = case when cartype='2' then case when carspecno='C03' then 0.25 else 0.28 end else 0.88 end 
 					from car2 where CHARINDEX(REPLACE(carno,'-',''),@b)>0
 				select @driver=namea from driver where noa=@driverno
+				--D01公司車  E01外車
+				select @carno='',@driverno='',@driver='',@calctype='E01',@discount=0
+				
+				if exists(select * from car2 where carno=@carno and cartype='2')
+				begin
+					--公司車
+					select @weight3=0,@discount=0
+					select @weight3=weight3 from car2 where carno=@carno
+					if (@calctype='A')
+					begin		
+						--半拖
+						if @weight3=35
+						begin
+							--35T
+							select @discount = discount2 from calctypes where noa='D' and noq='01'	
+							set @calctype='D01'
+						end
+						else
+						begin
+							--46T
+							select @discount = discount2 from calctypes where noa='D' and noq='03'
+							set @calctype='D03'	
+						end	
+					end
+					else
+					begin
+						--全拖
+						select @discount = discount2 from calctypes where noa='D' and noq='02'
+						set @calctype='D02'	
+					end
+				end
+				else
+				begin
+					--外車
+					select @discount = discount2 from calctypes where noa='E' and noq='01'	
+					set @calctype='E01'		
+				end
 			
 				select @inprice=@price,@outprice = case when @calctype='E01' then @price3 else @price2 end
-				
 				
 				insert into @tmp(datea,trandate,mon,boatno,carno,calctype,driverno,driver,straddrno,straddr,uccno,product
 					,custno,comp,nick,inmount,outmount,[weight],inprice,outprice,discount,qtime,worker,memo)
@@ -232,35 +265,46 @@ zxls_csc:--zxls_csc  中鋼外銷    可重覆上傳
 	deallocate cursor_table
 	
 	-----------------------------------------------------------------------------------------------------
-	insert into carcsc(noa)
-	select noa from @tmp a where not exists(select noa from carcsc where noa=a.noa)
-	
-	update carcsc set datea=b.datea
-		,trandate=b.trandate
-		,mon=b.mon
-		,boatno=b.boatno
-		,carno=b.carno
-		,calctype=b.calctype
-		,driverno=b.driverno
-		,driver=b.driver
-		,addrno=b.straddrno
-		,addr=b.straddr
-		,uccno=b.uccno
-		,product=b.product
-		,custno=b.custno
-		,comp=b.comp
-		,nick=b.nick
-		,inmount=b.inmount
-		,outmount=b.outmount
-		,[weight]=b.[weight]
-		,inprice=b.inprice
-		,outprice=b.outprice
-		,discount=b.discount
-		,inmoney=b.inmoney
-		,outmoney=b.outmoney
-		,memo=b.memo
-		,qtime=b.qtime
-		,worker=b.worker
-	from carcsc a
-	left join @tmp b on a.noa=b.noa
-	where b.noa is not null;
+	--寫入carcsc
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name] -- Trans_Name 交易名稱可自訂或者是不寫
+	    insert into carcsc(noa)
+		select noa from @tmp a where not exists(select noa from carcsc where noa=a.noa)
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		update carcsc set datea=b.datea
+			,trandate=b.trandate
+			,mon=b.mon
+			,boatno=b.boatno
+			,carno=b.carno
+			,calctype=b.calctype
+			,driverno=b.driverno
+			,driver=b.driver
+			,addrno=b.straddrno
+			,addr=b.straddr
+			,uccno=b.uccno
+			,product=b.product
+			,custno=b.custno
+			,comp=b.comp
+			,nick=b.nick
+			,inmount=b.inmount
+			,outmount=b.outmount
+			,[weight]=b.[weight]
+			,inprice=b.inprice
+			,outprice=b.outprice
+			,discount=b.discount
+			,inmoney=b.inmoney
+			,outmoney=b.outmoney
+			,memo=b.memo
+			,qtime=b.qtime
+			,worker=b.worker
+		from carcsc a
+		left join @tmp b on a.noa=b.noa
+		where b.noa is not null
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+	IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	END
+	ELSE BEGIN
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	END;
