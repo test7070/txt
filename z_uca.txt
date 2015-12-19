@@ -373,19 +373,31 @@ z_ucatb:--z_ucatb
 	set @t_groupano = case when '#non'=[13] then '' else [13] end
 	set @t_style = case when '#non'=[14] then '' else [14] end
 ----------------------------------------------------------------------------------------------------------------------------------
-
-	declare @tmp table(
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#result')is not null
+	BEGIN
+		set @cmd = 'drop table #result'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #tmp(
 		gno nvarchar(1),
 		recno int,
 		storeno nvarchar(50),
 		stores nvarchar(50),
 		productno nvarchar(30),
-		xproduct nvarchar(40),
+		xproduct nvarchar(100),
 		datea nvarchar(10),
 		typea nvarchar(10),
 		typec nvarchar(10),
 		noa nvarchar(20),
-		comp nvarchar(40),
+		comp nvarchar(100),
 		unit nvarchar(10),
 		mount float,
 		weight float,
@@ -395,7 +407,9 @@ z_ucatb:--z_ucatb
 		ucctype nvarchar(15)
 	)
 	
-	insert into @tmp
+	CREATE INDEX tmp_index ON #tmp(productno,storeno,recno)
+	
+	insert into #tmp
 	select
 		'0' gno, ROW_NUMBER()over(order by R1.productno,R1.storeno,R1.datea,R1.typea)as recno,R1.*, 0 totmount, 0 totweight,''
 	from(
@@ -503,18 +517,18 @@ z_ucatb:--z_ucatb
 		and (len(@t_style)=0 or @t_style=b.style)
 	--*****************************************************************************************	
 	
-	declare @result table(
+	create table #result(
 		gno nvarchar(1),
 		recno int IDENTITY(1,1),
 		storeno nvarchar(50),
 		stores nvarchar(50),
 		productno nvarchar(30),
-		xproduct nvarchar(40),
+		xproduct nvarchar(100),
 		datea nvarchar(10),
 		typea nvarchar(10),
 		typec nvarchar(10),
 		noa nvarchar(20),
-		comp nvarchar(40),
+		comp nvarchar(100),
 		unit nvarchar(10),
 		mount float,
 		weight float,
@@ -556,7 +570,7 @@ z_ucatb:--z_ucatb
 	set @pt_totweight = 0
 	
 	declare cursor_table cursor for
-	select recno,productno,storeno,typea,datea,mount,weight from @tmp order by productno,storeno,recno
+	select recno,productno,storeno,typea,datea,mount,weight from #tmp order by productno,storeno,recno
 	open cursor_table
 	fetch next from cursor_table
 	into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
@@ -566,11 +580,11 @@ z_ucatb:--z_ucatb
 		begin
 			if not(@t_totmount=0 and @t_totweight=0)
 			begin
-				insert into @result
+				insert into #result
 				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
 				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
 			
-				insert into @result
+				insert into #result
 				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
 				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
 				
@@ -579,9 +593,9 @@ z_ucatb:--z_ucatb
 				set @tt_totmount = @tt_totmount+@t_totmount
 				set @tt_totweight = @tt_totweight+@t_totweight
 				
-				if(select count(*) from @result where productno=@t_productno)>0
+				if(select count(*) from #result where productno=@t_productno)>0
 				begin
-					insert into @result
+					insert into #result
 					select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
 					'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
 				end
@@ -600,11 +614,11 @@ z_ucatb:--z_ucatb
 		
 			if not(@t_totmount=0 and @t_totweight=0)
 			begin
-				insert into @result
+				insert into #result
 				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
 				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
 					  
-				insert into @result
+				insert into #result
 				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
 				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
 			end
@@ -635,9 +649,9 @@ z_ucatb:--z_ucatb
 				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
 				end
 				
-			insert @result
+			insert #result
 			select gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,@t_mount,@t_weight,ucctype 
-			from @tmp where recno=@recno	
+			from #tmp where recno=@recno	
 		end
 		else
 		begin
@@ -680,11 +694,11 @@ z_ucatb:--z_ucatb
 	--最後一筆處理---------------------------------------------------------------------
 	if not(@t_totmount=0 and @t_totweight=0)
 	begin
-		insert into @result
+		insert into #result
 		select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
 		'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
 		
-		insert into @result
+		insert into #result
 		select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
 		'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
 		
@@ -693,9 +707,9 @@ z_ucatb:--z_ucatb
 	set @tt_totmount = @tt_totmount+@t_totmount
 	set @tt_totweight = @tt_totweight+@t_totweight
 	
-	if(select count(*) from @result where productno=@t_productno)>0
+	if(select count(*) from #result where productno=@t_productno)>0
 	begin
-		insert into @result
+		insert into #result
 		select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
 		'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
 	end
@@ -709,34 +723,42 @@ z_ucatb:--z_ucatb
 	set @pt_totmount = 0
 	set @pt_totweight = 0
 	--------------------------------------------------------------------------------------------
-	declare @ucctype nvarchar(15)
-	declare cursor_table cursor for
-	select noa,typea from ucc order by noa
-	open cursor_table
-	fetch next from cursor_table
-	into @t_productno,@ucctype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		update @result set ucctype = @ucctype where productno=@t_productno
-		fetch next from cursor_table
-		into @t_productno,@ucctype
-	end
-	close cursor_table
-	deallocate cursor_table
+	update a
+	set ucctype=b.typea
+	from #result a left join ucc b on a.productno=b.noa
 	
-	declare cursor_table cursor for
-	select noa,typea from uca order by noa
-	open cursor_table
-	fetch next from cursor_table
-	into @t_productno,@ucctype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		update @result set ucctype = @ucctype where productno=@t_productno
-		fetch next from cursor_table
-		into @t_productno,@ucctype
-	end
-	close cursor_table
-	deallocate cursor_table
+	update a
+	set ucctype=b.typea
+	from #result a left join uca b on a.productno=b.noa
+	
+	--declare @ucctype nvarchar(15)
+	--declare cursor_table cursor for
+	--select noa,typea from ucc order by noa
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @t_productno,@ucctype
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	update #result set ucctype = @ucctype where productno=@t_productno
+	--	fetch next from cursor_table
+	--	into @t_productno,@ucctype
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	--declare cursor_table cursor for
+	--select noa,typea from uca order by noa
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @t_productno,@ucctype
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	update #result set ucctype = @ucctype where productno=@t_productno
+	--	fetch next from cursor_table
+	--	into @t_productno,@ucctype
+	--end
+	--close cursor_table
+	--deallocate cursor_table
 	--*****************************************************************************************	
 	select gno,recno,storeno,case when ISNULL(stores,'')='' then storeno else left(stores,7) end stores,productno,xproduct,datea,typea,typec,noa,left(comp,11) comp,unit,ucctype,qhref
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,0)),1)),4,30)) mount
@@ -744,9 +766,21 @@ z_ucatb:--z_ucatb
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
 	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,totweight),1)),0,30)) totweight
 	
-	from @result where (len(@t_typea) = 0 or isnull(ucctype,'null') = @t_typea)
-	order by productno,storeno, gno,datea, recno;
+	from #result where (len(@t_typea) = 0 or isnull(ucctype,'null') = @t_typea)
+	order by productno,storeno, gno,datea, recno
 	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#result')is not null
+	BEGIN
+		set @cmd = 'drop table #result'
+		EXECUTE sp_executesql @cmd
+	END
+	;
 --*****************************************************************************************	
 z_stk:	--庫存表  --z_stk
 	declare @t_bproductno nvarchar(50)
@@ -981,7 +1015,7 @@ z_stk:	--庫存表  --z_stk
 	declare @result table(
 		gno nvarchar(1),
 		productno nvarchar(30),
-		xproduct nvarchar(40),
+		xproduct nvarchar(100),
 		unit nvarchar(10),
 		totmount float,
 		price float,
@@ -1656,16 +1690,3 @@ z_uca4:--z_uca4
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(inprice,0)),1)),4,30)) inprice
 	from @result a order by xgroupno,productno
 ;
-
-
-
-
-
-
-
-
-
-
-
-
-
