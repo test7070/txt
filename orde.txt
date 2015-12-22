@@ -9,6 +9,8 @@ declare @project nvarchar(20)=[4] --客戶專案
 declare @cmd nvarchar(max)
 declare @vccno nvarchar(MAX)
 
+declare @t_bbmupdate nvarchar(max)='N' --判斷是否要更新或刪除 表頭資料
+
 if(@project!="uu")
 begin
 	declare @nowdate nvarchar(30) --今天日期
@@ -21,11 +23,21 @@ begin
 	set @vccno=isnull((select vccno from view_orde where noa=@noa),'')
 	set @invono=isnull((select invono from view_vcc where noa=@vccno),'')
 	
+	--12/22 出貨單產生傳票不刪除 (收款也不刪除)
+	if(@project="RB" and len(@vccno)>0 and ((select count(*) from view_vcc where noa=@vccno and accno!='')>0 or (select count(*) from umms where vccno=@vccno )>0 ))
+	begin
+		set @t_bbmupdate='Y'
+	end
+	
 	if(@condition='0')
 	begin
 		--刪除產生的vcc
-		set @cmd="delete vcc"+@accy+" where noa='"+@vccno+"'"
-		EXECUTE sp_executesql @cmd
+		if(@t_bbmupdate!='Y')
+		begin
+			set @cmd="delete vcc"+@accy+" where noa='"+@vccno+"'"
+			EXECUTE sp_executesql @cmd
+		end
+		
 		set @cmd="delete vccs"+@accy+" where noa='"+@vccno+"'"
 		EXECUTE sp_executesql @cmd
 	end
@@ -55,19 +67,45 @@ begin
 				set @invono=isnull(stuff((select ','+noa from vcca where trdno=@noa group by noa for xml path('')),1,1,''),'')
 			end
 			
-			--將orde的內容轉至vcc
-			set @cmd="insert vcc"+@accy+"(noa,ordeno,typea,stype,datea,custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
-			,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,unpay,payed,memo,mon
-			,zipcode,zipname,storeno,store,invono,invo,partno,part)
-			select '"+@n_vccno+"' noa,noa ordeno,'1' typea,stype,'"+@nowdate+"',custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
-			,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,total unpay,0 payed
-			,memo+(case when len(memo)>0 then 'chr(10)' else '' end) +'由訂單'+noa+'轉來',left('"+@nowdate+"',6)
-			,gdate,gtime,postname,conform,'"+@invono+"','"+@invono+"'
-			,isnull((select partno from sss where namea=a.worker),'')
-			,isnull((select part from sss where namea=a.worker),'')
-			from orde"+@accy+" a  where noa='"+@noa+"'"
-			EXECUTE sp_executesql @cmd
+			if(@t_bbmupdate='Y') --更新表頭資料
+			begin
+				set @cmd="update a 
+				set stype=b.stype
+				--,datea='"+@nowdate+"'
+				--,mon=left('"+@nowdate+"',6)
+				,custno=b.custno,comp=b.comp,nick=b.nick,tel=b.tel,fax=b.fax
+				,post=b.post	,addr=b.addr	,post2=b.post2,addr2=b.addr2
+				,salesno=b.salesno,sales=b.sales,cno=b.cno,acomp=b.acomp
+				,paytype=b.paytype,trantype=b.trantype
+				,money=b.money,tax=b.tax,taxtype=b.taxtype,total=b.total
+				,worker=b.worker,worker2=b.worker2
+				,unpay=b.total-a.payed,payed=a.payed
+				,memo=b.memo+(case when len(b.memo)>0 then 'chr(10)' else '' end) +'由訂單'+b.noa+'轉來'
+				,zipcode=b.gdate,zipname=b.gtime,storeno=b.postname,store=b.conform
+				,invono='"+@invono+"',invo='"+@invono+"'
+				,partno=isnull((select partno from sss where namea=b.worker),'')
+				,part=isnull((select part from sss where namea=b.worker),'')
+				from vcc"+@accy+" a outer apply (select * from orde"+@accy+" where noa='"+@noa+"' ) b 
+				where a.noa='"+@n_vccno+"' "
+				EXECUTE sp_executesql @cmd
+			end
+			else
+			begin
+				--將orde的內容轉至vcc
+				set @cmd="insert vcc"+@accy+"(noa,ordeno,typea,stype,datea,custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
+				,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,unpay,payed,memo,mon
+				,zipcode,zipname,storeno,store,invono,invo,partno,part)
+				select '"+@n_vccno+"' noa,noa ordeno,'1' typea,stype,'"+@nowdate+"',custno,comp,nick,tel,fax,post,addr,post2,addr2,salesno,sales
+				,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,total unpay,0 payed
+				,memo+(case when len(memo)>0 then 'chr(10)' else '' end) +'由訂單'+noa+'轉來',left('"+@nowdate+"',6)
+				,gdate,gtime,postname,conform,'"+@invono+"','"+@invono+"'
+				,isnull((select partno from sss where namea=a.worker),'')
+				,isnull((select part from sss where namea=a.worker),'')
+				from orde"+@accy+" a  where noa='"+@noa+"'"
+				EXECUTE sp_executesql @cmd
+			end
 			
+			--表身資料
 			set @cmd="insert vccs"+@accy+"(noa,noq,datea,typea,productno,product,unit,spec,style,mount,weight
 			,lengthb,width,dime,radius,size,price,total,memo,ordeno,no2,custno,storeno,store)
 			select '"+@n_vccno+"' noa,a.no2 noq,'"+@nowdate+"','1' typea,a.productno,a.product,a.unit
