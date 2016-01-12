@@ -1171,6 +1171,7 @@ declare @t_bbankno nvarchar(15)
 declare @t_ebankno nvarchar(15)
 declare @t_bacc1 nvarchar(20)
 declare @t_eacc1 nvarchar(20)
+declare @t_proj nvarchar(10) 
 
 set @t_accy = '[1]'
 set @t_bindate = case when '#non'=[14] then '' else [14] end
@@ -1179,6 +1180,9 @@ set @t_bbankno = case when '#non'=[9] then '' else [9] end
 set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
 set @t_bacc1 = case when '#non'=[27] then '' else [27] end
 set @t_eacc1 = case when '#non'=[28] then char(255) else [28] end
+set @t_proj = '[33]'
+-------------------------------------------------------------------
+declare @acc1 nvarchar(50) = case when @t_proj='yc' or @t_proj='rb' or @t_proj='vu' then '1113' else '1112' end
 -------------------------------------------------------------------
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -1189,40 +1193,42 @@ declare @cmd nvarchar(max)
 
 create table #tmp(
 	gno nvarchar(1),
-	rec int,
 	acc1 nvarchar(15),
 	acc2 nvarchar(50),
-	tbank nvarchar(15),
-	typea nvarchar(10),
 	bmoney float,
 	imoney float,
 	omoney float,
 	balance float
 )
-set @cmd ="select 
-	'1',ROW_NUMBER()over(partition by ISNULL(a.tacc1,'') order by MAX(b.acc2)),ISNULL(a.tacc1,''),MAX(b.acc2),'','',
-	sum(case when typea = '1' then money else 0 end),
-	sum(case when typea = '2' then money else 0 end)
-from gqb a 
-left join acc"+@t_accy+" b on a.tacc1 = b.acc1
-where(ISNULL(enda,'')='' or ISNULL(enda,'')='N')and
-	 (typea='1' or typea='2' ) and
-	 (tbankno between '"+@t_bbankno+"' and '"+@t_ebankno+"') and 
-	 (datea between '"+@t_bindate+"' and '"+@t_eindate+"') and 
-	 (ISNULL(tacc1,'') between '"+@t_bacc1+"' and '"+@t_eacc1+"')
-group by ISNULL(a.tacc1,'') "
-	 
-insert into #tmp(gno,rec,acc1,acc2,tbank,typea,imoney,omoney) execute sp_executesql @cmd
+set @cmd =
+"select '1',accc5,accc6,SUM(dmoney-cmoney)
+from acccs"+@t_accy+"
+where(LEFT(accc5,4)='"+@acc1+"') and
+	 (accc2='01/01' or accc2<RIGHT('"+@t_bindate+"',5)) and
+	 (accc5 between '"+@t_bacc1+"' and '"+@t_eacc1+"')
+group by accc5,accc6"
+insert into #tmp(gno,acc1,acc2,bmoney) execute sp_executesql @cmd
 
-set @cmd = 
-	"update #tmp set bmoney = ISNULL(b.money,0)
-	 from #tmp a
-	 left join(
-		 select accc5,SUM(dmoney-cmoney) money
-		 from acccs"+@t_accy+"  
-		 where (accc2 > right('"+@t_bindate+"',5)) 
-		 group by accc5
-	 )b on a.acc1 = b.accc5"
+set @cmd =
+"update #tmp set imoney = b.imoney,omoney = b.omoney
+from #tmp a
+left join(
+	select 
+		a.tacc1,
+		sum(case when typea = '1' then money else 0 end)imoney,
+		sum(case when typea = '2' then money else 0 end)omoney
+	from gqb a 
+	left join acc"+@t_accy+" b on a.tacc1 = b.acc1
+	where
+		 (a.tacc1 is not null) and
+		 (ISNULL(enda,'')='' or ISNULL(enda,'')='N') and
+		 (typea='1' or typea='2') and
+		 (tbankno between '"+@t_bbankno+"' and '"+@t_ebankno+"') and
+		 (datea between '"+@t_bindate+"' and '"+@t_eindate+"') and 
+		 (tacc1 between '"+@t_bacc1+"' and '"+@t_eacc1+"')
+	group by a.tacc1
+)b on a.acc1 = b.tacc1"
+
 execute sp_executesql @cmd
 
 update #tmp set acc2=replace(acc2,'銀行存款-',''),balance=isnull(bmoney,0)+isnull(imoney,0)-isnull(omoney,0)
@@ -1233,7 +1239,7 @@ select
 	dbo.getComma(imoney ,0) imny,
 	dbo.getComma(omoney ,0) omny, 
 	dbo.getComma(balance,0) blnc
-from #tmp order by acc1,tbank,gno
+from #tmp order by acc1,gno
 
 drop table #tmp;
 -------------------------------------------------------------------------------------------------------------------------------------
@@ -1535,7 +1541,7 @@ z_gqb12:--z_gqb12
 	,case when @t_typea='1' or @t_typea='3' then '' else '開票張數：' end tp2
 	,case when @t_typea='1' or @t_typea='3' then null else dbo.getComma(pcount2,0) end p2
 	,memo ,a.*
-	,'gqb?noa=$gqbno?' ghref  
+	,case when @t_proj='vu' then 'gqb?gqbno=$gqbno?' else 'gqb?noa=$gqbno?' end ghref
 	from #tmp a 
 	left join @stype b on a.typea=b.noa 
 	order by a.zz,a.pno,a.gqbno,a.noa,a.qno
