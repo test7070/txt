@@ -23,6 +23,7 @@ declare @tt_overtime nvarchar(10)='18:00:00' --中鋼加班
 declare @t_weekday nvarchar(10)--星期
 declare @t_satday nvarchar(10)=1 --星期六是否休假 1有 0沒有
 --102/12/03 大昌 1-5加班不計算 ,六日加班不減掉休息時間
+declare @ishoday bit=0 --假日判斷
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -101,6 +102,16 @@ begin
 	--e判斷上下班,避免沒按取當天最早時間當上班，最晚時間當下班
 	--select * from #tmp where left(c,10)=@datea and e='0'--上班
 	--select * from zsvaltmp where left(c,10)=@datea and e='1'--下班
+	
+	if ((@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0) 
+	and @t_date not in(select noa from holiday where isnull(iswork,0)=1))
+	begin
+		set @ishoday=1
+	end
+	else
+	begin
+		set @ishoday=0
+	end
 
 	insert #bbs(noa,noq,sssno,namea,clockin,clockout,clockins,clockouts)
 	select @t_date,(Rank() OVER (ORDER BY sssno)),sssno sssno,
@@ -159,8 +170,7 @@ begin
 	from #bbs a left join sss b on a.sssno=b.noa
 	outer apply (select top 1 * from salvacause where sssno=a.sssno and a.noa between bdate and edate) c
 	where (a.clockin>@t_gowork or a.clockin>@t_gowork2)
-	and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-	or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+	and (@ishoday=0)
 	and CHARINDEX('外勤-晚 進',a.memo)=0
 	and isnull(b.typea,'')!='中鋼外務'
 	
@@ -171,8 +181,7 @@ begin
 	then '請假' else '遲到' end)
 	from #bbs a left join sss b on a.sssno=b.noa
 	where a.clockin>@tt_gowork
-	and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-	or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+	and (@ishoday=0)
 	and CHARINDEX('外勤-晚 進',a.memo)=0
 	and isnull(b.typea,'')='中鋼外務'
 	
@@ -184,8 +193,7 @@ begin
 	then (case when  CHARINDEX('請假',a.memo)>0 then '' else '請假' end) else '早退' end
 	from #bbs a left join sss b on a.sssno=b.noa
 	where a.clockout<@t_offwork
-	and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-	or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+	and (@ishoday=0)
 	and CHARINDEX('外勤-早 退',a.memo)=0
 	and isnull(b.typea,'')!='中鋼外務'
 	
@@ -196,8 +204,7 @@ begin
 	then (case when  CHARINDEX('請假',a.memo)>0 then '' else '請假' end) else '早退' end
 	from #bbs a left join sss b on a.sssno=b.noa
 	where a.clockout<@t_offwork
-	and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-	or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+	and (@ishoday=0)
 	and CHARINDEX('外勤-早 退',a.memo)=0
 	and isnull(b.typea,'')='中鋼外務'
 	
@@ -207,8 +214,7 @@ begin
 	where clockin=clockout
 	
 	--非假日加班計算	
-	if(@t_work=1 and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
-	 or @t_date in(select noa from holiday where isnull(iswork,0)=1)))
+	if(@t_work=1 and (@ishoday=0))
 	begin
 		update a
 		set w133=round((cast(datediff(MINUTE,a.clockins,a.clockouts)-@t_rest as float)/60)-8,1)
@@ -230,8 +236,7 @@ begin
 		set w166=round(w133-2,1),w133=2
 		where w133>2
 	end
-	if(@t_work=2 and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
-	or @t_date in(select noa from holiday where isnull(iswork,0)=1)))
+	if(@t_work=2 and (@ishoday=0))
 	begin
 		--3/18超過六點半才算加班
 		update a
@@ -257,7 +262,7 @@ begin
 		where w133>2
 	end
 	--假日加班
-	if(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
+	if(@ishoday=1)
 	begin
 		update #bbs
 		set w100=round((cast(datediff(MINUTE,clockins,clockouts)-(case when clockin<'12:00:00' and clockout>'13:00:00' then 60 else 0 end) as float)/60),1)
@@ -274,8 +279,7 @@ begin
 	end
 	
 	-------103/1/2 增加沒有打卡的員工----------1/7 假日不用加--------------------------------------
-	if(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
-	or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+	if(@ishoday=0)
 	begin
 		insert #bbs(noa,noq,sssno,namea,memo)
 		select @t_date,(Rank() OVER (ORDER BY noa)),noa,namea,'沒有打卡資料'
@@ -326,9 +330,7 @@ begin
 	
 	insert #bbm
 	select @t_date,SUM(w133),SUM(w166),SUM(w100),COUNT(*) 
-	,case when @t_date in(select noa from holiday where isnull(iswork,0)=0) then 1 
-	when (@t_satday=1 and @t_weekday=6)or @t_weekday=0 then 1
-	else 0 end,@workerno,@worker
+	,@ishoday,@workerno,@worker
 	from #bbs
 	
 	--判斷是否有新增過
@@ -367,8 +369,7 @@ begin
 		+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo
 		,',請假',''),'請假',''),',外勤-晚 進',''),'外勤-晚 進',''),',遲到',''),'遲到',''),',外勤-早 退',''),'外勤-早 退',''),',早退',''),'早退',''),',沒有打卡資料',''),'沒有打卡資料',''))>0 
 		and len((case when (a.clockin>@t_gowork or a.clockin>@t_gowork2) and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+		(@ishoday=0)
 		then
 			(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
 			or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
@@ -385,8 +386,7 @@ begin
 		+
 		--遲到 
 		(case when (a.clockin>@t_gowork or a.clockin>@t_gowork2) and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+		(@ishoday=0)
 		then
 			(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
 			or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
@@ -401,8 +401,7 @@ begin
 		)+
 		--逗號
 		(case when (len((case when (a.clockin>@t_gowork or a.clockin>@t_gowork2) and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+		(@ishoday=0)
 		then
 			(case when (isnull(c.btime,'')='08:00' and c.etime='17:00') --整天請假
 			or (left(a.clockin,5) between c.btime and c.etime) --請假時間 就上班
@@ -418,8 +417,7 @@ begin
 		or len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo
 		,',請假',''),'請假',''),',外勤-晚 進',''),'外勤-晚 進',''),',遲到',''),'遲到',''),',外勤-早 退',''),'外勤-早 退',''),',早退',''),'早退',''),',沒有打卡資料',''),'沒有打卡資料',''))>0
 		) and len((case when a.clockout<@t_offwork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1)) 
+		(@ishoday=0) 
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and etime='17:30')>0 
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockout,5)<=etime)>0
@@ -430,8 +428,7 @@ begin
 		then ',' else '' end)+
 		--早退 
 		(case when a.clockout<@t_offwork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1)) 
+		(@ishoday=0)
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and etime='17:30')>0 
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockout,5)<=etime)>0
@@ -454,8 +451,7 @@ begin
 		+(case when len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo
 		,',請假',''),'請假',''),',外勤-晚 進',''),'外勤-晚 進',''),',遲到',''),'遲到',''),',外勤-早 退',''),'外勤-早 退',''),',早退',''),'早退',''),',沒有打卡資料',''),'沒有打卡資料',''))>0 
 		and len((case when a.clockin>@tt_gowork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+		(@ishoday=0)
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:30')>0 
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockin,5)>=btime)>0
@@ -470,8 +466,7 @@ begin
 		+
 		--遲到 
 		(case when a.clockin>@tt_gowork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+		(@ishoday=0)
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:30')>0 
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockin,5)>=btime)>0
@@ -484,8 +479,7 @@ begin
 		)+
 		--逗號
 		(case when (len((case when a.clockin>@tt_gowork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
+		(@ishoday=0)
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and btime='08:30')>0 
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockin,5)>=btime)>0
@@ -499,8 +493,7 @@ begin
 		or len(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(a.memo
 		,',請假',''),'請假',''),',外勤-晚 進',''),'外勤-晚 進',''),',遲到',''),'遲到',''),',外勤-早 退',''),'外勤-早 退',''),',早退',''),'早退',''),',沒有打卡資料',''),'沒有打卡資料',''))>0
 		) and len((case when a.clockout<@tt_offwork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1)) 
+		(@ishoday=0) 
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and etime='17:00')>0
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockout,5)<=etime)>0
@@ -511,8 +504,7 @@ begin
 		then ',' else '' end)+
 		--早退 
 		(case when a.clockout<@tt_offwork and 
-		(not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6)or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1)) 
+		(@ishoday=0) 
 		then
 			(case when (select COUNT(*) from salvacause where bdate=a.noa and sssno=a.sssno and etime='17:00')>0
 			or (select COUNT(*) from salvacause where sssno=a.sssno and a.noa between bdate and edate and left(a.clockout,5)<=etime)>0
@@ -546,9 +538,7 @@ begin
 		--重新計算加班時間
 		
 		--非假日加班計算	
-		if(@t_work=1 and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1))
-		)
+		if(@t_work=1 and @ishoday=0)
 		begin
 			update a
 			set w133=round((cast(datediff(MINUTE,@datea+' '+a.clockin,@datea+' '+a.clockout)-@t_rest as float)/60)-8,1)
@@ -570,8 +560,7 @@ begin
 			set w166=round(w133-2,1),w133=2
 			where w133>2 and noa=@t_date
 		end
-		if(@t_work=2 and (not(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
-		or @t_date in(select noa from holiday where isnull(iswork,0)=1)))
+		if(@t_work=2 and @ishoday=0)
 		begin
 			update a
 			set w133=case when a.clockout>=@t_overtime then
@@ -596,7 +585,7 @@ begin
 			where w133>2 and noa=@t_date
 		end
 		--假日加班
-		if(@t_date in(select noa from holiday where isnull(iswork,0)=0) or (@t_satday=1 and @t_weekday=6) or @t_weekday=0)
+		if(@ishoday=1)
 		begin
 			update salpresents
 			set w100=round((cast(datediff(MINUTE,@datea+' '+clockin,@datea+' '+clockout)-(case when clockin<'12:00:00' and clockout>'13:00:00' then 60 else 0 end) as float)/60),1)
