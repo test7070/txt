@@ -99,8 +99,8 @@ begin
 				,cno,acomp,paytype,trantype,money,tax,taxtype,total,worker,worker2,total unpay,0 payed
 				,memo+(case when len(memo)>0 then 'chr(10)' else '' end) +'由訂單'+noa+'轉來',left('"+@nowdate+"',6)
 				,gdate,gtime,postname,conform,'"+@invono+"','"+@invono+"'
-				,isnull((select partno from sss where namea=a.worker),'')
-				,isnull((select part from sss where namea=a.worker),''),''
+				,isnull((select top 1 partno from sss where namea=a.worker order by noa),'')
+				,isnull((select top 1 part from sss where namea=a.worker order by noa),''),''
 				from orde"+@accy+" a  where noa='"+@noa+"'"
 				EXECUTE sp_executesql @cmd
 			end
@@ -828,3 +828,62 @@ BEGIN
 	set @cmd = 'drop table #tmp'
 	EXECUTE sp_executesql @cmd
 END;
+--------------------------------------------------------------------------------------
+ordetoumm:--ordetoumm
+SET QUOTED_IDENTIFIER OFF
+declare @year nvarchar(20)=[1]--年度[1]
+declare @noa nvarchar(20)=[2]--單據編號[2]
+declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增[3]
+declare @ummkey nvarchar(20)=[4] --ummkey
+declare @project nvarchar(20)=[5] --客戶專案
+declare @userno nvarchar(20)=[6] --userno
+-----------------------------------------------------------------
+declare @accy nvarchar(20)
+declare @ummno nvarchar(20)=isnull((select ummno from view_orde where noa=@noa),'')
+declare @odate nvarchar(20)=isnull((select odate from view_orde where noa=@noa),'')
+set @accy=isnull((select accy from view_orde where noa=@noa),@year)
+
+if(@condition='0')
+begin
+	delete umm where noa=@ummno
+	delete umms where noa=@ummno
+end
+
+if(@condition='1')
+begin
+	if(@ummno='')
+	begin
+		declare @ummnoa nvarchar(20)=isnull((select MAX(noa) from umm where noa like @ummkey+replace(@odate,'/','')+'%'),'000')
+		declare @ummnob nvarchar(20)=isnull((select MAX(noa) from dno where tablea='umm' and noa like @ummkey+replace(@odate,'/','')+'%'),'000')
+		if(@ummnoa='' and @ummnob='')
+		begin
+			set @ummno=@ummkey+replace(@odate,'/','')+'001'
+		end
+		else
+		begin
+			if(@ummnoa>@ummnob)
+				set @ummno=@ummnoa
+			else 
+				set @ummno=@ummnob
+			
+			set @ummno=@ummkey+replace(@odate,'/','')+right('000'+cast(cast(RIGHT(@ummno,3) as int)+1 as nvarchar(10)),3)
+		end
+	end
+	
+	insert into umms (noa,noq,paymon,custno,acc1,acc2,money,cno,memo2,vccno,paysale,datea)
+	select @ummno,'001','',custno,acc1,acc2,deposit,'','','',0,odate
+	from view_orde where noa=@noa
+	
+	insert into umm (noa,custno,comp,datea,mon,paysale,total,sale,opay,memo,accno,cno)
+	select @ummno,custno,comp,odate,left(odate,len(odate)-3),0,deposit,0,deposit,'由訂單'+noa+'轉來','',cno
+	from view_orde where noa=@noa
+	
+	insert into dno(tablea,noa,usera,mech)
+	select 'umm',@ummno,@userno,replace(convert(varchar,GETDATE(),20),'-','/')
+	
+	EXEC("update orde"+@accy+" set ummno='"+@ummno+"' where noa='"+@noa+"'")
+	
+end
+
+select @ummno ummno
+;

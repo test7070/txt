@@ -462,6 +462,7 @@ z_ucc1:--z_ucc1
 	declare @t_acomp nvarchar(MAX)='[16]'
 	declare @t_ucc nvarchar(MAX)
 	declare @t_project nvarchar(MAX)='[25]'
+	declare @isspec nvarchar(MAX)='[27]'
 	
 	set @t_bproductno = case when '#non'=[4] then '' else [4] end
 	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
@@ -714,6 +715,7 @@ z_ucc1:--z_ucc1
 		xgroupno nvarchar(50),
 		productno nvarchar(30),
 		xproduct nvarchar(100),
+		spec nvarchar(200),
 		unit nvarchar(10),
 		totmount float,
 		safemount float,
@@ -722,7 +724,7 @@ z_ucc1:--z_ucc1
 	)
 	
 	insert into @result
-	select '0' gno,0 pageno,b.groupano,a.productno,a.product xproduct,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
+	select '0' gno,0 pageno,b.groupano,a.productno,a.product xproduct,b.spec,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
 	from (
 		--select productno,MAX(product) product,sum(mount) mount from stkucc(@t_stkdate,'','') s 
 		select productno,MAX(product) product,sum(mount) mount from #stkucc s
@@ -743,7 +745,7 @@ z_ucc1:--z_ucc1
 	if(@allucc='1')
 	begin
 		insert @result
-		select '0' gno ,0 pageno,groupano,	noa,product,unit,0,safemount,0,0
+		select '0' gno ,0 pageno,groupano,	noa,product,spec,unit,0,safemount,0,0
 		from ucc where noa not in (select productno from @result) 
 		and (len(@t_typea)=0 or isnull(typea,'null')=@t_typea) 
 		and (len(@t_group)=0 or isnull(groupano,'')=@t_group)
@@ -822,7 +824,8 @@ z_ucc1:--z_ucc1
 	end
 	
 	------------插入表頭及表尾<<End>>-------------
-	select gno,pageno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups,productno,xproduct,unit
+	select gno,pageno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups
+		,productno,xproduct+(case when @isspec='1' then ' '+isnull(spec,'') else '' end) xproduct ,unit
 		,dbo.getComma(totmount,[21]) totmount
 		,dbo.getComma(safemount,[21]) safemount
 		,dbo.getComma(price,[23]) price
@@ -1065,6 +1068,7 @@ declare @enddate nvarchar(30)
 declare @allucc nvarchar(30)
 declare @t_project nvarchar(MAX)='[25]'
 declare @t_ucc nvarchar(MAX)
+declare @isspec nvarchar(MAX)='[27]'
 
 set @t_bstoreno = case when '#non' = [6] then '' else [6] end
 set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
@@ -1292,17 +1296,19 @@ declare @tmp table(
 	stores nvarchar(50),
 	pno nvarchar(50), 
 	product nvarchar(100), 
+	spec nvarchar(200),
 	unit nvarchar(20), 
 	mount float
 ) 
 
 insert into @tmp
-select '0',a.storeno,a.store,a.productno,a.product,(select top 1 unit from view_ucaucc where noa=a.productno),a.mount 
+select '0',a.storeno,a.store,a.productno,a.product,b.spec,(select top 1 unit from view_ucaucc where noa=a.productno),a.mount 
 --from stkucc(@t_stkdate,'','') a
 from #stkucc a 
 left join ucc b on a.productno = b.noa
 where ( a.storeno between @t_bstoreno and @t_estoreno) and (a.productno between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
 and a.productno !='' --and a.mount !=0
+and isnull(b.noa,'')!=''
 and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
 
 delete @tmp where mount=0
@@ -1310,7 +1316,7 @@ delete @tmp where mount=0
 if(@allucc='1')
 begin
 	insert @tmp
-	select '0' gno,b.noa,b.store,a.noa,a.product,unit,0
+	select '0' gno,b.noa,b.store,a.noa,a.product,spec,unit,0
 	from (select * from ucc where (noa between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0))) and (tggno between @t_btggno and @t_etggno))a 
 	,(select * from store where (noa  between @t_bstoreno and @t_estoreno)) b
 	where b.noa+'__'+a.noa not in (select storeno+'__'+pno from @tmp) 
@@ -1319,7 +1325,7 @@ end
 insert into @tmp(storeno,gno,mount)
 select storeno,'1',sum(mount) from @tmp group by storeno
 
-select gno,storeno,stores,pno,product,unit
+select gno,storeno,stores,pno,product+(case when @isspec='1' then ' '+isnull(spec,'') else '' end) product,unit
 ,dbo.getComma(mount,[21]) mount
 --,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
 from @tmp
@@ -1580,6 +1586,7 @@ z_ucc5:	--，庫存預估表  --ucc5
 	declare @t_ucc nvarchar(MAX)
 	declare @t_project nvarchar(MAX)='[25]'
 	declare @lowsafe nvarchar(30) 
+	declare @isspec nvarchar(MAX)='[27]'
 	
 	set @t_bproductno = case when '#non'=[4] then '' else [4] end
 	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
@@ -1616,6 +1623,7 @@ z_ucc5:	--，庫存預估表  --ucc5
 		gno nvarchar(1),
 		pno nvarchar(100),
 		product nvarchar(200),
+		spec nvarchar(200),
 		unit nvarchar(50),
 		mount float,--庫存量
 		safem float,--安全存量
@@ -1657,7 +1665,7 @@ z_ucc5:	--，庫存預估表  --ucc5
 	group by c.productno
 	
 	insert into @result
-	select '0',a.noa,a.product,a.unit,isnull(b.mount,0),isnull(a.safemount,0),isnull(c.vmount,0),isnull(d.rmount,0),isnull(b.mount,0)-isnull(c.vmount,0)+isnull(d.rmount,0)
+	select '0',a.noa,a.product,a.spec,a.unit,isnull(b.mount,0),isnull(a.safemount,0),isnull(c.vmount,0),isnull(d.rmount,0),isnull(b.mount,0)-isnull(c.vmount,0)+isnull(d.rmount,0)
 	from ucc a left join @stkucc b on a.noa=b.pno
 	left join @ordeunvcc c on a.noa=c.pno
 	left join @ordcunrc2 d on a.noa=d.pno
@@ -1668,12 +1676,12 @@ z_ucc5:	--，庫存預估表  --ucc5
 	and (isnull(tggno,'') between @t_btggno and @t_etggno)
 	
 	if(@lowsafe='1')
-		delete @result	where smount>=safem
+		delete @result where smount>=safem
 	
 	if((select count(*) from @result)>0)
 	begin
 		insert @result
-		select '1',CHAR(255),CHAR(255),CHAR(255),SUM(mount),SUM(safem),SUM(vmount),SUM(rmount),SUM(smount) from @result
+		select '1',CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(mount),SUM(safem),SUM(vmount),SUM(rmount),SUM(smount) from @result
 	end
 
 	select 
@@ -1682,6 +1690,7 @@ z_ucc5:	--，庫存預估表  --ucc5
 		,dbo.getComma(vmount,[21]) vmount
 		,dbo.getComma(rmount,[21]) rmount
 		,dbo.getComma(smount,[21]) smount
+		,product+case when @isspec='1' then ' '+isnull(spec,'') else '' end product
 		,*
 	from @result a order by gno,pno
 ;
