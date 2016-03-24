@@ -89,3 +89,94 @@ select gno,rec,noa,datea,storeno,stores,stationno,stations,tggno,comp,tel,fax,ad
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),4,30)) mount
 ,memo,totmount
 from @tmpa order by noa,rec;
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+z_ina_xyp1:--z_ina_xyp1
+declare @pagecount int
+declare @t_accy nvarchar(20)
+declare @t_bnoa nvarchar(20)
+declare @t_enoa nvarchar(20)
+set @pagecount = 15
+set @t_accy = '[1]'
+set @t_bnoa = case when '#non' = [6] then '' else [6] end
+set @t_enoa = case when '#non' = [7] then CHAR(255) else [7] end
+----------------------------------------------------------------------------------------------------------------------------------------------------
+
+declare @tmpa table(
+		gno nvarchar(1),
+		rec int,
+		it nvarchar(10),
+		noa nvarchar(30),
+		datea nvarchar(10),
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		tggno nvarchar(50),
+		comp nvarchar(100),
+		a_memo nvarchar(MAX),
+		pno nvarchar(50),
+		product nvarchar(90),
+		spec nvarchar(MAX),
+		unit nvarchar(10),
+		mount float,
+		price float,
+		total float,
+		memo nvarchar(MAX),
+		namea nvarchar(50)
+)
+
+insert into @tmpa 
+select '0' gno,ROW_NUMBER()over(partition by a.noa order by a.noa,b.noq)
+,a.itype,a.noa,a.datea,a.storeno,a.store
+,a.tggno,a.comp,replace(a.memo,'chr(10)','<br>')
+,b.productno,replace(b.product,'~#$',char(39)),replace(b.spec,'~#$',char(39)),b.unit, 
+b.mount,b.price,b.total,b.memo,b.namea 
+from view_ina a
+left join view_inas b on a.noa = b.noa
+where a.noa between @t_bnoa and @t_enoa
+--------------------------------------------------------------------------
+declare @noa nvarchar(30)
+declare @pageline int
+declare @max int
+declare @i int
+declare cursor_table cursor for 
+select noa from @tmpa group by noa 
+open cursor_table 
+fetch next from cursor_table 
+into @noa
+while(@@FETCH_STATUS <> -1) 
+begin
+print @noa
+	--@pageline:每頁bbs資料行數=10-memo行數
+	set @pageline = @pagecount-(select (LEN(MAX(ISNULL(a_memo,'')))-LEN(REPLACE(MAX(ISNULL(a_memo,'')),'<br>','')))/4 from @tmpa where noa=@noa)
+	set @max = (select MAX(rec) from @tmpa where noa=@noa)
+	set @i = 0
+
+	--補空白行
+	while(@i < @pageline-@max%@pageline-1)--(-1:放合計列)
+	begin
+		insert into @tmpa(gno,rec,noa)
+		select '0',@max+@i+1,@noa
+		
+		set @i = @i+1
+	end
+	--合計
+	insert @tmpa (gno,rec,noa,mount,total)
+	select '1',MAX(rec)+1,noa,SUM(mount),SUM(total) from @tmpa where noa=@noa group by noa
+	
+	set @max = (select MAX(rec) from @tmpa where noa=@noa)
+	
+	--每頁煥行
+	insert into @tmpa(gno,rec,noa)
+	select '2',rec,noa from @tmpa where noa=@noa and rec%@pageline=0 and rec!=@max
+
+	fetch next from cursor_table 
+	into @noa
+end 
+close cursor_table 
+deallocate cursor_table 
+--------------------------------------------------------------------------
+select 
+dbo.getComma(mount,-1) mount
+,dbo.getComma(price,-1) price
+,dbo.getComma(total,0) total
+,*
+from @tmpa order by noa,rec;

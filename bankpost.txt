@@ -109,3 +109,69 @@ BEGIN
    drop table ##tmp
 END
 ;
+--------------------------------------------------------------------------------------------------------
+salary_media050:--薪資產生電子檔 --臺灣企銀
+declare @t_noa nvarchar(20)=[1]--單據編號
+declare @t_proj nvarchar(20)=[2]--專案
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+
+create table ##tmp(
+	txt nvarchar(1000)
+)
+
+declare @t_date nvarchar(20)
+set @t_date=isnull((select top 1 datea from salary where noa=@t_noa),'')
+
+if(LEN(@t_date)=9) --民國年
+	set @t_date=dbo.ChineseEraName2AD(@t_date)
+if(LEN(@t_date)=0) --找不到資料
+begin
+	set @t_date= CONVERT(nvarchar(10),GETDATE(),20)
+end
+
+set @t_date=replace(replace(@t_date,'-',''),'/','')
+
+--轉帳公司 0001(固定) (轉帳日-年月日) (公司帳號) (公司名稱)(銀行代碼)+1
+insert ##tmp
+select '0001'+@t_date
++right(REPLICATE(' ',16)+substring(dbo.get_num(isnull(account,'')),8,len(dbo.get_num(isnull(account,'')))),16)
++(isnull(acomp,'')+REPLICATE(' ',48-datalength(cast(isnull(acomp,'') as varchar(50)))))
++left(dbo.get_num(isnull(account,''))+REPLICATE(' ',7),7)+'1'
+from acomp
+
+--薪資
+insert ##tmp
+select '0002'+right(REPLICATE(' ',13)+CAST(isnull(b.total5,0) as varchar(13)),13)
++right(REPLICATE(' ',16)+substring(dbo.get_num(isnull(c.account,'')),8,len(dbo.get_num(isnull(c.account,'')))),16) --排除前面7碼取後16碼
++(isnull(b.namea,'')+REPLICATE(' ',48-datalength(cast(isnull(b.namea,'') as varchar(50)))))
++left(dbo.get_num(isnull(c.account,''))+REPLICATE(' ',7),7)+'174'
++right(REPLICATE(' ',17)+isnull(c.id,''),17)
++REPLICATE(' ',2)--手續費負擔別
++REPLICATE(' ',1)--固定欄位
++REPLICATE(' ',1)--收款人通知方式
++REPLICATE(' ',120)--保留欄位
++REPLICATE(' ',20)--傳真號碼
++REPLICATE(' ',60)--Email帳號
++REPLICATE(' ',60)--保留欄位
++REPLICATE(' ',36)--備註
++REPLICATE(' ',254)--附言
+from salary a left join salarys b on a.noa=b.noa
+left join sss c on b.sno=c.noa left join acomp d on c.cno=d.noa
+where a.noa=@t_noa
+order by a.noa,b.noq
+
+--產生檔案
+declare @string varchar(500)=''
+set @string='bcp "SELECT txt FROM ##tmp " queryout "C:\inetpub\wwwroot\htm\htm\PSBP-PAY-NEW.txt" -S"localhost,1799" -U"sa" -P"artsql963" -T -c -t'
+
+EXEC master..xp_cmdshell @string
+
+IF OBJECT_ID('tempdb..##tmp')is not null
+BEGIN
+   drop table ##tmp
+END
+;
