@@ -101,7 +101,7 @@ begin
 	
 	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
 	select '9',1,'產能',sum(a.mount)mount
-	from saleforecasts a left join saleforecast b on a.noa=b.noa where b.mon='"+@tmp_mon+"' ")
+	from supforecasts a left join supforecast b on a.noa=b.noa where b.mon='"+@tmp_mon+"' ")
 
 	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
 	select '9',2,'訂單入庫量',sum(wb.mount)mount
@@ -310,4 +310,197 @@ end
 select dbo.getComma(cmoney,-1) cmoney,* 
 from @result order by gno,agentno;
 
+--****************************************************************************************************
+z_orde_r04:--z_orde_r04
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_year nvarchar(10) 
+declare @t_len nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bagent = case when '#non' = [8] then '' else [8] end
+set @t_eagent = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_year = case when '#non' = [12] then '' else [12] end
+
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmpa(
+	noa nvarchar(50), 
+	no2 nvarchar(30),
+	mon nvarchar(10),
+	agentno nvarchar(50),
+	payterms  nvarchar(50),
+	mount float,
+	price float,
+	cost float,
+	total float,
+	profit float,
+	profitm float,
+	comm float,
+	commm float,
+	insur float,
+	insurm float
+)
+
+insert #tmpa
+select a.noa,b.no2,left(a.odate,@t_len+3),a.agentno,b.payterms,b.mount,b.price,b.sprice,b.total
+,b.profit,0,b.commission,0,b.insurance,0
+from view_orde a left join view_ordes b on a.noa=b.noa
+where left(a.odate,@t_len)=@t_year and isnull(payterms,'')!=''
+
+--(成本/(1-P)+F)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='C＆F'
+
+--(成本/(1-P)+F)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round(((cost/(1-(profit/100)))/(1-(comm/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+,insurm=0 where payterms='C＆F＆C'
+
+--成本/(1-P)/(1-I)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+where payterms='C＆I'
+
+--成本/(1-P)/(1-I)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round((((cost/(1-(profit/100)))/(1-(insur/100)))/(1-(comm/100)))-(cost+round((cost/(1-(profit/100)))-cost,2)+round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)),2)
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+where payterms='C＆I＆C'
+
+--(成本/(1-P)+F)/(1-I)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2) 
+where payterms='CIF'
+
+--(成本/(1-P)+F)/(1-I)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round((((cost/(1-(profit/100)))/(1-(insur/100)))/(1-(comm/100)))-(cost+round((cost/(1-(profit/100)))-cost,2)+round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)),2)
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+where payterms='CIF＆C'
+
+--成本/(1-P)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='EXW'
+
+--成本/(1-P)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='FOB'
+
+--成本/(1-P)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round(((cost/(1-(profit/100)))/(1-(comm/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+,insurm=0 where payterms='FOB＆C'
+
+update #tmpa
+set profitm=round(profitm*mount,0),commm=round(commm*mount,0),insurm=round(insurm*mount,0)
+
+create table #tmp(
+	gno nvarchar(1), 
+	recno int,
+	agentno nvarchar(200),
+	comp nvarchar(200),
+	tit nvarchar(200), 
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float,
+	mount07 float,
+	mount08 float,
+	mount09 float,
+	mount10 float,
+	mount11 float,
+	mount12 float
+) 
+
+insert #tmp (gno,agentno,recno,tit)
+select '0',agentno,1,'數量' from #tmpa group by agentno
+union all
+select '0',agentno,2,'銷收金額' from #tmpa group by agentno
+union all
+select '0',agentno,3,'平均單價' from #tmpa group by agentno
+union all
+select '0',agentno,4,'佣金%' from #tmpa group by agentno
+union all
+select '0',agentno,5,'佣金' from #tmpa group by agentno
+union all
+select '0',agentno,6,'毛利%' from #tmpa group by agentno
+union all
+select '0',agentno,7,'毛利' from #tmpa group by agentno
+
+declare @moncount int
+set @moncount=1
+declare @t_mons nvarchar(10)
+declare @t_n nvarchar(10)
+
+while(@moncount<=12)
+begin
+	set @t_mons=@t_year+'/'+right('0'+cast(@moncount as nvarchar(10)),2)	
+	set @t_n=right('0'+cast(@moncount as nvarchar(10)),2)
+	
+	EXEC("
+		update a
+		set mount"+@t_n+" = case 
+		when recno=1 then b.mount 
+		when recno=2 then b.total
+		when recno=3 then case when b.mount!=0 then round(b.total/b.mount,2) else 0 end
+		when recno=4 then case when b.commc!=0 then round(b.comm/b.commc,2) else 0 end
+		when recno=5 then b.commm
+		when recno=6 then case when b.profitc!=0 then round(b.profit/b.profitc,2) else 0 end
+		when recno=7 then b.profitm else 0 end
+		from #tmp a outer apply (select sum(mount)mount,sum(cost)cost,sum(total)total
+		,sum(profit)profit,sum(profitm)profitm,sum(case when profitm!=0 then 1 else 0 end)profitc
+		,sum(comm)comm,sum(commm)commm,sum(case when commm!=0 then 1 else 0 end)commc
+		,sum(insur)insur,sum(insurm)insurm,sum(case when insurm!=0 then 1 else 0 end)insurc
+		from #tmpa where agentno=a.agentno and mon='"+@t_mons+"')b
+	")
+	set @moncount=@moncount+1
+end
+
+update a 
+set comp=b.comp
+from #tmp a left join cust b on a.agentno=b.noa
+
+insert #tmp (gno,recno,agentno)
+select '1',8,agentno from #tmp group by agentno
+
+select 
+dbo.getComma(isnull(mount01,0),-1)mount01,
+dbo.getComma(isnull(mount02,0),-1)mount02,
+dbo.getComma(isnull(mount03,0),-1)mount03,
+dbo.getComma(isnull(mount04,0),-1)mount04,
+dbo.getComma(isnull(mount05,0),-1)mount05,
+dbo.getComma(isnull(mount06,0),-1)mount06,
+dbo.getComma(isnull(mount07,0),-1)mount07,
+dbo.getComma(isnull(mount08,0),-1)mount08,
+dbo.getComma(isnull(mount09,0),-1)mount09,
+dbo.getComma(isnull(mount10,0),-1)mount10,
+dbo.getComma(isnull(mount11,0),-1)mount11,
+dbo.getComma(isnull(mount12,0),-1)mount12,
+* from #tmp order by agentno,gno,recno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+;
 --****************************************************************************************************
