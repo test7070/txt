@@ -1131,3 +1131,719 @@ BEGIN
 END
 ;
 ------------------------------------------------------------------------------------------------------------------------------------
+
+------------------------------------------------------------------------------------------------------------------------------------
+
+z_ucr09:--z_ucr09
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @isweight nvarchar(max)='KG,M2,M,G,公斤,噸,頓,克'
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bucr2no nvarchar(50)
+	declare @t_eucr2no nvarchar(50)
+	declare @ucrouttypea nvarchar(200)
+	
+	set @t_bdate = case when '#non'=[8] then '' else [8] end
+	set @t_edate = case when '#non'=[9] then char(255) else [9] end
+	set @t_bucr2no = case when '#non'=[16] then '' else [16] end
+	set @t_eucr2no = case when '#non'=[17] then char(255) else [17] end
+	set @ucrouttypea='[19]'
+----------------------------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	set @cmd = 'drop table #result'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#resulta')is not null
+BEGIN
+	set @cmd = 'drop table #resulta'
+	EXECUTE sp_executesql @cmd
+END
+----------------------------------------------------------------------------------
+	declare @cmp nvarchar(MAX)	
+	create table #result(
+		gno nvarchar(1),
+		rr int,
+		ucrno nvarchar(50),
+		ucrproduct nvarchar(200),
+		ucrunit nvarchar(50),
+		datea nvarchar(50),
+		noa nvarchar(50),
+		typea nvarchar(4),
+		tggno nvarchar(50),--廠商編號
+		tgg nvarchar(50),--廠商
+		ucr3noa nvarchar(50),--委外單號
+		ou1 float,--原料出庫數量
+		ou2 float,--原料出庫重量
+		oe1 float,--原料耗用數量
+		oe2 float,--原料耗用重量
+		tmount float,--餘料數量
+		twmount float,--餘料重量
+		mount float,--餘料數量
+		wmount float,--餘料重量
+		ucr2no nvarchar(50),--製成品編號
+		ucr2product nvarchar(50),--製成品名稱
+		ucr2mount  float,--製成品數量
+		memo  nvarchar(200),
+		ghref nvarchar(200)
+)
+		--插入期初
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,tmount,twmount)
+		select '1',c.noa,d.product,d.unit,''
+		,case when datea<@t_bdate then sum((case when a.typea='1'then b.mount else 0 end)-(case when a.typea='2'then b.mount else 0 end)) else 0 end
+		,case when datea<@t_bdate then sum((case when a.typea='1'then b.weight else 0 end)-(case when a.typea='2'then b.weight else 0 end)) else 0 end
+		from ucrout3 a left join ucrout3s b on a.noa=b.noa 
+			outer apply (select * from ucrs where productno=b.productno) c
+			outer apply (select * from ucr where noa=c.noa) d
+		where a.datea between @t_bdate and @t_edate
+		group by c.noa,d.product,d.unit,a.datea
+
+		insert into #result
+		select '2','',e.noa,f.product,f.unit,d.datea,d.noa
+				,a.typea
+				,a.tggno,a.comp,a.noa
+				,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then b.mount else b.weight end else 0 end
+				,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then b.weight else b.mount end else 0 end
+				,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then b.mount else b.weight end else 0 end
+				,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then b.weight else b.mount end else 0 end
+				,'','','',''
+				,g.productno,g.product,g.mount,b.memo,'ucrout3?noa=$ucr3noa'
+		from
+			ucrout3 a left join ucrout3s b on a.noa=b.noa
+			left join ucrouts c on b.productno=c.productno
+			left join ucrin d on b.productno=d.productno
+			outer apply (select * from ucrs where productno=b.productno) e
+			outer apply (select * from ucr where noa=e.noa) f
+			outer apply (select * from ucrout where noa=c.noa) g
+			outer apply (select * from ucrout2 where productno=e.productno) h
+			
+		where 
+			d.datea between @t_bdate and @t_edate		
+			
+			create table #resulta(
+				ucrno nvarchar(50),
+				datea nvarchar(50),
+				noa nvarchar(50),
+				mount float,--前期
+				weight float
+			)
+		
+			
+			
+		--ucrout3s --前期原料出庫
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,d.datea,a.noa
+				,case when d.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end
+				,case when d.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.weight else a.mount end else 0 end
+		from ucrout3s a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+			outer apply (select * from ucrout3 where noa=b.noa) d
+		where isnull(d.datea,'') < @t_bdate
+			and isnull(case when (d.typea='1') then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+
+		--ucrout3s --前期原料耗用
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,d.datea,a.noa
+				,case when d.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end
+				,case when d.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.weight else a.mount end else 0 end
+		from ucrout3s a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+			outer apply (select * from ucrout3 where noa=b.noa) d
+		where isnull(d.datea,'') < @t_bdate
+			and isnull(case when (d.typea='2') then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+		
+		
+		--插入前期
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,mount)
+		select '2',a.ucrno,b.product,b.unit,'',sum(a.mount)
+		from #resulta a outer apply (select * from ucr where noa=a.ucrno) b
+		group by a.ucrno,b.product,b.unit
+		
+		
+		
+		update a set rr=rx
+		from (select ROW_NUMBER() over (partition by ucrno order by ucr3noa,datea)rx,rr from #result) a
+		
+		
+		
+		update a
+		set mount=ISNULL((select SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+		SUM(isnull(ou1,0))-SUM(isnull(oe1,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		update a
+		set wmount=ISNULL((select SUM(isnull(case when datea<@t_bdate then wmount else 0 end,0))+
+		SUM(isnull(ou2,0))-SUM(isnull(oe2,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		
+		
+		if((select count(*) from #result)>0)
+		begin
+			insert #result(gno,ucrno,ucrproduct,ucrunit,ou1,ou2,oe1,oe2,mount,wmount)
+			select '3',ucrno,ucrproduct,ucrunit
+			,SUM(isnull((ou1),0)),SUM(isnull((ou2),0)),SUM(isnull(oe1,0)),SUM(isnull(oe2,0))
+			,SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+			SUM(isnull(ou1,0))-SUM(isnull(oe1,0))
+			,SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+			SUM(isnull(ou2,0))-SUM(isnull(oe2,0))
+			from #result
+			group by ucrno,ucrproduct,ucrunit
+		end
+
+			
+	
+		select 
+		dbo.getComma(isnull(ou1,0),-1) ou1,
+		dbo.getComma(isnull(ou2,0),-1) ou2,
+		dbo.getComma(isnull(oe1,0),-1) oe1,
+		dbo.getComma(isnull(oe2,0),-1) oe2,
+		dbo.getComma(isnull(mount,0),-1) mount,
+		* from #result
+		order by ucrno,gno
+		
+		IF OBJECT_ID('tempdb..#result')is not null
+			BEGIN
+			set @cmd = 'drop table #result'
+			EXECUTE sp_executesql @cmd
+		END
+		IF OBJECT_ID('tempdb..#resulta')is not null
+		BEGIN
+			set @cmd = 'drop table #resulta'
+			EXECUTE sp_executesql @cmd
+		END
+;
+
+-------------------------------------------------------------------------------------------------------------------
+
+z_ucr10:--z_ucr10
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @isweight nvarchar(max)='KG,M2,M,G,公斤,噸,頓,克'
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bucr2no nvarchar(50)
+	declare @t_eucr2no nvarchar(50)
+	declare @ucrouttypea nvarchar(200)
+	
+	set @t_bdate = case when '#non'=[8] then '' else [8] end
+	set @t_edate = case when '#non'=[9] then char(255) else [9] end
+	set @t_bucr2no = case when '#non'=[16] then '' else [16] end
+	set @t_eucr2no = case when '#non'=[17] then char(255) else [17] end
+	set @ucrouttypea='[19]'
+----------------------------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	set @cmd = 'drop table #result'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#resulta')is not null
+BEGIN
+	set @cmd = 'drop table #resulta'
+	EXECUTE sp_executesql @cmd
+END
+----------------------------------------------------------------------------------
+	declare @cmp nvarchar(MAX)	
+	create table #result(
+		gno nvarchar(1),
+		rr int,
+		ucrno nvarchar(50),
+		ucrproduct nvarchar(200),
+		ucrunit nvarchar(50),
+		datea nvarchar(50),
+		noa nvarchar(50),
+		typea nvarchar(4),
+		tggno nvarchar(50),--廠商編號
+		tgg nvarchar(50),--廠商
+		ucr3noa nvarchar(50),--委外單號
+		ou1 float,--原料出庫數量
+		ou2 float,--原料出庫重量
+		oe1 float,--原料耗用數量
+		oe2 float,--原料耗用重量
+		tmount float,--餘料數量
+		twmount float,--餘料重量
+		mount float,--餘料數量
+		wmount float,--餘料重量
+		ucr2no nvarchar(50),--製成品編號
+		ucr2product nvarchar(50),--製成品名稱
+		ucr2mount  float,--製成品數量
+		memo  nvarchar(200),
+		ghref nvarchar(200)
+)
+		--插入期初
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,tmount,twmount)
+		select '1',c.noa,d.product,d.unit,''
+		,case when datea<@t_bdate then sum((case when a.typea='1'then b.mount else 0 end)-(case when a.typea='2'then b.mount else 0 end)) else 0 end
+		,case when datea<@t_bdate then sum((case when a.typea='1'then b.weight else 0 end)-(case when a.typea='2'then b.weight else 0 end)) else 0 end
+		from ucrout3 a left join ucrout3s b on a.noa=b.noa 
+			outer apply (select * from ucrs where productno=b.productno) c
+			outer apply (select * from ucr where noa=c.noa) d
+		where a.datea between @t_bdate and @t_edate
+		group by c.noa,d.product,d.unit,a.datea
+
+		insert into #result
+		select '2','',e.noa,f.product,f.unit,d.datea,d.noa
+				,a.typea
+				,a.tggno,a.comp,a.noa
+				,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then b.mount else b.weight end else 0 end
+				,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then b.weight else b.mount end else 0 end
+				,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then b.mount else b.weight end else 0 end
+				,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then b.weight else b.mount end else 0 end
+				,'','','',''
+				,g.productno,g.product,g.mount,b.memo,'ucrout3?noa=$ucr3noa'
+		from
+			ucrout3 a left join ucrout3s b on a.noa=b.noa
+			left join ucrouts c on b.productno=c.productno
+			left join ucrin d on b.productno=d.productno
+			outer apply (select * from ucrs where productno=b.productno) e
+			outer apply (select * from ucr where noa=e.noa) f
+			outer apply (select * from ucrout where noa=c.noa) g
+			outer apply (select * from ucrout2 where productno=e.productno) h
+			
+		where 
+			d.datea between @t_bdate and @t_edate		
+			
+			create table #resulta(
+				ucrno nvarchar(50),
+				datea nvarchar(50),
+				noa nvarchar(50),
+				mount float,--前期
+				weight float
+			)
+		
+			
+			
+		--ucrout3s --前期原料出庫
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,d.datea,a.noa
+				,case when d.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end
+				,case when d.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.weight else a.mount end else 0 end
+		from ucrout3s a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+			outer apply (select * from ucrout3 where noa=b.noa) d
+		where isnull(d.datea,'') < @t_bdate
+			and isnull(case when (d.typea='1') then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+
+		--ucrout3s --前期原料耗用
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,d.datea,a.noa
+				,case when d.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end
+				,case when d.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.weight else a.mount end else 0 end
+		from ucrout3s a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+			outer apply (select * from ucrout3 where noa=b.noa) d
+		where isnull(d.datea,'') < @t_bdate
+			and isnull(case when (d.typea='2') then case when charindex(UPPER(c.unit),@isweight)=0 then a.mount else a.weight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+		
+		
+		--插入前期
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,mount)
+		select '2',a.ucrno,b.product,b.unit,'',sum(a.mount)
+		from #resulta a outer apply (select * from ucr where noa=a.ucrno) b
+		group by a.ucrno,b.product,b.unit
+		
+		
+		
+		update a set rr=rx
+		from (select ROW_NUMBER() over (partition by ucrno order by ucr3noa,datea)rx,rr from #result) a
+		
+		
+		
+		update a
+		set mount=ISNULL((select SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+		SUM(isnull(ou1,0))-SUM(isnull(oe1,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		update a
+		set wmount=ISNULL((select SUM(isnull(case when datea<@t_bdate then wmount else 0 end,0))+
+		SUM(isnull(ou2,0))-SUM(isnull(oe2,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		
+		
+		if((select count(*) from #result)>0)
+		begin
+			insert #result(gno,ucrno,ucrproduct,ucrunit,ou1,ou2,oe1,oe2,mount,wmount)
+			select '3',ucrno,ucrproduct,ucrunit
+			,SUM(isnull((ou1),0)),SUM(isnull((ou2),0)),SUM(isnull(oe1,0)),SUM(isnull(oe2,0))
+			,SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+			SUM(isnull(ou1,0))-SUM(isnull(oe1,0))
+			,SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+			SUM(isnull(ou2,0))-SUM(isnull(oe2,0))
+			from #result
+			group by ucrno,ucrproduct,ucrunit
+		end
+
+			
+	
+		select 
+		dbo.getComma(isnull(ou1,0),-1) ou1,
+		dbo.getComma(isnull(ou2,0),-1) ou2,
+		dbo.getComma(isnull(oe1,0),-1) oe1,
+		dbo.getComma(isnull(oe2,0),-1) oe2,
+		dbo.getComma(isnull(mount,0),-1) mount,
+		* from #result
+		order by ucrno,gno
+		
+		IF OBJECT_ID('tempdb..#result')is not null
+			BEGIN
+			set @cmd = 'drop table #result'
+			EXECUTE sp_executesql @cmd
+		END
+		IF OBJECT_ID('tempdb..#resulta')is not null
+		BEGIN
+			set @cmd = 'drop table #resulta'
+			EXECUTE sp_executesql @cmd
+		END
+;
+
+------------------------------------------------------------------------------------------------------------------
+z_ucr11:--z_ucr11
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @isweight nvarchar(max)='KG,M2,M,G,公斤,噸,頓,克'
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bucr2no nvarchar(50)
+	declare @t_eucr2no nvarchar(50)
+	declare @ucrouttypea nvarchar(200)
+	
+	set @t_bdate = case when '#non'=[8] then '' else [8] end
+	set @t_edate = case when '#non'=[9] then char(255) else [9] end
+	set @t_bucr2no = case when '#non'=[16] then '' else [16] end
+	set @t_eucr2no = case when '#non'=[17] then char(255) else [17] end
+	set @ucrouttypea='[19]'
+----------------------------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	set @cmd = 'drop table #result'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#resulta')is not null
+BEGIN
+	set @cmd = 'drop table #resulta'
+	EXECUTE sp_executesql @cmd
+END
+	
+	create table #result(
+		gno nvarchar(1),
+		rr int,
+		ucrno nvarchar(50),
+		ucrproduct nvarchar(200),
+		ucrunit nvarchar(50),
+		datea nvarchar(50),
+		typea nvarchar(4),
+		noa nvarchar(50),--報廢單號
+		wm1 float,--報廢數量
+		wm2 float,--報廢重量
+		vccno nvarchar(50),--回收出貨單號
+		cust nvarchar(50),--回收場
+		rm1 float,--回收數量
+		rm2 float,--回收重量
+		tmount float,--累計數量
+		twmount float,--累計重量
+		mount float,--累計數量
+		wmount float,--累計重量
+		memo  nvarchar(200),
+		ghref nvarchar(200)
+	)
+		
+		--插入期初
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,tmount,twmount)
+		select '1',b.noa,b.product,c.unit,''
+		,case when datea<@t_bdate then sum(a.wmount-a.rmount) else 0 end
+		,case when datea<@t_bdate then sum(a.wmount-a.rmount) else 0 end
+		from ucrout2 a 
+		outer apply (select * from ucrs where productno=a.productno) b
+		outer apply (select * from ucr where noa=b.noa) c
+		where a.datea between @t_bdate and @t_edate
+		group by b.noa,b.product,c.unit,a.datea
+	
+		
+
+		insert into #result(gno,rr,ucrno,ucrproduct,ucrunit,datea,typea,noa,wm1,wm2,vccno,cust,rm1,rm2,mount,wmount,memo,ghref)
+		select '2','',b.noa,b.product,c.unit,a.datea,a.typea,a.noa
+		,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wmount else a.wweight end else 0 end
+		,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wweight else a.wmount end else 0 end
+		,a.vccno,a.comp
+		,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rmount else a.rweight end else 0 end
+		,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rweight else a.rmount end else 0 end
+		,'','',a.memo,'ucrout2?noa=$noa'
+		from ucrout2 a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+			outer apply (select * from ucrouts where productno=b.productno) e
+			outer apply (select * from ucrin where productno=b.productno) f
+			outer apply (select * from ucrout where noa=c.noa) g
+		where 
+			a.datea between @t_bdate and @t_edate
+			
+			create table #resulta(
+				ucrno nvarchar(50),
+				datea nvarchar(50),
+				noa nvarchar(50),
+				mount float,--前期
+				weight float
+			)
+			
+		--ucrout3s --前期報廢
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,a.datea,a.noa
+			,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wmount else a.wweight end else 0 end
+			,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wweight else a.wmount end else 0 end
+		from ucrout2 a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+		where isnull(a.datea,'') < @t_bdate
+			and isnull(case when (a.typea='1') then case when charindex(UPPER(c.unit),@isweight)=0 then a.wmount else a.wweight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+
+		--ucrout3s --前期回收
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,a.datea,a.noa
+			,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rmount else a.rweight end else 0 end
+			,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rweight else a.rmount end else 0 end
+		from ucrout2 a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+		where isnull(a.datea,'') < @t_bdate
+			and isnull(case when (a.typea='2') then case when charindex(UPPER(c.unit),@isweight)=0 then a.rmount else a.rweight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+			
+		--插入前期
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,mount)
+		select '1',a.ucrno,b.product,b.unit,'前期餘額數',sum(a.mount)
+		from #resulta a outer apply (select * from ucr where noa=a.ucrno) b
+		group by a.ucrno,b.product,b.unit
+
+		update a set rr=rx
+		from (select ROW_NUMBER() over (partition by ucrno order by datea)rx,rr from #result) a
+		
+		update a
+		set mount=ISNULL((select SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+		SUM(isnull(wm1,0))-SUM(isnull(rm1,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		update a
+		set wmount=ISNULL((select SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+		SUM(isnull(wm2,0))-SUM(isnull(rm2,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		
+		if((select count(*) from #result)>0)
+		begin
+			insert #result(gno,ucrno,ucrproduct,ucrunit,wm1,wm2,rm1,rm2,mount)
+			select '3',ucrno,ucrproduct,ucrunit
+			,SUM(isnull(wm1,0)),SUM(isnull(wm2,0)),SUM(isnull(rm1,0)),SUM(isnull(rm2,0))
+			,SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+			SUM(isnull(wm1,0))+SUM(isnull(wm2,0))-SUM(isnull(rm1,0))-SUM(isnull(rm2,0))
+			from #result
+			group by ucrno,ucrproduct,ucrunit
+		end
+		
+				
+			
+		select 
+		dbo.getComma(isnull(wm1,0),-1) wm1,
+		dbo.getComma(isnull(wm2,0),-1) wm2,
+		dbo.getComma(isnull(rm1,0),-1) rm1,
+		dbo.getComma(isnull(rm2,0),-1) rm2,
+		dbo.getComma(isnull(mount,0),-1) mount,
+		* from #result
+		order by ucrno,gno
+		
+		IF OBJECT_ID('tempdb..#result')is not null
+			BEGIN
+			set @cmd = 'drop table #result'
+			EXECUTE sp_executesql @cmd
+		END
+		IF OBJECT_ID('tempdb..#resulta')is not null
+		BEGIN
+			set @cmd = 'drop table #resulta'
+			EXECUTE sp_executesql @cmd
+		END
+;
+--------------------------------------------------------------------------------------------------------------------------------------------------
+
+z_ucr12:--z_ucr12
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @isweight nvarchar(max)='KG,M2,M,G,公斤,噸,頓,克'
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bucr2no nvarchar(50)
+	declare @t_eucr2no nvarchar(50)
+	declare @ucrouttypea nvarchar(200)
+	
+	set @t_bdate = case when '#non'=[8] then '' else [8] end
+	set @t_edate = case when '#non'=[9] then char(255) else [9] end
+	set @t_bucr2no = case when '#non'=[16] then '' else [16] end
+	set @t_eucr2no = case when '#non'=[17] then char(255) else [17] end
+	set @ucrouttypea='[19]'
+----------------------------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	set @cmd = 'drop table #result'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#resulta')is not null
+BEGIN
+	set @cmd = 'drop table #resulta'
+	EXECUTE sp_executesql @cmd
+END
+	
+	create table #result(
+		gno nvarchar(1),
+		rr int,
+		ucrno nvarchar(50),
+		ucrproduct nvarchar(200),
+		ucrunit nvarchar(50),
+		datea nvarchar(50),
+		typea nvarchar(4),
+		noa nvarchar(50),--報廢單號
+		wm1 float,--報廢數量
+		wm2 float,--報廢重量
+		vccno nvarchar(50),--回收出貨單號
+		cust nvarchar(50),--回收場
+		rm1 float,--回收數量
+		rm2 float,--回收重量
+		tmount float,--累計數量
+		twmount float,--累計重量
+		mount float,--累計數量
+		wmount float,--累計重量
+		memo  nvarchar(200),
+		ghref nvarchar(200)
+	)
+		
+		--插入期初
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,tmount,twmount)
+		select '1',b.noa,b.product,c.unit,''
+		,case when datea<@t_bdate then sum(a.wmount-a.rmount) else 0 end
+		,case when datea<@t_bdate then sum(a.wmount-a.rmount) else 0 end
+		from ucrout2 a 
+		outer apply (select * from ucrs where productno=a.productno) b
+		outer apply (select * from ucr where noa=b.noa) c
+		where a.datea between @t_bdate and @t_edate
+		group by b.noa,b.product,c.unit,a.datea
+	
+		
+
+		insert into #result(gno,rr,ucrno,ucrproduct,ucrunit,datea,typea,noa,wm1,wm2,vccno,cust,rm1,rm2,mount,wmount,memo,ghref)
+		select '2','',b.noa,b.product,c.unit,a.datea,a.typea,a.noa
+		,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wmount else a.wweight end else 0 end
+		,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wweight else a.wmount end else 0 end
+		,a.vccno,a.comp
+		,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rmount else a.rweight end else 0 end
+		,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rweight else a.rmount end else 0 end
+		,'','',a.memo,'ucrout2?noa=$noa'
+		from ucrout2 a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+			outer apply (select * from ucrouts where productno=b.productno) e
+			outer apply (select * from ucrin where productno=b.productno) f
+			outer apply (select * from ucrout where noa=c.noa) g
+		where 
+			a.datea between @t_bdate and @t_edate
+			
+			create table #resulta(
+				ucrno nvarchar(50),
+				datea nvarchar(50),
+				noa nvarchar(50),
+				mount float,--前期
+				weight float
+			)
+			
+		--ucrout3s --前期報廢
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,a.datea,a.noa
+			,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wmount else a.wweight end else 0 end
+			,case when a.typea='1' then case when charindex(UPPER(c.unit),@isweight)=0 then a.wweight else a.wmount end else 0 end
+		from ucrout2 a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+		where isnull(a.datea,'') < @t_bdate
+			and isnull(case when (a.typea='1') then case when charindex(UPPER(c.unit),@isweight)=0 then a.wmount else a.wweight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+
+		--ucrout3s --前期回收
+		insert #resulta(ucrno,datea,noa,mount,weight)
+		select b.noa,a.datea,a.noa
+			,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rmount else a.rweight end else 0 end
+			,case when a.typea='2' then case when charindex(UPPER(c.unit),@isweight)=0 then a.rweight else a.rmount end else 0 end
+		from ucrout2 a 
+			outer apply (select * from ucrs where productno=a.productno) b
+			outer apply (select * from ucr where noa=b.noa) c
+		where isnull(a.datea,'') < @t_bdate
+			and isnull(case when (a.typea='2') then case when charindex(UPPER(c.unit),@isweight)=0 then a.rmount else a.rweight end else 0 end,0) !=0
+			and exists (select * from #result where b.noa=ucrno)
+			
+		--插入前期
+		insert #result(gno,ucrno,ucrproduct,ucrunit,datea,mount)
+		select '1',a.ucrno,b.product,b.unit,'前期餘額數',sum(a.mount)
+		from #resulta a outer apply (select * from ucr where noa=a.ucrno) b
+		group by a.ucrno,b.product,b.unit
+
+		update a set rr=rx
+		from (select ROW_NUMBER() over (partition by ucrno order by datea)rx,rr from #result) a
+		
+		update a
+		set mount=ISNULL((select SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+		SUM(isnull(wm1,0))-SUM(isnull(rm1,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		update a
+		set wmount=ISNULL((select SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+		SUM(isnull(wm2,0))-SUM(isnull(rm2,0))
+		from #result where gno='2' and ucrno=a.ucrno and rr<=a.rr),0)
+		from #result a where gno='2'
+		
+		
+		if((select count(*) from #result)>0)
+		begin
+			insert #result(gno,ucrno,ucrproduct,ucrunit,wm1,wm2,rm1,rm2,mount)
+			select '3',ucrno,ucrproduct,ucrunit
+			,SUM(isnull(wm1,0)),SUM(isnull(wm2,0)),SUM(isnull(rm1,0)),SUM(isnull(rm2,0))
+			,SUM(isnull(case when datea<@t_bdate then mount else 0 end,0))+
+			SUM(isnull(wm1,0))+SUM(isnull(wm2,0))-SUM(isnull(rm1,0))-SUM(isnull(rm2,0))
+			from #result
+			group by ucrno,ucrproduct,ucrunit
+		end
+		
+				
+			
+		select 
+		dbo.getComma(isnull(wm1,0),-1) wm1,
+		dbo.getComma(isnull(wm2,0),-1) wm2,
+		dbo.getComma(isnull(rm1,0),-1) rm1,
+		dbo.getComma(isnull(rm2,0),-1) rm2,
+		dbo.getComma(isnull(mount,0),-1) mount,
+		* from #result
+		order by ucrno,gno
+		
+		IF OBJECT_ID('tempdb..#result')is not null
+			BEGIN
+			set @cmd = 'drop table #result'
+			EXECUTE sp_executesql @cmd
+		END
+		IF OBJECT_ID('tempdb..#resulta')is not null
+		BEGIN
+			set @cmd = 'drop table #resulta'
+			EXECUTE sp_executesql @cmd
+		END
+;
