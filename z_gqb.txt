@@ -88,8 +88,33 @@
 	" where isnull(a.sel,0)=1 and (case when d.enda='Y' then d.enda else 'N' end)!='Y' "+
 	" and (ISNULL(d.indate,'') <= @t_eydate)"+
 	" and (isnull(b.accl,'') between @t_bacc1 and @t_eacc1)"+
-	" and (isnull(d.bankno,'') between @t_bbankno and @t_ebankno)"
+	" and (isnull(d.tbankno,'') between @t_bbankno and @t_ebankno)"
 	insert into @tmp2
+	execute sp_executesql @cmd,N'@t_eydate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20),@t_bbankno nvarchar(15),@t_ebankno nvarchar(15)'
+	,@t_eydate=@t_eydate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno
+	
+	--開票
+	declare @tmp3 table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		indate nvarchar(10),
+		gqbno nvarchar(20),
+		memo nvarchar(max),
+		[money] float,
+		bankno nvarchar(50),
+		cust nvarchar(50),
+		tgg nvarchar(50)
+	)
+	
+	set @cmd="
+	select isnull(b.acc1,''),isnull(c.acc2,''),isnull(a.indate,''),a.gqbno,isnull(a.memo,''),isnull(a.[money],0),b.noa,a.comp,a.tcomp
+	from gqb a left join bank b on a.tbankno=b.noa
+	left join acc"+@t_accy+" c on b.acc1=c.acc1
+	where a.typea='2' and isnull(enda,'')!='Y' and isnull(a.tbankno,'')!=''
+	and isnull(b.acc1,'') between @t_bacc1 and @t_eacc1
+	and a.tbankno between @t_bbankno and @t_ebankno
+	and a.indate <= @t_eydate"
+	insert into @tmp3
 	execute sp_executesql @cmd,N'@t_eydate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20),@t_bbankno nvarchar(15),@t_ebankno nvarchar(15)'
 	,@t_eydate=@t_eydate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno
 	
@@ -114,16 +139,25 @@
 	select null,'1','1','',acc1,acc2,'',''
 	,isnull(b.dmoney,0)+isnull(c.dmoney,0),isnull(b.cmoney,0),isnull(b.dmoney,0)+isnull(c.dmoney,0)-isnull(b.cmoney,0),bankno,'',''
 	from(
-		select acc1,acc2,bankno from @tmp1 union select acc1,acc2,bankno from @tmp2
+		select acc1,acc2,bankno from @tmp1 union 
+		select acc1,acc2,bankno from @tmp2 union
+		select acc1,acc2,bankno from @tmp3
 	) a outer apply (
 		select sum(dmoney)dmoney,sum(cmoney)cmoney
 		from @tmp1 
-		where (datea < right(@t_bydate,5) or datea='01/01') and acc1=a.acc1 and acc2=a.acc2
+		where (datea < right(@t_eydate,5) or datea='01/01') and acc1=a.acc1 and acc2=a.acc2
+		--105/04/13 將會計區間資料合併於表頭加總
+		--where (datea < right(@t_bydate,5) or datea='01/01') and acc1=a.acc1 and acc2=a.acc2
 	)b outer apply(
 		select sum([money])dmoney
 		from @tmp2
 		where indate < @t_bydate  and acc1=a.acc1 and acc2=a.acc2
 	)c --where isnull(b.dmoney,0)!=0 and isnull(c.dmoney,0)!=0 and isnull(b.cmoney,0)!=0
+	outer apply(
+		select 0 dmoney,sum([money])cmoney
+		from @tmp3
+		where indate < @t_bydate  and acc1=a.acc1 and acc2=a.acc2
+	)d
 	
 	if(@t_merge='整合')
 	begin
@@ -132,11 +166,17 @@
 		,SUM(isnull(a.dmoney,0)),sum(isnull(a.cmoney,0)),SUM(isnull(a.dmoney,0))-sum(isnull(a.cmoney,0)),'','',''
 		from(
 			select sum(isnull(dmoney,0))dmoney,sum(isnull(cmoney,0))cmoney
-			from @tmp1 
-			where (datea < right(@t_bydate,5) or datea='01/01')
+			from @tmp1
+			where (datea < right(@t_eydate,5) or datea='01/01')
+			--105/04/13 將會計區間資料合併於表頭加總 
+			--where (datea < right(@t_bydate,5) or datea='01/01')
 			union all
 			select sum(isnull([money],0))dmoney,0 cmoney
 			from @tmp2
+			where indate < @t_bydate
+			union all
+			select 0 dmoney,sum(isnull([money],0)) cmoney
+			from @tmp3
 			where indate < @t_bydate
 		) a --having SUM(isnull(a.dmoney,0))!=0 and sum(isnull(a.cmoney,0))!=0 
 	end
@@ -149,24 +189,37 @@
 			select acc1,acc2 from @tmp1 union select acc1,acc2	from @tmp2
 		) a outer apply (
 			select sum(dmoney)dmoney,sum(cmoney)cmoney
-			from @tmp1 
-			where (datea < right(@t_bydate,5) or datea='01/01') and acc1=a.acc1 and acc2=a.acc2
+			from @tmp1
+			where (datea < right(@t_eydate,5) or datea='01/01') and acc1=a.acc1 and acc2=a.acc2
+			--105/04/13 將會計區間資料合併於表頭加總  
+			--where (datea < right(@t_bydate,5) or datea='01/01') and acc1=a.acc1 and acc2=a.acc2
 		)b outer apply(
 			select sum([money])dmoney
 			from @tmp2
 			where indate < @t_bydate  and acc1=a.acc1 and acc2=a.acc2
 		)c --where isnull(b.dmoney,0)!=0 and isnull(c.dmoney,0)!=0 and isnull(b.cmoney,0)!=0
+		outer apply(
+			select 0 dmoney,sum([money])cmoney
+			from @tmp2
+			where indate < @t_bydate  and acc1=a.acc1 and acc2=a.acc2
+		)d
 	end
 	
-	insert into @tmp
-	select null,'0','2',accno,acc1,acc2,datea,memo,dmoney,cmoney,0,bankno,'',''
-	from @tmp1
-	where datea >= right(@t_bydate,5) and datea!='01/01'
+	--105/04/13 將會計區間資料合併於表頭加總 
+	--insert into @tmp
+	--select null,'0','2',accno,acc1,acc2,datea,memo,dmoney,cmoney,0,bankno,'',''
+	--from @tmp1
+	--where datea >= right(@t_bydate,5) and datea!='01/01'
 	
 	insert into @tmp
 	select null,'0','3',gqbno,acc1,acc2,right(indate,5),'收票 '+memo,[money],0,0,bankno,cust,tgg
 	from @tmp2
-	where indate >=@t_bydate
+	--where indate >=@t_bydate --105/04/15 都顯示
+	
+	insert into @tmp
+	select null,'0','3',gqbno,acc1,acc2,right(indate,5),'開票 '+memo,0,[money],0,bankno,cust,tgg
+	from @tmp3
+	--where indate >=@t_bydate --105/04/15 都顯示
 	-------------------------------------------------------------------------------
 	
 	if(@t_merge='整合')
@@ -1315,13 +1368,14 @@ create table #tmp(
 	balance float
 )
 set @cmd =
-"select '1',accc5,accc6,SUM(dmoney-cmoney)
+"select '1',a.accc5,c.acc2,SUM(dmoney-cmoney)
 from acccs"+@t_accy+" a left join bank b on a.accc5=b.acc1
+left join acc"+@t_accy+" c on a.accc5=c.acc1
 where(LEFT(accc5,4)='"+@acc1+"') and
-	 (accc2='01/01' or accc2<RIGHT('"+@t_bindate+"',5)) and
+	 (accc2='01/01' or accc2<RIGHT('"+@t_eindate+"',5)) and
 	 (accc5 between '"+@t_bacc1+"' and '"+@t_eacc1+"')
 	 and isnull(b.noa,'') between '"+@t_bbankno+"' and '"+@t_ebankno+"'
-group by accc5,accc6"
+group by a.accc5,c.acc2"
 insert into #tmp(gno,acc1,acc2,bmoney) execute sp_executesql @cmd
 
 set @cmd =
@@ -1329,20 +1383,19 @@ set @cmd =
 from #tmp a
 left join(
 	select 
-		a.tacc1,
+		bb.acc1,
 		sum(case when typea = '1' then money else 0 end)imoney,
 		sum(case when typea = '2' then money else 0 end)omoney
-	from gqb a 
-	left join acc"+@t_accy+" b on a.tacc1 = b.acc1
-	where
-		 (a.tacc1 is not null) and
-		 (ISNULL(enda,'')='' or ISNULL(enda,'')='N') and
-		 (typea='1' or typea='2') and
-		 (tbankno between '"+@t_bbankno+"' and '"+@t_ebankno+"') and
-		 (datea between '"+@t_bindate+"' and '"+@t_eindate+"') and 
-		 (tacc1 between '"+@t_bacc1+"' and '"+@t_eacc1+"')
-	group by a.tacc1
-)b on a.acc1 = b.tacc1"
+	from gqb ga 
+	left join bank bb on ga.tbankno=bb.noa
+	where ISNULL(ga.tbankno,'')!='' and
+		 ISNULL(ga.enda,'')!='Y' and
+		 (ga.typea='1' or ga.typea='2') and
+		 (ga.tbankno between '"+@t_bbankno+"' and '"+@t_ebankno+"') and
+		 --(ga.indate between '"+@t_bindate+"' and '"+@t_eindate+"') and 
+		 (bb.acc1 between '"+@t_bacc1+"' and '"+@t_eacc1+"')
+	group by bb.acc1
+)b on a.acc1 = b.acc1"
 
 execute sp_executesql @cmd
 
@@ -1465,16 +1518,36 @@ z_gqb12:--z_gqb12
 	" , case when typea='1' then 1 else 0 end pcount1"+ 
 	" , case when typea='2' then 1 else 0 end pcount2,replace(memo,'chr(10)','')"+ 
 	" from gqb a"+ 
-	" where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)  and (len(@t_xchk)=0 or @t_xchk=case when len(tbankno)>0 then 'Y' else 'N' end) "+ 
-	" and (isnull(datea,'') between @t_bdate and @t_edate) "+ 
+	" where ( (isnull(tbankno,'')='' and isnull(enda,'')!='Y' and typea='1') "+ --105/04/12 未託收收票未兌現 票據 不處理篩選日期
+	" or ((isnull(datea,'') between @t_bdate and @t_edate) "+ 
 	" and (isnull(indate,'') between @t_bindate and @t_eindate)"+ 
-	" and (isnull(tdate,'') between @t_bcdate and @t_ecdate)"+ 
+	" and (isnull(tdate,'') between @t_bcdate and @t_ecdate) ))"+ 
+	" and (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)  and (len(@t_xchk)=0 or @t_xchk=case when len(tbankno)>0 then 'Y' else 'N' end) "+
 	" and (isnull(bankno,'') between @t_bbankno and @t_ebankno)"+ 
 	" and (isnull(tbankno,'') between @t_btbankno and @t_etbankno)"+ 
 	" and (isnull(tcompno,'') between @t_btcompno and @t_etcompno)"+ 
 	" and (isnull(compno,'') between @t_bcompno and @t_ecompno)"+ 
-	" and (isnull(tacc1,'') between @t_btacc and @t_etacc)"+ 
+	" and (isnull(tacc1,'') between @t_btacc and @t_etacc) "+ 
 	" order by tbankno,indate,datea,gqbno"
+	
+	--set @cmd = 
+	--" select '1','1','1'"+
+	--" ,ROW_NUMBER()over (order by tbankno,indate,datea,gqbno),noa,gqbno,datea,udate,tdate,indate,typea,tacc1,tbankno,tbank,bankno,bank,'',isnull(tcomp,'')+isnull(comp,''),[money]"+ 
+	--" , case when typea='1' then [money] else 0 end money1"+ 
+	--" , case when typea='2' then [money] else 0 end money2"+ 
+	--" , case when typea='1' then 1 else 0 end pcount1"+ 
+	--" , case when typea='2' then 1 else 0 end pcount2,replace(memo,'chr(10)','')"+ 
+	--" from gqb a"+ 
+	--" where (len(@t_typea)=0 or @t_typea= typea) and (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)  and (len(@t_xchk)=0 or @t_xchk=case when len(tbankno)>0 then 'Y' else 'N' end) "+ 
+	--" and (isnull(datea,'') between @t_bdate and @t_edate) "+ 
+	--" and (isnull(indate,'') between @t_bindate and @t_eindate)"+ 
+	--" and (isnull(tdate,'') between @t_bcdate and @t_ecdate)"+ 
+	--" and (isnull(bankno,'') between @t_bbankno and @t_ebankno)"+ 
+	--" and (isnull(tbankno,'') between @t_btbankno and @t_etbankno)"+ 
+	--" and (isnull(tcompno,'') between @t_btcompno and @t_etcompno)"+ 
+	--" and (isnull(compno,'') between @t_bcompno and @t_ecompno)"+ 
+	--" and (isnull(tacc1,'') between @t_btacc and @t_etacc)"+ 
+	--" order by tbankno,indate,datea,gqbno"
 	
 	insert into #tmp 
 	execute sp_executesql @cmd,N'@t_typea nvarchar(10),@t_status nvarchar(10),@t_xchk nvarchar(10),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bindate nvarchar(10),@t_eindate nvarchar(10),@t_bcdate nvarchar(10),@t_ecdate nvarchar(10),@t_bbankno nvarchar(20),@t_ebankno nvarchar(20),@t_btbankno nvarchar(20),@t_etbankno nvarchar(20),@t_btcompno nvarchar(20),@t_etcompno nvarchar(20),@t_bcompno nvarchar(20),@t_ecompno nvarchar(20),@t_btacc nvarchar(15),@t_etacc nvarchar(15)' 
@@ -1670,3 +1743,292 @@ z_gqb12:--z_gqb12
 		EXECUTE sp_executesql @cmd
 	END
 	;
+-----------------------------------------------------------------------------------------------------------------------------
+z_gqb13:--z_gqb13
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	declare @t_acomp nvarchar(100)='[29]'
+	declare @t_merge nvarchar(100)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_bacc1 = case when '#non'=[27] then '' else [27] end
+	set @t_eacc1 = case when '#non'=[28] then char(255) else [28] end
+	set @t_merge = case when '#non'=[36] then '整合' else [36] end
+	-------------------------------------------------------------------------------
+	declare @acomp nvarchar(50) = case when CHARINDEX('義橋',@t_acomp)>0 or CHARINDEX('彩虹',@t_acomp)>0 or CHARINDEX('智勝',@t_acomp)>0 then "LEFT(a.accc5,4)='1113'" else "LEFT(a.accc5,4)='1112'" end
+	-------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		rr int,
+		bankno nvarchar(50),
+		bankname nvarchar(100),
+		indate nvarchar(10),
+		xtypea nvarchar(20),
+		typea nvarchar(20),
+		gqbno nvarchar(50),
+		account nvarchar(50),
+		tbankno nvarchar(50),
+		tbank nvarchar(50),
+		money float,
+		total float,
+		compno nvarchar(100),
+		comp nvarchar(100),
+		mm1 float,
+		mm2 float,
+		p1 float,
+		p2 float
+	)
+
+	--期初
+
+	set @cmd =
+	" select '1',c.noa,c.bank,sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))"+
+	" from acccs"+@t_accy+" a"+
+	" left join acc"+@t_accy+" b on a.accc5=b.acc1"+
+	" left join bank c on a.accc5=c.acc1"+
+	" where "+@acomp+ 
+	" and (a.accc2 <= right(@t_eindate,5) or a.accc2='01/01' )"+
+	" and (a.accc5 between @t_bacc1 and @t_eacc1)"+
+	" and (isnull(c.noa,'') between @t_bbankno and @t_ebankno)"+
+	" group by c.noa,c.bank having sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))!=0 "
+	insert into @tmp (gno,bankno,bankname,total)
+	execute sp_executesql @cmd,N'@t_eindate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20),@t_bbankno nvarchar(15),@t_ebankno nvarchar(15)'
+	,@t_eindate=@t_bindate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno
+	
+	insert @tmp
+	select '2',0,a.tbankno,a.tbank,a.indate,a.typea,'收票',a.gqbno,a.account,a.bankno,a.bank,a.money,0,a.compno,a.comp,a.money,0,1,0
+	from gqb a left join bank b on a.tbankno=b.noa where a.typea='1'
+	and a.tbankno!='' and isnull(a.enda,'')!='Y'
+	--and a.indate between @t_bindate and @t_eindate
+	and a.tbankno between @t_bbankno and @t_ebankno
+	and (b.acc1 between @t_bacc1 and @t_eacc1)
+	
+	insert @tmp
+	select '2',0,a.tbankno,a.tbank,a.indate,a.typea,'開票',a.gqbno,a.account,a.bankno,a.bank,a.money,0,a.tcompno,a.tcomp,0,a.money,0,1
+	from gqb a left join bank b on a.tbankno=b.noa where a.typea='2' 
+	and a.tbankno!='' and isnull(a.enda,'')!='Y'
+	--and a.indate between @t_bindate and @t_eindate
+	and a.tbankno between @t_bbankno and @t_ebankno
+	and (b.acc1 between @t_bacc1 and @t_eacc1)
+	
+	update @tmp set rr=0,mm1=0,mm2=0,p1=0,p2=0 where gno='1'
+	update a
+	set rr=xrr
+	from (select ROW_NUMBER() over (partition by bankno order by bankno,indate,xtypea,gqbno) xrr,rr from @tmp where gno='2') a
+	
+	--更新結存金額
+	update a
+	set total=ISNULL((select SUM(isnull(case when gno='1' then total else 0 end,0))+SUM(isnull(case when xtypea='1' then 1 else -1 end*money,0)) 
+	from @tmp where bankno=a.bankno and rr<=a.rr),0)
+	from @tmp a where gno='2'
+	
+	--小計
+	insert @tmp(gno,bankno,bankname,indate,mm1,mm2)
+	select '3',bankno,MAX(bankname),indate
+	,SUM(case when xtypea='1' then money else 0 end)
+	,SUM(case when xtypea='2' then money else 0 end)
+	from @tmp where gno='2'
+	group by bankno,indate
+	
+	--總計
+	insert @tmp(gno,bankno,indate,total,mm1,mm2,p1,p2)
+	select '4',bankno,CHAR(255),SUM(case when gno='1' then total else case when xtypea='1' then 1 else -1 end*money end)
+	,SUM(mm1),SUM(mm2),SUM(p1),SUM(p2)
+	from @tmp where gno!='3'
+	group by bankno
+	
+	select 
+	dbo.getComma(money,-1)money,
+	dbo.getComma(total,-1)total,
+	dbo.getComma(mm1,-1)mm1,
+	dbo.getComma(mm2,-1)mm2,
+	dbo.getComma(p1,-1)p1,
+	dbo.getComma(p2,-1)p2,
+	* from @tmp order by bankno,indate,gno,rr;
+--------------------------------------------------------------------------------------------------------------------------------------------------
+z_gqb14:--z_gqb14
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @c_typea nvarchar(max)
+	declare @t_typea nvarchar(20)
+	declare @t_status nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bindate nvarchar(10)
+	declare @t_eindate nvarchar(10)
+	declare @t_bbankno nvarchar(15)
+	declare @t_ebankno nvarchar(15)
+	declare @t_bgqbno nvarchar(20)
+	declare @t_egqbno nvarchar(20)
+	declare @t_sort01 nvarchar(max)
+	declare @t_bydate nvarchar(10)
+	declare @t_eydate nvarchar(10)
+	declare @t_bacc1 nvarchar(20)
+	declare @t_eacc1 nvarchar(20)
+	declare @t_acomp nvarchar(100)='[29]'
+	declare @t_merge nvarchar(100)
+	set @t_accy = '[1]'
+	set @c_typea = '[2]'
+	set @t_typea = case when '#non'=[3] then '' when '全部'=[3] then '' else [3] end
+	set @t_status = case when '#non'=[4] then '' when '全部'=[4] then '' else [4] end
+	set @t_bdate = case when '#non'=[5] then '' else [5] end
+	set @t_edate = case when '#non'=[6] then char(255) else [6] end
+	set @t_bindate = case when '#non'=[7] then '' else [7] end
+	set @t_eindate = case when '#non'=[8] then char(255) else [8] end
+	set @t_bbankno = case when '#non'=[9] then '' else [9] end
+	set @t_ebankno = case when '#non'=[10] then char(255) else [10] end
+	set @t_bgqbno = case when '#non'=[11] then '' else [11] end
+	set @t_egqbno = case when '#non'=[12] then char(255) else [12] end
+	set @t_sort01 = case when '#non'=[13] then '' else [13] end
+	set @t_bydate = case when '#non'=[14] then '' else [14] end
+	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
+	set @t_bacc1 = case when '#non'=[27] then '' else [27] end
+	set @t_eacc1 = case when '#non'=[28] then char(255) else [28] end
+	set @t_merge = case when '#non'=[36] then '整合' else [36] end
+	-------------------------------------------------------------------------------
+	declare @acomp nvarchar(50) = case when CHARINDEX('義橋',@t_acomp)>0 or CHARINDEX('彩虹',@t_acomp)>0 or CHARINDEX('智勝',@t_acomp)>0 then "LEFT(a.accc5,4)='1113'" else "LEFT(a.accc5,4)='1112'" end
+	-------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		rr int,
+		bankno nvarchar(50),
+		bankname nvarchar(100),
+		indate nvarchar(10),
+		total float,
+		mm1 float,
+		mm2 float,
+		p1 float,
+		p2 float
+	)
+
+	--期初
+	--set @cmd =
+	--" select '0',0,c.noa,c.bank,sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))"+
+	--" from acccs"+@t_accy+" a"+
+	--" left join acc"+@t_accy+" b on a.accc5=b.acc1"+
+	--" left join bank c on a.accc5=c.acc1"+
+	--" where "+@acomp+ 
+	--" and (a.accc2 <= right(@t_bindate,5) or a.accc2='01/01' )"+
+	--" and (a.accc5 between @t_bacc1 and @t_eacc1)"+
+	--" and (isnull(c.noa,'') between @t_bbankno and @t_ebankno)"+
+	--" group by c.noa,c.bank having sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))!=0 "
+	--insert into @tmp (gno,rr,bankno,bankname,total)
+	--execute sp_executesql @cmd,N'@t_bindate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20),@t_bbankno nvarchar(15),@t_ebankno nvarchar(15)'
+	--,@t_bindate=@t_bindate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno
+	
+	--insert @tmp
+	--select '1',0,a.tbankno,b.bank,a.indate,0 total
+	--,sum(case when a.typea='1' then money else 0 end) mm1
+	--,sum(case when a.typea='2' then money else 0 end) mm2
+	--,SUM(case when a.typea='1' then 1 else 0 end) p1
+	--,SUM(case when a.typea='2' then 1 else 0 end) p2
+	--from gqb a left join bank b on a.tbankno=b.noa 
+	--where (a.typea='1' or a.typea='2')
+	--and a.tbankno!='' and isnull(a.enda,'')!='Y'
+	--and a.indate between @t_bindate and @t_eindate
+	--and a.tbankno between @t_bbankno and @t_ebankno
+	--and (b.acc1 between @t_bacc1 and @t_eacc1)
+	--group by a.tbankno,b.bank,a.indate
+	
+	--105/04/13所有銀行合併顯示
+	set @cmd =
+	" select '0',0,'','',sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))"+
+	" from acccs"+@t_accy+" a"+
+	" left join acc"+@t_accy+" b on a.accc5=b.acc1"+
+	" left join bank c on a.accc5=c.acc1"+
+	" where "+@acomp+ 
+	" and (a.accc2 <= right(@t_eindate,5) or a.accc2='01/01' )"+
+	" and (a.accc5 between @t_bacc1 and @t_eacc1)"+
+	" and (isnull(c.noa,'') between @t_bbankno and @t_ebankno)"+
+	" having sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))!=0 "
+	insert into @tmp (gno,rr,bankno,bankname,total)
+	execute sp_executesql @cmd,N'@t_eindate nvarchar(10),@t_bacc1 nvarchar(20),@t_eacc1 nvarchar(20),@t_bbankno nvarchar(15),@t_ebankno nvarchar(15)'
+	,@t_eindate=@t_eindate,@t_bacc1=@t_bacc1,@t_eacc1=@t_eacc1,@t_bbankno=@t_bbankno,@t_ebankno=@t_ebankno
+	
+	update a set mm1=isnull(b.mm1,0),mm2=isnull(b.mm2,0),p1=isnull(b.p1,0),p2=isnull(b.p2,0)
+	,total=isnull(a.total,0)+isnull(b.mm1,0)-isnull(b.mm2,0)
+	from @tmp a
+	outer apply(
+		select sum(case when a.typea='1' then money else 0 end) mm1
+		,sum(case when a.typea='2' then money else 0 end) mm2
+		,SUM(case when a.typea='1' then 1 else 0 end) p1
+		,SUM(case when a.typea='2' then 1 else 0 end) p2
+		from gqb a left join bank b on a.tbankno=b.noa 
+		where (a.typea='1' or a.typea='2')
+		and a.tbankno!='' and isnull(a.enda,'')!='Y'
+		and a.indate < @t_bindate
+		and a.tbankno between @t_bbankno and @t_ebankno
+		and (b.acc1 between @t_bacc1 and @t_eacc1)
+	)b where gno='0'
+	
+	insert @tmp
+	select '1',0,'','',a.indate,0 total
+	,sum(case when a.typea='1' then money else 0 end) mm1
+	,sum(case when a.typea='2' then money else 0 end) mm2
+	,SUM(case when a.typea='1' then 1 else 0 end) p1
+	,SUM(case when a.typea='2' then 1 else 0 end) p2
+	from gqb a left join bank b on a.tbankno=b.noa 
+	where (a.typea='1' or a.typea='2')
+	and a.tbankno!='' and isnull(a.enda,'')!='Y'
+	and a.indate between @t_bindate and @t_eindate
+	and a.tbankno between @t_bbankno and @t_ebankno
+	and (b.acc1 between @t_bacc1 and @t_eacc1)
+	group by a.indate
+	
+	update a
+	set rr=xrr
+	from (select ROW_NUMBER() over (partition by bankno order by bankno,indate) xrr,rr from @tmp where gno='1') a
+	
+	--更新結存金額
+	update a set total=
+	ISNULL((select sum(isnull(case when gno='0' then total else 0 end,0))+sum(isnull(mm1,0))-sum(isnull(mm2,0))
+	from @tmp where bankno=a.bankno and rr<=a.rr),0)
+	from @tmp a where gno='1'
+	
+	update @tmp set indate='餘額' where gno='0'
+	update @tmp set gno='0'
+	
+	--合計
+	insert @tmp (gno,bankno,mm1,mm2,p1,p2)
+	select '1',char(255),sum(mm1),sum(mm2),sum(p1),sum(p2) 
+	from @tmp where gno='0'
+	
+	select 
+	dbo.getComma(total,-1)total,
+	dbo.getComma(mm1,-1)mm1,
+	dbo.getComma(mm2,-1)mm2,
+	dbo.getComma(p1,-1)p1,
+	dbo.getComma(p2,-1)p2,
+	* from @tmp order by bankno,gno,rr,indate;
+--------------------------------------------------------------------------------------------------------------------------------------------------
