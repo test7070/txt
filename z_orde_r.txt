@@ -131,7 +131,7 @@ begin
 	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
 	select '9',3,'訂單數量',sum(isnull(a.mount,0))mount
 	from view_orde a left join view_ordes b on a.noa=b.noa left join uca c on b.productno=c.noa
-	where left(a.odate,"+@t_lenm+") ='"+@tmp_mon+"' and isnull(c.typea,'')='2' ")
+	where left(a.odate,"+@t_lenm+") ='"+@tmp_mon+"' and isnull(c.typea,'')='2' and a.stype='3' ")
 	
 	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
 	select '9',2,'製令數量',sum(isnull(wa.mount,0))mount
@@ -386,7 +386,7 @@ insert #tmpa
 select a.noa,b.no2,left(a.odate,@t_len+3),a.agentno,b.payterms,b.mount,b.price,b.sprice,b.total
 ,b.profit,0,b.commission,0,b.insurance,0
 from view_orde a left join view_ordes b on a.noa=b.noa
-where left(a.odate,@t_len)=@t_year and isnull(payterms,'')!=''
+where left(a.odate,@t_len)=@t_year and isnull(payterms,'')!='' and a.stype='3'
 
 --(成本/(1-P)+F)
 update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='C＆F'
@@ -622,6 +622,7 @@ and a.custno between @t_bcust and @t_ecust
 and b.productno between @t_bpno and @t_epno
 and a.salesno between @t_bsales and @t_esales
 and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+and a.stype='3'
 
 if(@t_order='odate')
 begin
@@ -864,7 +865,7 @@ begin
 	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
 	select '9',3,'訂單數量',sum(isnull(a.mount,0))mount
 	from view_orde a left join view_ordes b on a.noa=b.noa left join uca c on b.productno=c.noa
-	where a.odate between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(c.typea,'')='2' ")
+	where a.odate between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(c.typea,'')='2'  and a.stype='3' ")
 	
 	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
 	select '9',2,'製令數量',sum(isnull(wa.mount,0))mount
@@ -1010,6 +1011,8 @@ declare @result table(
 	salesno nvarchar(50),
 	sales nvarchar(50),
 	salgrp nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
 	invono nvarchar(50),
 	pno nvarchar(50),
 	product nvarchar(250),
@@ -1019,30 +1022,31 @@ declare @result table(
 	pdate nvarchar(50),
 	udate nvarchar(50),
 	umoney float,
-	chgs float,
 	unmoney float,
 	memo nvarchar(MAX)
 ) 
 insert @result
-select '0',a.noa,b.noq,a.custno,a.comp,a.mon,a.datea,a.salesno,a.sales,c.salesgroup,a.invo
-,b.productno,b.product,b.mount,b.total,a.pay
-,case when cast(right(a.datea,2) as int)>= cast(d.[getdate] as int)
-then left(dbo.q_cdn(left(a.datea,@t_lenm)+'/01',45),@t_lenm)+'/'+d.[getdate]
-else LEFT(a.datea,@t_lenm)+'/'+d.[getdate] end
-,(select top 1 datea from umms where vccno=a.noa)
-,isnull((select SUM(paysale-chgs) from umms where vccno=a.noa),0)*(b.total/case when a.typea='3' then a.total else a.money end)
-,isnull((select SUM(chgs) from umms where vccno=a.noa),0)*(b.total/case when a.typea='3' then a.total else a.money end)
-,(b.total-isnull((select SUM(paysale) from umms where vccno=a.noa),0))*(b.total/case when a.typea='3' then a.total else a.money end)
+select '0',a.noa,b.no2,a.custno,a.comp,a.mon,a.odate,a.salesno,a.sales,c.salesgroup
+,a.agentno,a.agent,(select top 1 noa from invo where ordeno=a.noa)
+,b.productno,b.product,b.mount,b.total,a.paytype
+,case when cast(right(a.odate,2) as int)>= cast(d.[getdate] as int)
+then left(dbo.q_cdn(left(a.odate,@t_lenm)+'/01',45),@t_lenm)+'/'+d.[getdate]
+else LEFT(a.odate,@t_lenm)+'/'+d.[getdate] end
+,f.datea
+,round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
+,b.total-round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
 ,b.memo
-from view_vcc a left join view_vccs b on a.noa=b.noa
+from view_orde a left join view_ordes b on a.noa=b.noa
 left join sss c on a.salesno=c.noa
 left join cust d on a.custno=d.noa
-where a.datea between @t_bdate and @t_edate
+left join view_ordei e on a.noa=e.noa 
+outer apply (select MIN(datea)datea,SUM(money)money from lcv where lcno=e.lcno)f
+where a.odate between @t_bdate and @t_edate
 and a.custno between @t_bcust and @t_ecust
 and b.productno between @t_bpno and @t_epno
 and a.salesno between @t_bsales and @t_esales
 and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
-and isnull(b.total,0)!=0
+and isnull(b.total,0)!=0 and a.stype='3'
 
 if(@t_order='sales')
 begin
@@ -1050,7 +1054,6 @@ begin
 	dbo.getComma(mount,-1) mount,
 	dbo.getComma(total,-1) total,
 	dbo.getComma(umoney,-1) umoney,
-	dbo.getComma(chgs,-1) chgs,
 	dbo.getComma(unmoney,-1) unmoney,
 	* 	from @result order by salesno,datea,noa,noq
 end
@@ -1060,7 +1063,6 @@ begin
 	dbo.getComma(mount,-1) mount,
 	dbo.getComma(total,-1) total,
 	dbo.getComma(umoney,-1) umoney,
-	dbo.getComma(chgs,-1) chgs,
 	dbo.getComma(unmoney,-1) unmoney,
 	* 	from @result order by custno,datea,noa,noq
 end
@@ -1070,7 +1072,6 @@ begin
 	dbo.getComma(mount,-1) mount,
 	dbo.getComma(total,-1) total,
 	dbo.getComma(umoney,-1) umoney,
-	dbo.getComma(chgs,-1) chgs,
 	dbo.getComma(unmoney,-1) unmoney,
 	* 	from @result order by pno,datea,noa,noq
 end
@@ -1080,7 +1081,6 @@ begin
 	dbo.getComma(mount,-1) mount,
 	dbo.getComma(total,-1) total,
 	dbo.getComma(umoney,-1) umoney,
-	dbo.getComma(chgs,-1) chgs,
 	dbo.getComma(unmoney,-1) unmoney,
 	* 	from @result order by salgrp,salesno,datea,noa,noq
 end
@@ -1133,6 +1133,8 @@ declare @result table(
 	salesno nvarchar(50),
 	sales nvarchar(50),
 	salgrp nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
 	invono nvarchar(50),
 	pno nvarchar(50),
 	product nvarchar(250),
@@ -1142,60 +1144,61 @@ declare @result table(
 	pdate nvarchar(50),
 	udate nvarchar(50),
 	umoney float,
-	chgs float,
 	unmoney float,
 	memo nvarchar(MAX)
 ) 
 
 insert @result
-select '0',0,0,a.noa,b.noq,a.custno,a.comp,a.mon,a.datea,a.salesno,a.sales,c.salesgroup,a.invo
-,b.productno,b.product,b.mount,b.total,a.pay
-,case when cast(right(a.datea,2) as int)>= cast(d.[getdate] as int)
-then left(dbo.q_cdn(left(a.datea,@t_lenm)+'/01',45),@t_lenm)+'/'+d.[getdate]
-else LEFT(a.datea,@t_lenm)+'/'+d.[getdate] end
-,(select top 1 datea from umms where vccno=a.noa)
-,isnull((select SUM(paysale-chgs) from umms where vccno=a.noa),0)*(b.total/case when a.typea='3' then a.total else a.money end)
-,isnull((select SUM(chgs) from umms where vccno=a.noa),0)*(b.total/case when a.typea='3' then a.total else a.money end)
-,(b.total-isnull((select SUM(paysale) from umms where vccno=a.noa),0))*(b.total/case when a.typea='3' then a.total else a.money end)
+select '0',0,0,a.noa,b.no2,a.custno,a.comp,a.mon,a.odate,a.salesno,a.sales,c.salesgroup
+,a.agentno,a.agent,(select top 1 noa from invo where ordeno=a.noa)
+,b.productno,b.product,b.mount,b.total,a.paytype
+,case when cast(right(a.odate,2) as int)>= cast(d.[getdate] as int)
+then left(dbo.q_cdn(left(a.odate,@t_lenm)+'/01',45),@t_lenm)+'/'+d.[getdate]
+else LEFT(a.odate,@t_lenm)+'/'+d.[getdate] end
+,f.datea
+,round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
+,b.total-round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
 ,b.memo
-from view_vcc a left join view_vccs b on a.noa=b.noa
+from view_orde a left join view_ordes b on a.noa=b.noa
 left join sss c on a.salesno=c.noa
 left join cust d on a.custno=d.noa
-where a.datea between @t_bdate and @t_edate
+left join view_ordei e on a.noa=e.noa 
+outer apply (select MIN(datea)datea,SUM(money)money from lcv where lcno=e.lcno)f
+where a.odate between @t_bdate and @t_edate
 and a.custno between @t_bcust and @t_ecust
 and b.productno between @t_bpno and @t_epno
 and a.salesno between @t_bsales and @t_esales
 and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
-and isnull(b.total,0)!=0
+and isnull(b.total,0)!=0 and a.stype='3'
 
 declare @t_pageline int=40
 
 if(@t_order='sales')
 begin
-	insert @result(gno,rr,salesno,sales,total,umoney,chgs,unmoney)
+	insert @result(gno,rr,salesno,sales,total,umoney,unmoney)
 	select '4',ROW_NUMBER()over (order by salesno,sales),salesno,sales
-	,SUM(total),SUM(umoney),SUM(chgs),SUM(unmoney)
+	,SUM(total),SUM(umoney),SUM(unmoney)
 	from @result group by salesno,sales
 end
 else if(@t_order='custno')
 begin
-	insert @result(gno,rr,custno,comp,total,umoney,chgs,unmoney)
+	insert @result(gno,rr,custno,comp,total,umoney,unmoney)
 	select '6',ROW_NUMBER()over (order by custno,comp),custno,comp
-	,SUM(total),SUM(umoney),SUM(chgs),SUM(unmoney)
+	,SUM(total),SUM(umoney),SUM(unmoney)
 	from @result group by custno,comp
 end
 else if(@t_order='pno')
 begin
-	insert @result(gno,rr,pno,product,mount,total,umoney,chgs,unmoney)
+	insert @result(gno,rr,pno,product,mount,total,umoney,unmoney)
 	select '8',ROW_NUMBER()over (order by pno,product),pno,product
-	,SUM(mount),SUM(total),SUM(umoney),SUM(chgs),SUM(unmoney)
+	,SUM(mount),SUM(total),SUM(umoney),SUM(unmoney)
 	from @result group by pno,product
 end
 else
 begin
-	insert @result(gno,rr,salgrp,total,umoney,chgs,unmoney)
+	insert @result(gno,rr,salgrp,total,umoney,unmoney)
 	select '2',ROW_NUMBER()over (order by salgrp),salgrp
-	,SUM(total),SUM(umoney),SUM(chgs),SUM(unmoney)
+	,SUM(total),SUM(umoney),SUM(unmoney)
 	from @result group by salgrp
 end
 
@@ -1213,7 +1216,6 @@ select
 dbo.getComma(mount,-1) mount,
 dbo.getComma(total,-1) total,
 dbo.getComma(umoney,-1) umoney,
-dbo.getComma(chgs,-1) chgs,
 dbo.getComma(unmoney,-1) unmoney,
 * from @result order by pageno,gno,rr
 ;
@@ -1289,7 +1291,7 @@ and c.custno between @t_bcust and @t_ecust
 and b.productno between @t_bpno and @t_epno
 and c.salesno between @t_bsales and @t_esales
 and (len(@t_salgrp)=0 or d.salesgroup=@t_salgrp)
-and isnull(h.noa,'')!='' and isnull(h.typea,'')='2'
+and isnull(h.noa,'')!='' and isnull(h.typea,'')='2'  and c.stype='3'
 
 if(@t_order='custno')
 begin
@@ -1391,7 +1393,7 @@ and c.custno between @t_bcust and @t_ecust
 and b.productno between @t_bpno and @t_epno
 and c.salesno between @t_bsales and @t_esales
 and (len(@t_salgrp)=0 or d.salesgroup=@t_salgrp)
-and isnull(h.noa,'')!='' and isnull(h.typea,'')='2'
+and isnull(h.noa,'')!='' and isnull(h.typea,'')='2'  and c.stype='3'
 
 declare @t_pageline int=40
 
@@ -1434,5 +1436,321 @@ select '9',pageno,MAX(rr) from @result group by pageno
 select 
 dbo.getComma(mount,-1) mount,
 * from @result order by pageno,gno,rr
+;
+--****************************************************************************************************
+z_orde_r11:--z_orde_r11
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bagent = case when '#non' = [13] then '' else [13] end
+set @t_eagent = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	ordeno nvarchar(50),
+	years nvarchar(50),
+	mon nvarchar(100),
+	salgrp nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	datea nvarchar(50),
+	invo nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	total float,
+	paytype nvarchar(100),
+	indate nvarchar(50),
+	payed float,
+	unpay float,
+	memo nvarchar(MAX)
+) 
+
+insert @result
+select '0',a.noa,left(a.odate,@t_len),RIGHT(LEFT(a.odate,@t_lenm),2)
+,d.salesgroup,a.salesno,a.sales,a.agentno,a.agent,a.odate,e.noa,a.custno,a.comp
+,a.total,a.paytype,c.edate
+,isnull((select SUM(money) from lcv where lcno=c.lcno),0) 
+,a.total-isnull((select SUM(money) from lcv where lcno=c.lcno),0) ,''
+from view_orde a left join view_ordei b on a.noa=b.noa 
+left join lcu c on b.lcno=c.lcno
+left join sss d on a.salesno=d.noa
+outer apply (select top 1 noa from invo where ordeno=a.noa)e
+where a.stype='3'
+and a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+and isnull(a.agentno,'') between @t_bagent and @t_eagent
+and a.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or d.salesgroup=@t_salgrp)
+
+select 
+dbo.getComma(total,-1) total,
+dbo.getComma(payed,-1) payed,
+dbo.getComma(unpay,-1) unpay,
+* from @result order by salgrp,datea,invo
+;
+--****************************************************************************************************
+z_orde_r12:--z_orde_r12
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_byear nvarchar(10) 
+declare @t_eyear nvarchar(10) 
+declare @t_show nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_byear = case when '#non' = [25] then '' else [25] end
+set @t_eyear = case when '#non' = [26] then CHAR(255) else [26] end
+set @t_show = case when '#non' = [27] then '' else [27] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(10),
+	tit nvarchar(100),
+	years nvarchar(10),
+	m01 float,
+	m02 float,
+	m03 float,
+	m04 float,
+	m05 float,
+	m06 float,
+	m07 float,
+	m08 float,
+	m09 float,
+	m10 float,
+	m11 float,
+	m12 float,
+	total float
+)
+
+if(len(@t_byear)!=@t_len and LEN(@t_eyear)!=@t_len)
+begin
+	if(@t_len=3)
+		set @t_eyear=LEFT(dbo.AD2ChineseEraName(CONVERT (nvarchar(10),GETDATE(),20)),@t_len)
+	else
+		set @t_eyear=LEFT(CONVERT (nvarchar(10),GETDATE(),20),@t_len)
+		
+	set @t_byear=right('0000'+CAST(CAST(@t_eyear as int)-5 as nvarchar(10)),@t_len)
+end
+else if (LEN(@t_eyear)!=@t_len)
+begin
+	set @t_eyear=right('0000'+CAST(CAST(@t_byear as int)+5 as nvarchar(10)),@t_len)
+end
+else if (LEN(@t_byear)!=@t_len)
+begin
+	set @t_byear=right('0000'+CAST(CAST(@t_eyear as int)-5 as nvarchar(10)),@t_len)
+end
+
+declare @t_showtxt nvarchar(10)=case when @t_show='mount' then '數量' when @t_show='profit' then 'PF' else '金額' end
+
+declare @t_year nvarchar(10)=@t_byear
+declare @t_edyear nvarchar(10)
+declare @t_mon int=1 
+declare @t_moncol nvarchar(10)
+declare @t_montcol nvarchar(100)
+declare @t_pyear nvarchar(10)
+declare @t_count int=1 
+
+while(@t_year<=@t_eyear and @t_count<=10)
+begin
+	set @t_mon=1
+	set @t_pyear=right('0000'+CAST(CAST(@t_year as int)-1 as nvarchar(10)),@t_len)
+	
+	insert #tmp(gno,tit,years)
+	select '0',@t_year,@t_year
+	
+	if(@t_count>1)
+	begin
+		insert #tmp(gno,tit,years)
+		select '1',"月同期比"+right(@t_year,2)+"'與"+right(@t_pyear,2)+"'",@t_year
+		
+		insert #tmp(gno,tit,years)
+		select '2',right(@t_year,2)+"'累積出貨"+@t_showtxt,@t_year
+		
+		if(@t_count>2)
+		begin
+			insert #tmp(gno,tit,years)
+			select '3',"累積同期比("+@t_year+"-"+@t_pyear+")",@t_year
+		end
+	end
+	
+	set @t_montcol='0'
+	
+	while (@t_mon<=12)
+	begin
+		set @t_moncol=right('00'+CAST(@t_mon as nvarchar(10)),2)
+		set @t_montcol=@t_montcol+"+m"+@t_moncol
+		
+		if(@t_show='mount')
+		begin
+			EXEC("update #tmp
+			set m"+@t_moncol+"=isnull((select SUM(b.mount) 
+			from view_orde a left join view_ordes b on a.noa=b.noa where a.stype='3' 
+			and left(a.odate,"+@t_lenm+")='"+@t_year+"/"+@t_moncol+"'),0)
+			where gno='0' and years='"+@t_year+"' ")
+		end
+		else if(@t_show='profit')
+		begin
+			EXEC("update #tmp
+			set m"+@t_moncol+"=isnull((select SUM(b.benifit) 
+			from view_orde a left join view_ordes b on a.noa=b.noa where a.stype='3' 
+			and left(a.odate,"+@t_lenm+")='"+@t_year+"/"+@t_moncol+"'),0)
+			where gno='0' and years='"+@t_year+"' ")
+		end
+		else
+		begin
+			EXEC("update #tmp
+			set m"+@t_moncol+"=isnull((select SUM(total) 
+			from view_orde where stype='3' 
+			and left(odate,"+@t_lenm+")='"+@t_year+"/"+@t_moncol+"'),0)
+			where gno='0' and years='"+@t_year+"' ")
+		end
+		
+		if(@t_count>1)
+		begin
+		
+			EXEC("update a
+			set m"+@t_moncol+"=case when c.money=0 then 0 else round((b.money-c.money)/c.money*100,0) end
+			from #tmp a
+			outer apply (select m"+@t_moncol+" money from #tmp where gno='0' and years='"+@t_year+"') b
+			outer apply (select m"+@t_moncol+" money from #tmp where gno='0' and years='"+@t_pyear+"') c
+			where gno='1' and years='"+@t_year+"'")
+			
+			EXEC("update a
+			set m"+@t_moncol+"=b.money
+			from #tmp a
+			outer apply (select "+@t_montcol+" money from #tmp where gno='0' and years='"+@t_year+"') b
+			where gno='2' and years='"+@t_year+"'")
+			
+			if(@t_count>2)
+			begin
+				EXEC("update a
+				set m"+@t_moncol+"=b.money-c.money
+				from #tmp a
+				outer apply (select m"+@t_moncol+" money from #tmp where gno='2' and years='"+@t_year+"') b
+				outer apply (select m"+@t_moncol+" money from #tmp where gno='2' and years='"+@t_pyear+"') c
+				where gno='3' and years='"+@t_year+"'")
+			end
+		end
+		
+		set @t_mon=@t_mon+1
+	end
+	
+	update #tmp 
+	set total=m01+m02+m03+m04+m05+m06+m07+m08+m09+m10+m11+m12
+	where gno='0' and years=@t_year
+	
+	if(@t_count>1)
+	begin
+		update a
+		set total=case when c.money=0 then 0 else round((b.money-c.money)/c.money*100,0) end
+		from #tmp a
+		outer apply (select total money from #tmp where gno='0' and years=@t_year) b
+		outer apply (select total money from #tmp where gno='0' and years=@t_pyear) c
+		where gno='1' and years=@t_year
+		
+		update #tmp set total=m12 where gno='2' and years=@t_year
+		
+		if(@t_count>2)
+		begin
+			update a
+			set total=b.money-c.money
+			from #tmp a
+			outer apply (select total money from #tmp where gno='2' and years=@t_year) b
+			outer apply (select total money from #tmp where gno='2' and years=@t_pyear) c
+			where gno='3' and years=@t_year
+		end
+	end
+	
+	set @t_edyear=@t_year
+	set @t_year=right('0000'+CAST(CAST(@t_year as int)+1 as nvarchar(10)),@t_len)
+	set @t_count=@t_count+1
+end
+
+insert #tmp(gno,tit,years)
+select '4',"累積"+@t_showtxt+"成長/衰退",''
+
+set @t_mon=1
+while (@t_mon<=12)
+begin
+	set @t_moncol=right('00'+CAST(@t_mon as nvarchar(10)),2)
+	set @t_montcol=@t_montcol+"+M"+@t_moncol
+	
+	EXEC("update a
+	set m"+@t_moncol+"=case when c.money=0 then 0 else b.money/c.money*100 end
+	from #tmp a
+	outer apply (select m"+@t_moncol+" money from #tmp where gno='3' and years='"+@t_edyear+"') b
+	outer apply (select m"+@t_moncol+" money from #tmp where gno='2' and years='"+@t_edyear+"') c
+	where gno='4' ")
+	
+	set @t_mon=@t_mon+1
+end
+
+update a
+set total=case when c.money=0 then 0 else b.money/c.money*100 end
+from #tmp a
+outer apply (select total money from #tmp where gno='3' and years=@t_edyear) b
+outer apply (select total money from #tmp where gno='2' and years=@t_edyear) c
+where gno='4'
+
+select 
+dbo.getComma(m01,-1) m01,
+dbo.getComma(m02,-1) m02,
+dbo.getComma(m03,-1) m03,
+dbo.getComma(m04,-1) m04,
+dbo.getComma(m05,-1) m05,
+dbo.getComma(m06,-1) m06,
+dbo.getComma(m07,-1) m07,
+dbo.getComma(m08,-1) m08,
+dbo.getComma(m09,-1) m09,
+dbo.getComma(m10,-1) m10,
+dbo.getComma(m11,-1) m11,
+dbo.getComma(m12,-1) m12,
+dbo.getComma(total,-1) total,
+* from #tmp order by gno,years
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
 ;
 --****************************************************************************************************
