@@ -1,0 +1,297 @@
+z_orde_j01:--z_orde_j01
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_bfact nvarchar(100) 
+declare @t_efact nvarchar(100)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bmon = case when '#non' = [6] then '' else [6] end
+set @t_emon = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bfact = case when '#non' = [12] then '' else [12] end
+set @t_efact = case when '#non' = [13] then CHAR(255) else [13] end
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @now_date=replace(dbo.ChineseEraName2AD(@now_date),'-','/')
+	set @t_lenm='7'
+end 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+declare @t_year nvarchar(10) 
+declare @t_bweek nvarchar(10) 
+declare @t_eweek nvarchar(10) 
+
+--月份用
+if(@t_len='3')
+begin
+	if(len(@t_bmon)=0)
+		set @t_year=cast(left(@now_date,@t_len)as int)+1911
+	else
+		set @t_year=cast(left(@t_bmon,@t_len)as int)+1911
+end
+else 
+begin
+	if(len(@t_bmon)=0)
+		set @t_year=left(@now_date,@t_len)
+	else
+		set @t_year=left(@t_bmon,@t_len)
+end
+
+if(len(@t_bmon)=0)
+begin
+	set @t_bmon=@t_year+'/01'
+end
+
+if(@t_emon=CHAR(255))
+begin
+	set @t_emon=@t_year+'/12'
+end
+
+if(@t_len='3')
+begin
+	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,2)+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,2)+'/31')
+end
+else 
+begin
+	set @t_bweek=DATEPART(ISO_WEEK,@t_bmon+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_emon+'/31')
+end
+
+if(right(@t_bmon,2)='01' and @t_bweek!='1')
+	set @t_bweek='1'
+	
+---------------------------------------------------------------
+--周數
+create table #tmp(
+	gno nvarchar(10),
+	week nvarchar(10),
+	bdate nvarchar(10),
+	edate nvarchar(10),
+	mon nvarchar(10),
+	omount float,
+	smount float,
+	diff float
+	
+)
+
+declare @t_bdate nvarchar(10)='' --周別起始日
+declare @t_edate nvarchar(10)='' --周別迄止日
+declare @f_datea nvarchar(10)=@t_year+'-01-01' --1月1號
+declare @f_week int=DATEPART(ISO_WEEK,@f_datea) --1月1號 周別
+declare @x_week int =0
+
+while (@x_week=0 or @f_week=@x_week)
+begin
+	set @f_datea=dbo.q_cdn(@f_datea,1)
+	set @x_week=DATEPART(ISO_WEEK,@f_datea)
+end
+
+if(@t_len='3')
+begin
+	set @f_datea=dbo.AD2ChineseEraName(@f_datea)
+end
+
+set @t_bdate=dbo.q_cdn(@f_datea,(@t_bweek-@x_week)*7)
+set @t_edate=dbo.q_cdn(@t_bdate,6)
+
+--------------------------------------------------
+declare @weekcount int=1
+declare @tmp_week nvarchar(10)=@t_bweek
+while(cast(@tmp_week as int)<=cast(@t_eweek as int) and @weekcount<=53)
+begin
+	insert #tmp (week,bdate,edate) 
+	select @tmp_week,@t_bdate,@t_edate
+	
+	set @tmp_week=cast(cast(@tmp_week as int)+1 as nvarchar(10))
+	set @t_bdate=dbo.q_cdn(@t_bdate,7)
+	set @t_edate=dbo.q_cdn(@t_edate,7)
+	
+	set @weekcount=@weekcount+1
+end
+
+--if((select count(*) from #tmp where week='1' and right(bdate,5)>'01/01')>0)
+--begin
+--	set @t_bdate=(select bdate from #tmp where week='1' and right(bdate,5)>'01/01')
+--	insert #tmp(week,bdate,edate)
+--	select DATEPART(ISO_WEEK,dbo.q_cdn(@t_bdate,-1)),dbo.q_cdn(@t_bdate,-7),dbo.q_cdn(@t_bdate,-1)
+--end
+
+update a
+set gno='0'
+,mon=LEFT(bdate,@t_lenm)
+,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where date3=a.week and oa.odate<=a.edate and oa.odate>=dbo.q_cdn(a.edate,-200) and oa.gdate between @t_bfact and @t_efact ),0)
+,smount=isnull((select SUM(sb.mount) from supforecast sa left join supforecasts sb on sa.noa=sb.noa where sb.datea between a.bdate and a.edate and sa.factno between @t_bfact and @t_efact),0)
+from #tmp a
+
+update #tmp
+set diff=smount-omount
+
+insert #tmp (gno,week,bdate,mon,omount,smount,diff)
+select '1',CHAR(255),MAX(edate),mon,SUM(omount),SUM(smount),SUM(diff)
+from #tmp group by mon
+
+select 
+dbo.getComma(omount,-1)omount,
+dbo.getComma(smount,-1)smount,
+dbo.getComma(diff,-1)diff,
+* from #tmp order by bdate,week,gno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
+--****************************************************************************************************
+z_orde_j02:--z_orde_j02
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100) 
+declare @t_uccgano nvarchar(100)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [8] then '' else [8] end
+set @t_ecust = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_bagent = case when '#non' = [10] then '' else [10] end
+set @t_eagent = case when '#non' = [11] then CHAR(255) else [11] end
+set @t_bsales = case when '#non' = [14] then '' else [14] end
+set @t_esales = case when '#non' = [15] then CHAR(255) else [15] end
+set @t_salgrp = case when '#non' = [16] then '' else [16] end
+set @t_bpno = case when '#non' = [17] then '' else [17] end
+set @t_epno = case when '#non' = [18] then CHAR(255) else [18] end
+set @t_uccgano = case when '#non' = [19] then '' else [19] end
+---*********************************************************************
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+
+declare @result table( 
+	gno nvarchar(1), 
+	sales nvarchar(50),
+	agent nvarchar(50),
+	salgrp nvarchar(50),
+	custno nvarchar(200),
+	comp nvarchar(200),
+	ordeno nvarchar(100),
+	custorde nvarchar(100),
+	ordcno nvarchar(50),
+	omount float,
+	vmount float,
+	umount float,
+	datea nvarchar(100),
+	date4 nvarchar(100),
+	pwk nvarchar(100),
+	shiporde nvarchar(100),
+	cldate nvarchar(100),
+	clwk nvarchar(100),
+	vcceno nvarchar(100),
+	vedate nvarchar(100),
+	ucano nvarchar(100),
+	ucxno nvarchar(100),
+	product nvarchar(250),
+	uccga nvarchar(100),
+	date2 nvarchar(100),
+	trantype nvarchar(100),
+	ctn float,
+	nw float,
+	gw float,
+	cuft float,
+	tctn float,
+	tnw float,
+	tgw float,
+	tcuft float,
+	m1 nvarchar(100),
+	m2 nvarchar(100),
+	m3 nvarchar(100),
+	m4 nvarchar(100),
+	m5 nvarchar(100),
+	m6 nvarchar(100),
+	m7 nvarchar(100),
+	m8 nvarchar(100),
+	memo nvarchar(MAX),
+	cubno nvarchar(100)
+) 
+
+insert @result
+select '0' gno,a.sales,a.agent,c.salesgroup salgrp
+,a.custno,a.comp,a.noa ordeno,a.custorde,e.noa ordcno
+,b.mount omount,isnull(f.mount,0) vmount,b.mount-isnull(f.mount,0) umount
+,b.datea,a.date4,case when @t_len=4 and len(b.datea)=10 then DATEPART(ISO_WEEK,b.datea) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(b.datea)) end pwk
+,case when isnull(h.sono,'')='' then  '' else 'Y' end shiporde,h.cldate
+,case when @t_len=4 then DATEPART(ISO_WEEK,h.cldate) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(h.cldate)) end clwk
+,g.noa vcceno,g.datea vedate
+,case when isnull(i.ucano,'')!='' then i.ucano else i.uccno end ucano
+,b.productno ucxno,b.product,i.groupano uccga,a.date2,a.trantype
+,j.inmount*j.outmount ctn,j.weight nw,j.gweight gw,j.cuft
+,ceiling (b.mount/j.inmount*j.outmount) tctn,round(b.mount*j.uweight,2) tnw
+,j.gweight*floor (b.mount/j.inmount*j.outmount)--整箱
++(b.mount-floor (b.mount/j.inmount*j.outmount)*j.inmount*j.outmount)*j.uweight--散裝淨重
++case when (b.mount-(floor(b.mount/(j.inmount*j.outmount))*(j.inmount*j.outmount)))>0 then j.outweight else 0 end --外包裝重
++case when (b.mount-(floor(b.mount/(j.inmount*j.outmount))*(j.inmount*j.outmount)))>0 then ceiling((b.mount-(floor(b.mount/(j.inmount*j.outmount))*(j.inmount*j.outmount)))/j.inmount)*j.inweight else 0 end tgw --內包裝重
+,round(j.cuft*ceiling (b.mount/j.inmount*j.outmount),0)tcuft
+,k.m1,k.m2,k.m3,k.m4,k.m5,k.m6,k.m7,k.m8,b.memo,k.noa cubno
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
+outer apply (select top 1 noa from view_ordcs where ordeno=a.noa)e
+outer apply (select SUM(mount)mount from view_vccs where ordeno=a.noa and no2=b.no2 )f
+outer apply (select top 1 noa,datea from view_vcces where ordeno=a.noa and no2=b.no2)g
+outer apply (select top 1 * from boaj where noa=g.noa)h
+outer apply (select top 1 * from ucx where b.productno=noa)i
+outer apply (select top 1 * from pack2s where noa=b.productno and packway=b.packwayno)j
+outer apply (select top 1 * from view_cub where productno=b.productno)k
+where a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+and a.agentno between @t_bagent and @t_eagent
+and a.salesno between @t_bsales and @t_esales
+and b.productno between @t_bpno and @t_epno
+and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
+order by a.odate,a.noa,b.no2
+
+select 
+dbo.getComma(omount,-1)omount,
+dbo.getComma(vmount,-1)vmount,
+dbo.getComma(umount,-1)umount,
+dbo.getComma(ctn,-1)ctn,
+dbo.getComma(nw,-1)nw,
+dbo.getComma(gw,-1)gw,
+dbo.getComma(cuft,-1)cuft,
+dbo.getComma(tctn,-1)tctn,
+dbo.getComma(tnw,-1)tnw,
+dbo.getComma(tgw,-1)tgw,
+dbo.getComma(tcuft,-1)tcuft,
+* from @result
+order by sales,agent,ordeno
+
+;
+--****************************************************************************************************
