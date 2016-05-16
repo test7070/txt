@@ -111,3 +111,176 @@ dbo.getComma(price,-1) price,
 dbo.getComma(total,-1) total,
 * from @tmp order by noa,gno,noq
 ;
+--********************************************************************************************
+z_quarp3:--z_quarp3
+declare @t_noa nvarchar(30)
+set @t_noa = case when '#non' =[5]  then '' else [5]  end
+--***********************************************************************************
+declare @tmp table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	page int,
+	pageno int,
+	noa nvarchar(30),
+	no3 nvarchar(30),
+	custno nvarchar(30),
+	comp nvarchar(200),
+	conn nvarchar(50),
+	addr nvarchar(Max),
+	contract nvarchar(50),
+	tel nvarchar(50),
+	fax nvarchar(50),
+	odate nvarchar(20),
+	datea nvarchar(20),
+	payment nvarchar(MAX),
+	shipment nvarchar(MAX),
+	terms nvarchar(50),
+	memo nvarchar(MAX),
+	coin nvarchar(20),
+	floata float,
+	image1 nvarchar(max),
+	
+	productno nvarchar(30),
+	product nvarchar(MAX),
+	spec nvarchar(max),
+	scoin nvarchar(50),
+	aprice float,
+	amount float,
+	atotal float,
+	mount float,
+	unit nvarchar(30),
+	price float,	
+	total float,
+	ototal nvarchar(max)
+)
+
+declare @noa nvarchar(50)
+declare @no3 nvarchar(50)
+declare @pageline int = 40--每頁幾行
+declare @page int=1 --頁數
+declare @pagecount int=1 --目前行數
+declare @tdatecount int=isnull((select count(*) from quars where noa=@t_noa),0) --報價資料數
+declare @datecount int=0 --目前已插入報價資料數
+
+--表頭
+insert into @tmp(gno,noa,page,pageno,custno,comp,addr,conn,tel,fax,odate,datea,payment,shipment,terms)
+select '1',noa,@page,@pagecount,custno,comp,addr,conn,tel,fax,odate,datea,paytype,
+trantype
++case when ISNULL(bdock,'')!='' then ' From:'+bdock else '' end
++case when ISNULL(edock,'')!='' then ' To:'+edock else '' end
++case when ISNULL(via,'')!='' then ' Via:'+via else '' end,payterms
+from quar where noa=@t_noa 
+
+set @pagecount=@pagecount+12
+
+--資料行
+declare cursor_table cursor for 
+select noa,no3 from quars where noa=@t_noa order by noa,no3
+open cursor_table
+fetch next from cursor_table
+into @noa,@no3
+while(@@FETCH_STATUS <> -1)
+begin
+	set @datecount=@datecount+1
+	
+	insert into @tmp
+	select '0',@page,@pagecount,a.noa,b.no3,a.custno,a.comp,a.conn
+	,case when isnull(a.addr2,'')!='' then isnull(a.post2,'')+' '+isnull(a.addr2,'') else isnull(a.post,'')+' '+isnull(a.addr,'') end
+	,a.contract,a.tel,a.fax,a.odate,a.datea,a.paytype
+	,a.trantype
+	+case when ISNULL(a.bdock,'')!='' then ' From:'+a.bdock else '' end
+	+case when ISNULL(a.edock,'')!='' then ' To:'+a.edock else '' end
+	+case when ISNULL(a.via,'')!='' then ' Via:'+a.via else '' end
+	,a.payterms,a.memo,case when isnull(a.coin,'')='' then 'NT' else a.coin end+'$',isnull(a.floata,''),
+	'<img width="300px" src="../images/upload/'+replace(b.productno,'/','CHR(47)')+'_01.jpg">'
+	,b.productno,b.product+case when isnull(b.spec,'')!='' then '<BR>'+b.spec else '' end ,b.spec
+	,':'+case when isnull(a.coin,'')='' then 'NT' else a.coin end+'$',b.price,b.mount,isnull(b.price,0)*isnull(b.mount,0),a.mount,b.unit,isnull(a.floata,'')*b.price
+	,a.total,''
+	from quar a left join quars b on a.noa=b.noa
+	where a.noa=@noa and no3=@no3
+	
+	set @pagecount=@pagecount+13 --一個品項暫13行
+	
+	if(@tdatecount>1 and @tdatecount!=@datecount and @datecount%2=1)--資料筆數2以上 且 單行筆數
+	begin
+		--差入空白頁
+		while (@pagecount%@pageline!=0)
+		begin
+			insert @tmp (gno,page,pageno,noa)
+			select '2',@page,@pagecount,@noa
+			
+			set @pagecount=@pagecount+1
+		end
+		
+		--插入分頁
+		insert @tmp (gno,page,pageno,noa)
+		select '3',@page,@pagecount,@noa
+		
+		set @pagecount=1
+		set @page=@page+1
+		
+		--插入第二頁以上的 抬頭
+		insert into @tmp(gno,noa,page,pageno,custno,comp,addr,conn,tel,fax,odate,datea,payment,shipment,terms)
+		select '4',noa,@page,@pagecount,custno,comp,addr,conn,tel,fax,odate,datea,paytype,
+		trantype
+		+case when ISNULL(bdock,'')!='' then ' From:'+bdock else '' end
+		+case when ISNULL(edock,'')!='' then ' To:'+edock else '' end
+		+case when ISNULL(via,'')!='' then ' Via:'+via else '' end,payterms
+		from quar where noa=@t_noa 
+		
+		set @pagecount=@pagecount+4
+	end
+	else if (@tdatecount=@datecount) --最後一筆
+	begin
+		--合計
+		insert into @tmp(gno,page,pageno,noa,no3,mount,unit,coin,total)
+		select '5',@page,@pagecount,noa,CHAR(255),mount,MAX(unit),coin,total
+		from @tmp where gno='0' group by noa,mount,coin,total
+		set @pagecount=@pagecount+2
+
+		--合計(英文大寫)
+		insert into @tmp(gno,page,pageno,noa,ototal)
+		select '6',@page,@pagecount,noa,('SAY TOTAL U.S DOLLAR '+UPPER(dbo.currencyToEnglish(total))) 
+		from @tmp where gno='0' group by noa,total
+		set @pagecount=@pagecount+1
+		
+		--插入空白行
+		while ((@pagecount+5)%@pageline!=0) --4行簽名+1行結束
+		begin
+			insert @tmp (gno,page,pageno,noa)
+			select '7',@page,@pagecount,@noa
+				
+			set @pagecount=@pagecount+1
+		end
+			
+		--簽核
+		insert into @tmp(gno,noa,page,pageno,comp)
+		select '8',noa,@page,@pagecount,comp from @tmp where gno='0'
+		group by noa,comp
+		
+		--結束
+		insert into @tmp(gno,noa,page,pageno)
+		select '9',noa,@page,@pagecount from @tmp where gno='0'
+		group by noa,comp
+		
+		set @pagecount=1
+		set @page=@page+1
+	
+	end
+	
+	fetch next from cursor_table
+	into @noa,@no3
+end
+close cursor_table
+deallocate cursor_table
+
+select
+dbo.getComma(amount,0)amount,
+dbo.getComma(mount,0) mount,
+dbo.getComma(aprice,3)aprice,
+dbo.getComma(atotal,3)atotal,
+dbo.getComma(price,2)price,
+dbo.getComma(total,2)total,
+* from @tmp order by idno
+;
+--***********************************************************************************
