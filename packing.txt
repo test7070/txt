@@ -1,0 +1,149 @@
+toinvo:--toinvo
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(100)=[1]--Packing NO[1]
+declare @datea nvarchar(20)=[2]--發票日期
+declare @userno nvarchar(20)=[3]--userno
+declare @worker nvarchar(20)=[4]--worker
+declare @r_accy nvarchar(20)=[5]--r_accy
+declare @r_len nvarchar(20)=[6]--r_len
+declare @accy nvarchar(50)=@r_accy
+
+--發票號碼
+declare @invo nvarchar(50) = isnull((select invo from view_vcce where noa=@noa),'')
+declare @ordeno nvarchar(50) = isnull((select ordeno from view_vcce where noa=@noa),'')
+	
+--刪除存在的發票與產生的發票
+EXEC("delete invo where noa='"+@invo+"'")
+EXEC("delete invos where noa='"+@invo+"'")
+EXEC("delete a from invos a where exists ( select * from invo where noa=a.noa and vcceno='"+@noa+"' )")
+EXEC("delete invo where vcceno='"+@noa+"'")
+
+--產生發票號碼
+if(len(@invo)=0)
+begin
+	if(len(@ordeno)>0)
+	begin
+		set @invo='I'+replace(replace(@ordeno,'E',''),'S','')
+		if((select count(*) from invo where noa=@invo)>0) --號碼重複 重新產生新發票號碼
+		begin
+			--取日期後面六碼
+			set @invo='I'+right(replace(@datea,'/',''),6)+right('000'+cast(cast(isnull(right((select top 1 noa from invo where noa like 'I'+right(replace(@datea,'/',''),6)+'%' order by noa desc),3),'000') as int)+1 as nvarchar(10)),3)
+		end		
+	end
+	else
+	begin
+		set @invo='I'+right(replace(@datea,'/',''),6)+right('000'+cast(cast(isnull(right((select top 1 noa from invo where noa like 'I'+right(replace(@datea,'/',''),6)+'%' order by noa desc),3),'000') as int)+1 as nvarchar(10)),3)
+	end
+end
+
+--表頭
+insert invo (noa,datea,ordeno,custno,comp,addr,attn,shipped,sailing,per,closing,froma,toa
+,commodity,contract,etd,eta,lcno,pno,cno,coin,floata,total,amount,vccno,vcceno,memo)
+select @invo,@datea,a.ordeno,a.custno,a.comp,addr_invo,a.conn
+,c.trancomp,b.saildate
+,case when a.trantype='海運' then 'sea freight' when a.trantype='空運' then 'air freight' when a.trantype='快遞' then 'express' else a.trantype end
+,b.cldate,b.bdock,b.edock,'',e.contract,b.etd,b.eta,a.lcno,e.custorde,a.cno,e.coin,e.floata
+,0,0,a.caseno2,a.noa,'由Packing List 轉來'
+from view_vcce a left join boaj b on a.noa=b.noa
+left join shiporder c on b.sono=c.noa
+left join cust d on a.custno=d.noa
+left join view_orde e on a.ordeno=e.noa
+where a.noa=@noa
+
+--表身
+insert invos (noa,noq,productno,description,unit,quantity,weight,price,amount,memo)
+select @invo,a.noq,a.productno,a.product,a.unit,isnull(a.mount,0),isnull(a.weight,0)
+,isnull(c.price,0),isnull(a.mount,0)*isnull(c.price,0),a.memo
+from packing a outer apply (select top 1 * from view_vcces where noa=a.noa and productno=a.productno)b
+outer apply (select top 1 * from view_ordes where noa=b.ordeno and no2=b.no2)c
+where a.noa=@noa
+
+update a 
+set total=isnull(quantity,0),amount=isnull(b.amount,0) 
+from invo a outer apply(select sum(quantity)quantity,sum(amount)amount from invos where noa=a.noa)b 
+where a.noa=@invo 
+
+set @accy=isnull((select accy from view_vcce where noa=@noa),@r_accy)
+EXEC(" update a set invo='"+@invo+"' from vcce"+@accy+" a where noa='"+@noa+"'")
+
+select @invo invo
+;
+-------------------------------------------------------------------------------------
+tovcc:--tovcc
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(100)=[1]--Packing NO[1]
+declare @datea nvarchar(20)=[2]--出貨日期
+declare @userno nvarchar(20)=[3]--userno
+declare @worker nvarchar(20)=[4]--worker
+declare @r_accy nvarchar(20)=[5]--r_accy
+declare @r_len nvarchar(20)=[6]--r_len
+declare @r_lenm nvarchar(20)='6'
+if(@r_len='4')
+begin
+	set @r_lenm='7'
+end
+
+--發票號碼
+declare @vccno nvarchar(50) = isnull((select caseno2 from view_vcce where noa=@noa),'')
+declare @accy nvarchar(50) = isnull((select accy from view_vcc where noa=@vccno),@r_accy)
+	
+--刪除存在的出貨單與產生的出貨單
+EXEC("delete vcc"+@accy+" where noa='"+@vccno+"'") 
+EXEC("delete vccs"+@accy+" where noa='"+@vccno+"'") 
+
+while ((select count(*) from view_vcc where zipcode=@noa)>0)
+begin
+	set @accy=isnull((select accy from view_vcc where zipcode=@noa),@r_accy)
+	
+	EXEC("delete a from vccs"+@accy+" a where exists ( select * from vcc"+@accy+" where noa=a.noa and zipcode='"+@noa+"' )")
+	EXEC("delete vcc"+@accy+" where zipcode='"+@noa+"'")
+end
+
+--產生出貨單號
+if(len(@vccno)=0)
+begin
+		set @vccno='D'+replace(@datea,'/','')+right('000'+cast(cast(isnull(right((select top 1 noa from view_vcc where noa like 'D'+replace(@datea,'/','')+'%' order by noa desc),3),'000') as int)+1 as nvarchar(10)),3)
+end
+
+set @accy = isnull((select accy from view_vcce where noa=@noa),@r_accy)
+
+--表頭
+EXEC("
+insert vcc"+@accy+" (noa,typea,stype,datea,cno,acomp,mon,invo
+,custno,comp,nick,paytype,tel,fax,trantype,post,addr,post2,addr2
+,ordeno,cardealno,cardeal,carno,price,salesno,sales,money,tax,total
+,coin,floata,ustotal,worker,worker2,memo,zipcode)
+
+select '"+@vccno+"','1','3','"+@datea+"',a.cno,a.acomp,left('"+@datea+"',"+@r_lenm+"),a.invo
+,a.custno,a.comp,a.nick,a.paytype,a.tel,a.fax,a.trantype
+,e.post,e.addr,e.post2,e.addr2,a.ordeno,a.cardealno,a.cardeal,a.carno
+,0,a.salesno,a.sales,0,0,0,e.coin,e.floata,0,'','','由Packing List 轉來','"+@noa+"'
+from view_vcce a left join boaj b on a.noa=b.noa
+left join shiporder c on b.sono=c.noa
+left join cust d on a.custno=d.noa
+left join view_orde e on a.ordeno=e.noa
+where a.noa='"+@noa+"'
+")
+
+--表身
+EXEC("
+insert vccs"+@accy+" (noa,noq,datea,mon,custno,productno,product,spec,unit,mount,weight,price,total,storeno,store,memo,ordeno,no2)
+select '"+@vccno+"',a.noq,'"+@datea+"',left('"+@datea+"',"+@r_lenm+"),b.custno
+,a.productno,a.product,a.spec,a.unit,isnull(a.mount,0),isnull(a.weight,0)
+,isnull(c.price,0),isnull(a.mount,0)*isnull(c.price,0),'','',a.memo,c.noa,c.no2
+from packing a outer apply (select top 1 * from view_vcces where noa=a.noa and productno=a.productno)b
+outer apply (select top 1 * from view_ordes where noa=b.ordeno and no2=b.no2)c
+where a.noa='"+@noa+"'
+")
+
+EXEC("
+update a set money=b.total,total=b.total,ustotal=round(b.total*floata,2)
+from vcc"+@accy+" a outer apply(select SUM(total)total from view_vccs where noa=a.noa)b
+where noa='"+@vccno+"'")
+
+set @accy=isnull((select accy from view_vcce where noa=@noa),@r_accy)
+EXEC(" update a set caseno2='"+@vccno+"' from vcce"+@accy+" a where noa='"+@noa+"'")
+
+select @accy accy,@vccno vccno
+;
+-------------------------------------------------------------------------------------
