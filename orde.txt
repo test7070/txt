@@ -267,8 +267,9 @@ begin
 		begin
 			set @cmd="delete a  from vccas a where exists (select noa from vcca where noa=a.noa and trdno='"+@noa+"' and [type]='E')"
 			EXECUTE sp_executesql @cmd
-			set @cmd="delete vcca where trdno='"+@noa+"' and [type]='E'"
-			EXECUTE sp_executesql @cmd
+			--105/05/20 不刪除發票表頭--保留
+			--set @cmd="delete vcca where trdno='"+@noa+"' and [type]='E'"
+			--EXECUTE sp_executesql @cmd
 		end
 	end
 end
@@ -292,9 +293,9 @@ begin
 	if(@kind='隨貨單張')
 	begin
 		--判斷是否有其他關聯發票
-		if((select count(*) from vcca where charindex(trdno,@noa)>0)>0)
+		if((select count(*) from vcca where charindex(trdno,@noa)>0 and [type]!='E')>0)
 		begin
-			set @t_err='【'+@noa+'】訂單非由訂當方式產生過發票，故不變動發票內容!!'
+			set @t_err='【'+@noa+'】非由訂單方式產生過發票，故不變動發票內容!!'
 		end
 		
 		if((select count(*) from vcca where charindex(vccno,@vccno)>0)>0)
@@ -347,23 +348,44 @@ begin
 			--104/10/06 客戶編號要寫入
 			--104/10/30 稅別固定應稅
 			--104/11/24 表頭稅金金額不變 未稅金額有差調整最後一筆金額
-			insert vcca(noa,custno,comp,nick,serial,buyerno,buyer,datea,mon,cno,acomp,zip,address,taxtype,money,tax,total,trdno,worker,vccno,[type],memo,chkno)
-			--select @invono,'','',b.nick,b.coin,'',''
-			select @invono,b.custno,b.comp,b.nick,b.coin,'',''
-			,@nowdate,case when isnull(b.mon,'')!='' then b.mon else left(@nowdate,6) end
-			,case when isnull(b.cno,'')!='' then b.cno else (select top 1 noa from acomp order by noa) end
-			,case when isnull(b.cno,'')!='' then b.acomp else (select top 1 acomp from acomp order by noa) end
-			,isnull((select top 1 zip_invo from cust where noa=b.custno),'')
-			,isnull((select top 1 addr_invo from cust where noa=b.custno),'')
-			,'1',b.money,b.tax,b.total
-			,b.noa,case when b.worker2!='' then b.worker2 else b.worker end,@vccno,'E','由訂單'+b.noa+'轉來' 
-			,right('000000'+cast(cast(cast(
-				cast(LOG((ascii(SUBSTRING(@invono,1,1))*100)+
-				(ascii(SUBSTRING(@invono,2,1))*25)+
-				cast(SUBSTRING(@invono,3,3) as int))*100 as int)
-			*144 as int)
-			+(SIN(cast(SUBSTRING(@invono,6,2) as int))*cast(SUBSTRING(@invono,8,3) as int)*100) as int)as nvarchar(10)),6)
-			from view_orde b where noa=@noa
+			--105/05/19 表頭不刪除 用更新方式處理 不更新買受人
+			
+			if((select count(*) from vcca where noa=@invono)>0)
+			begin
+				update a
+				set custno=b.custno,comp=b.comp,nick=b.nick
+				,serial=b.coin,datea=@nowdate
+				,mon=case when isnull(b.mon,'')!='' then b.mon else left(@nowdate,6) end
+				,cno=case when isnull(b.cno,'')!='' then b.cno else (select top 1 noa from acomp order by noa) end
+				,acomp=case when isnull(b.cno,'')!='' then b.acomp else (select top 1 acomp from acomp order by noa) end
+				,zip=isnull((select top 1 zip_invo from cust where noa=b.custno),'')
+				,address=isnull((select top 1 addr_invo from cust where noa=b.custno),'')
+				,taxtype='1',money=b.money,tax=b.tax,total=b.total
+				,worker=case when b.worker2!='' then b.worker2 else b.worker end
+				,vccno=@vccno
+				from vcca a outer apply (select top 1 * from view_orde b where noa=@noa) b
+				where a.noa=@invono
+			end
+			else
+			begin
+				insert vcca(noa,custno,comp,nick,serial,buyerno,buyer,datea,mon,cno,acomp,zip,address,taxtype,money,tax,total,trdno,worker,vccno,[type],memo,chkno)
+				--select @invono,'','',b.nick,b.coin,'',''
+				select @invono,b.custno,b.comp,b.nick,b.coin,'',''
+				,@nowdate,case when isnull(b.mon,'')!='' then b.mon else left(@nowdate,6) end
+				,case when isnull(b.cno,'')!='' then b.cno else (select top 1 noa from acomp order by noa) end
+				,case when isnull(b.cno,'')!='' then b.acomp else (select top 1 acomp from acomp order by noa) end
+				,isnull((select top 1 zip_invo from cust where noa=b.custno),'')
+				,isnull((select top 1 addr_invo from cust where noa=b.custno),'')
+				,'1',b.money,b.tax,b.total
+				,b.noa,case when b.worker2!='' then b.worker2 else b.worker end,@vccno,'E','由訂單'+b.noa+'轉來' 
+				,right('000000'+cast(cast(cast(
+					cast(LOG((ascii(SUBSTRING(@invono,1,1))*100)+
+					(ascii(SUBSTRING(@invono,2,1))*25)+
+					cast(SUBSTRING(@invono,3,3) as int))*100 as int)
+				*144 as int)
+				+(SIN(cast(SUBSTRING(@invono,6,2) as int))*cast(SUBSTRING(@invono,8,3) as int)*100) as int)as nvarchar(10)),6)
+				from view_orde b where noa=@noa
+			end
 			
 			if((select taxtype from view_orde where noa=@noa)='3')
 			begin
