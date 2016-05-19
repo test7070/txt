@@ -151,3 +151,153 @@ dbo.getcomma(mount,0) mount
 ,*
 from @tmp order by noa,gno,noq
 ;
+
+------------------------------------------------------------------------------------------------------------------------
+z_invop3:--z_invop3
+declare @t_invo nvarchar(30) = [2]
+
+declare @tmp table(
+		gno nvarchar(1),
+		idno int identity(0,1),
+		page int,
+		pageno int,
+		noa nvarchar(100),
+		noq nvarchar(100),
+		comp nvarchar(200),
+		addr nvarchar(max),
+		datea nvarchar(10),
+		custno nvarchar(100),
+		tel nvarchar(50),
+		fax nvarchar(50),
+		sailing nvarchar(10),
+		shipment nvarchar(max),
+		terms nvarchar(50),
+		orderno nvarchar(100),
+		coin nvarchar(30),
+		pno nvarchar(100),
+		
+		productno nvarchar(100),
+		product nvarchar(200),
+		quantity float,
+		price float,
+		amount float,
+		ototal nvarchar(200) 
+)
+
+declare @noa nvarchar(100)
+declare @noq nvarchar(100)
+declare @pageline int = 40--每頁幾行
+declare @page int=1 --頁數
+declare @pagecount int=1 --目前行數
+declare @tdatecount int=isnull((select count(*) from invos where noa=@t_invo),0) --Packing資料數
+declare @datecount int=0 --目前已插入Packing資料數
+
+--表頭
+insert @tmp (gno,page,pageno,noa,comp,addr,datea,custno,tel,fax,sailing,shipment,terms,orderno,coin,pno)
+select '1',@page,@pagecount,a.noa,a.comp,a.addr,a.datea,a.custno,b.tel,b.fax,a.sailing
+,case when ISNULL(a.froma,'')!='' then ' From:'+a.froma else '' end
++case when ISNULL(a.toa,'')!='' then ' To:'+a.toa else '' end
+,c.payterms,a.ordeno,a.coin,a.pno
+from invo a 
+outer apply (select * from cust where noa=a.custno) b
+outer apply (select * from view_orde where noa=a.ordeno)c
+where a.noa=@t_invo
+
+set @pagecount=@pagecount+14
+
+
+declare cursor_table  cursor for
+select noa,noq from invos where noa=@t_invo order by noa,noq
+open  cursor_table 
+fetch next from cursor_table 
+into @noa,@noq
+while(@@FETCH_STATUS<>-1)
+begin
+	set @datecount=@datecount+1
+	insert into @tmp
+	select '2',@page,@pagecount,a.noa,b.noq,a.comp,a.addr,a.datea,a.custno,c.tel,c.fax,a.sailing
+	,case when ISNULL(a.froma,'')!='' then ' From '+a.froma else '' end+'  '
+	+case when ISNULL(a.toa,'')!='' then ' To '+a.toa else '' end
+	,d.payterms,a.ordeno,a.coin,a.pno,b.productno,b.description,b.quantity,b.price,b.amount
+	,''
+	from invo a 
+	outer apply (select * from invos where noa=a.noa) b
+	outer apply (select * from cust where noa=a.custno) c
+	outer apply (select * from view_orde where noa=a.ordeno)d
+	where a.noa=@noa and b.noq=@noq
+	
+	set @pagecount=@pagecount+9--一個品項暫9行
+	
+	if(@tdatecount>1 and @tdatecount!=@datecount and @datecount%4=0)--資料筆數4以上 且 單行筆數
+	begin
+		--差入空白頁
+		while (@pagecount%@pageline!=0 and @pagecount<@pageline)
+		begin
+			insert @tmp (gno,page,pageno,noa,noq)
+			select '3',@page,@pagecount,@noa,@noq
+			
+			set @pagecount=@pagecount+1
+		end
+		--插入分頁
+		insert @tmp (gno,page,pageno,noa)
+		select '4',@page,@pagecount,@noa
+		
+		set @pagecount=1
+		set @page=@page+1
+		
+		--插入第二頁以上的 抬頭
+		insert into @tmp(gno,noa,page,pageno,comp,datea,orderno,pno)
+		select '5',noa,@page,@pagecount,comp,datea,orderno,pno
+		from @tmp 
+		where noa=@t_invo and noq=@noq
+		
+		set @pagecount=@pagecount+6
+		
+	end
+	else if (@tdatecount=@datecount) --最後一筆
+	begin
+		--合計
+		insert @tmp(gno,noa,page,pageno,quantity,price,amount)
+		select '6',noa,@page,@pagecount,SUM(quantity),SUM(price),SUM(amount)
+		from @tmp
+		where noa=@t_invo group by noa
+		
+		--合計(英文大寫)
+		insert @tmp(gno,noa,page,pageno,ototal)
+		select '7',noa,@page,@pagecount,('SAY TOTAL U.S DOLLAR'+UPPER(dbo.CurrencyToEnglish(amount))+' .')
+		from @tmp
+		where gno='6' group by noa,amount
+		
+		--插入空白行
+		while((@pagecount+1)%@pageline!=0) --1行結束
+		begin
+		   insert @tmp(gno,noa,page,pageno)
+		   select '8',@noa,@page,@pagecount
+		   
+		   set @pagecount=@pagecount+1
+		end
+		
+		--結束
+		insert @tmp(gno,noa,page,pageno,comp)
+		select '9',noa,@page,@pagecount,comp
+		from @tmp
+		where gno='2' group by noa,comp
+		
+		set @pagecount=1
+		set @page=@page+1
+	
+	end
+	
+	fetch next from cursor_table
+	into @noa,@noq
+end
+close cursor_table
+deallocate cursor_table
+
+select 
+dbo.getComma(quantity,0)+' PCS'quantity,
+dbo.getComma(amount,2)amount,
+* 
+from @tmp
+order by idno
+;
