@@ -1,8 +1,8 @@
 z_workg_jo01:--z_workg_jo01
 declare @t_noa nvarchar(30)
 declare @t_noq nvarchar(30)
-set @t_noa = case when '#non' = [3] then '' else  [3] end
-set @t_noq = case when '#non' = [4] then '' else  [4] end
+set @t_noa = case when '#non' = [5] then '' else  [5] end
+set @t_noq = case when '#non' = [6] then '' else  [6] end
 --*****************************************************************************************
 declare @tmp table(
 	cuano nvarchar(50),
@@ -275,3 +275,352 @@ select case when title='' then titleno else title end title
 ,* from @tmpe
 order by cuano,cuanoq,idno;
 --*************************************************************************************************
+z_workg_jo02:--z_workg_jo02
+SET QUOTED_IDENTIFIER OFF 
+declare @t_userno nvarchar(30)
+declare @t_rank nvarchar(30)
+set @t_userno = case when '#non' = '[2]' then '' else  '[2]' end
+set @t_rank = case when '#non' = '[4]' then '' else  '[4]' end
+--*****************************************************************************************
+declare @s_process nvarchar(50)=isnull((select salesgroup from sss where noa=@t_userno),'')
+
+--未完工排程
+declare @noend table(
+	cuano nvarchar(50),
+	cuanoq nvarchar(50)
+)
+
+insert @noend (cuano,cuanoq)
+select cuano,cuanoq from view_work where isnull(isfreeze,0)=0 and isnull(mount,0)-isnull(inmount,0)>0
+group by cuano,cuanoq
+
+declare @tmp table(
+	cuano nvarchar(50),
+	cuanoq nvarchar(50),
+	noa nvarchar(MAX),
+	productno nvarchar(MAX),
+	parent nvarchar(MAX)
+)
+insert @tmp
+select a.cuano,a.cuanoq,noa,productno,case when previd='0' then 'root' else previd end
+from view_work a 
+where exists (select * from @noend where cuano=a.cuano and cuanoq=a.cuanoq) and isnull(processno,'')!=''
+
+update @tmp
+set parent=SUBSTRING(parent,0,CHARINDEX('_*',parent))
+where parent!='root'
+
+declare @tmpa table(
+	idno int identity(0,1),
+	cuano nvarchar(50),
+	cuanoq nvarchar(50),
+	noa nvarchar(MAX),
+	productno nvarchar(MAX),
+	sortcol nvarchar(max)
+)
+--製令bom表--------------------------------------------------------------
+BEGIN TRY
+	--遞迴
+	WITH OrdersTable (cuano,cuanoq,noa,productno,sortcol) as (
+		Select cuano,cuanoq,noa,productno,productno
+		from @tmp
+		where parent='root'
+		UNION ALL
+		SELECT a.cuano,a.cuanoq,a.noa,a.productno,CONVERT(nvarchar(MAX),OrdersTable.sortcol+'*-*'+a.productno)
+		FROM @tmp a, OrdersTable
+		WHERE a.parent=OrdersTable.productno
+	)
+	
+	insert into @tmpa
+	Select a.cuano,a.cuanoq,a.noa,a.productno,a.sortcol
+	From OrdersTable a
+	order by a.sortCol
+END TRY
+BEGIN CATCH
+END CATCH
+------------------------------------------------------------------
+declare @noa nvarchar(50)
+declare @cuano nvarchar(50)
+declare @cuanoq nvarchar(50)
+declare @processno nvarchar(50)
+declare @process nvarchar(50)
+declare @levels nvarchar(50)
+----------------------------
+declare @t_cuano nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @titleno nvarchar(MAX)=''
+declare @title nvarchar(MAX)=''
+declare @workno nvarchar(MAX)=''
+declare @t_levels nvarchar(50)=''
+-----------------------------
+declare @tmpb table(
+	idno int identity(0,1),
+	cuano nvarchar(50),
+	cuanoq nvarchar(50),
+	titleno nvarchar(MAX),
+	title nvarchar(MAX),
+	workno nvarchar(MAX)
+)
+
+--流程合併----------------------------------------------------
+declare cursor_table cursor for
+select a.cuano,a.cuanoq,a.noa,b.processno,case when charindex(')',process)=0 then b.process else SUBSTRING(b.process,0,charindex('(',process)) end process,b.rank levels
+from @tmpa a left join view_work b on a.noa=b.noa order by sortcol
+open cursor_table
+fetch next from cursor_table
+into @cuano,@cuanoq,@noa,@processno,@process,@levels
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@t_levels>=@levels or @t_cuano!=@cuano or @t_cuanoq!=@cuanoq)
+	begin
+		insert @tmpb
+		select @t_cuano,@t_cuanoq,@titleno,@title,@workno
+		set @titleno=''
+		set @title=''
+		set @workno=''
+	end
+	
+	set @titleno=@processno+case when len(@titleno)>0 then '→' else '' end+@titleno
+	set @title=@process+case when len(@title)>0 then '→' else '' end+@title
+	set @workno=@noa+case when len(@workno)>0 then '→' else '' end+@workno
+	
+	set @t_levels=@levels
+	set @t_cuano=@cuano
+	set @t_cuanoq=@cuanoq
+	fetch next from cursor_table
+	into @cuano,@cuanoq,@noa,@processno,@process,@levels
+end
+close cursor_table
+deallocate cursor_table
+--最後一筆
+if(len(@t_cuano)>0)
+begin
+	insert @tmpb
+	select @t_cuano,@t_cuanoq,@titleno,@title,@workno
+end
+-----------------------------------------------------------------------
+declare @tmpc table(
+	idno int identity(0,1),
+	cuano nvarchar(50),
+	cuanoq nvarchar(50),
+	titleno nvarchar(MAX),
+	title nvarchar(MAX),
+	workno nvarchar(MAX)
+)
+
+--排除流程相同的資料
+insert @tmpc
+select cuano,cuanoq,titleno,title,STUFF(isnull((select ','+workno from @tmpb where cuano=a.cuano and cuanoq=a.cuanoq and ((titleno=a.titleno and title=a.title) or a.titleno like titleno+'%' ) for xml path('')),''),1,1,'')
+from @tmpb a
+group by cuano,cuanoq,titleno,title 
+having not exists (select * from @tmpb where titleno like a.titleno+'%' and titleno!=a.titleno and cuano=a.cuano and cuanoq=a.cuanoq )
+order by MIN(idno)
+-------------------------------------
+--所需原料
+declare @tmpd table(
+	idno int,
+	cuano nvarchar(50),
+	cuanoq nvarchar(50),
+	titleno nvarchar(MAX),
+	title nvarchar(MAX),
+	ucano nvarchar(50),--製成品
+	spec nvarchar(50),--型號
+	productno nvarchar(MAX),--製程完工成品/半成品編號
+	product nvarchar(MAX),--製程完工成品/半成品名稱
+	--使用耗料
+	sproductno nvarchar(50),
+	sproduct nvarchar(MAX),
+	smount nvarchar(50),
+	sumount nvarchar(50),--單位用料
+	workno nvarchar(50),
+	worknoq nvarchar(50)
+)
+
+declare @idno int
+declare @ordeno nvarchar(50)
+declare @no2 nvarchar(50)
+
+declare cursor_table cursor for
+select idno,cuano,cuanoq,titleno,title,workno from @tmpc order by cuano,cuanoq,idno
+open cursor_table
+fetch next from cursor_table
+into @idno,@cuano,@cuanoq,@titleno,@title,@workno
+while(@@FETCH_STATUS <> -1)
+begin
+	set @processno=@titleno
+	while CHARINDEX('→',@processno)>0
+	begin
+		set @processno=substring(@processno,CHARINDEX('→',@processno)+1,LEN(@processno))
+	end
+	
+	insert @tmpd(idno,cuano,cuanoq,titleno,title,ucano,spec,productno,product
+	,sproductno,sproduct,smount,sumount,workno,worknoq)
+	select @idno,@cuano,@cuanoq,@titleno,@title,a.productno,a.spec
+	,(select top 1 productno from view_work where cuano=a.noa and cuanoq=a.noq and processno=@processno and @workno like '%'+noa+'%' order by noa)
+	,(select top 1 product from view_work where cuano=a.noa and cuanoq=a.noq and processno=@processno and @workno like '%'+noa+'%' order by noa)
+	,c.productno,c.product,c.mount,case when isnull(b.mount,0)=0 then 0 else round(c.mount/b.mount,4) end,c.noa,c.noq
+	from view_workgs a 
+	left join view_work b on b.cuano=a.noa and b.cuanoq=a.noq
+	left join view_works c on b.noa=c.noa
+	where a.noa=@cuano and a.noq=@cuanoq and @workno like '%'+b.noa+'%'
+	and not exists (select * from @tmpa where cuano=a.noa and cuanoq=a.noq and productno=c.productno)
+	
+	fetch next from cursor_table
+	into @idno,@cuano,@cuanoq,@titleno,@title,@workno
+end
+close cursor_table
+deallocate cursor_table
+
+-----------------------------------------------------
+--輸出結果
+declare @tmpe table(
+	gno nvarchar(50),
+	idno nvarchar(50),
+	cuano nvarchar(50),
+	cuanoq nvarchar(50),
+	titleno nvarchar(MAX),
+	title nvarchar(MAX),
+	workno nvarchar(MAX),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	odate nvarchar(50),--訂單日
+	wdate nvarchar(50),--預計開工日
+	tdate nvarchar(50),--預交日
+	ucano nvarchar(50),--製成品
+	spec nvarchar(50),--型號
+	omount float,--訂單量
+	wmount float,--生產量
+	productno nvarchar(MAX),--製程完工成品/半成品名稱
+	product nvarchar(MAX),--製程完工成品/半成品名稱
+	memo nvarchar(MAX),--麥頭+工時
+	pmemo nvarchar(MAX)--用量明細
+)
+if((select count(*) from @tmpc)>0)
+begin
+	insert @tmpe(gno,idno,cuano,cuanoq,titleno,title,workno,ordeno,wdate,ucano,spec,wmount
+	,productno,product,memo,pmemo)
+	select '0',a.idno,a.cuano,a.cuanoq,a.titleno,a.title,a.workno
+	,b.ordeno,b.rworkdate,b.productno,b.spec,b.mount
+	,isnull((select top 1 productno from @tmpd where idno=a.idno),'')
+	,isnull((select top 1 product from @tmpd where idno=a.idno),'')
+	,'<BR>總工時：'+cast(round(isnull((select SUM(hours) from view_work where cuano=a.cuano and cuanoq=a.cuanoq and a.workno like '%'+noa+'%'),0)/60/60,4) as nvarchar(50))
+	,replace(STUFF(isnull((select '#*#'+sproductno+', '+sproduct+', '+CAST(sumount as nvarchar(50))+', '+CAST(smount as nvarchar(50)) from @tmpd where idno=a.idno for xml path('')),''),1,3,''),'#*#','<BR>')
+	from @tmpc a left join view_workgs b on a.cuano=b.noa and a.cuanoq=b.noq
+
+	update @tmpe
+	set no2=substring(ordeno,CHARINDEX('-',ordeno)+1,LEN(ordeno))
+	,ordeno=substring(ordeno,0,CHARINDEX('-',ordeno))
+	where len(ordeno)>0 and CHARINDEX('-',ordeno)>0
+
+	update a
+	set custno=b.custno,comp=b.comp,odate=b.odate,tdate=c.datea,omount=c.mount
+	,memo='包裝說明及正側嘜：<BR>'+isnull(d.packinglistmemo,'')
+	+case when len(isnull(d.main,''))>0 then '正嘜：'+REPLACE(d.main,'chr(10)','<BR>') else '' end
+	+case when len(isnull(d.side,''))>0 then '側嘜：'+REPLACE(d.side,'chr(10)','<BR>') else '' end
+	+a.memo
+	,product=case when a.ucano=a.productno then 
+	isnull((select N'件號中文名稱：型號:'+xa.spec
+	+isnull(N',車縫:'+(select mon from adsize where noa=xa.groupeno),'')
+	+isnull(N',車縫線顏色:'+(select mon from adspec where noa=c.ucolor),'')
+	+isnull(N',護片:'+(select mon from adsss where noa=xa.groupfno),'')
+	+isnull(N',皮料1:'+(select mon from adly where noa=c.scolor),'')
+	+isnull(N',皮料2:'+(select mon from adly where noa=c.class),'')
+	+isnull(N',皮料3:'+(select mon from adly where noa=c.classa),'')
+	+isnull(N',皮料4:'+(select mon from adly where noa=c.zinc),'')
+	+isnull(N',網烙印:'+(select mon from adoth where noa=c.sizea),'')
+	+isnull(N',轉印:'+(select mon from adpro where noa=c.source),'')
+	+isnull(N',大弓:'+(select mon from adknife where noa=xa.groupgno),'')
+	+isnull(N',中束:'+(select mon from adpipe where noa=xa.grouphno),'')
+	+isnull(N',座管:'+(select mon from adtran where noa=xa.groupino),'')
+	+isnull(N',電鍍:' +(select mon from addime where noa=c.hard),'')
+	+N'<BR>件號越文名稱：Mã hàng:'+xa.spec
+	+isnull(N',Đường may:'+(select memo2 from adsize where noa=xa.groupeno),'')
+	+isnull(N',Màu chỉ may:'+(select memo2 from adspec where noa=c.ucolor),'')
+	+isnull(N',Phụ kiện:'+(select memo2 from adsss where noa=xa.groupfno),'')
+	+isnull(N',Da1:'+(select memo2 from adly where noa=c.scolor),'')
+	+isnull(N',Da2:'+(select memo2 from adly where noa=c.class),'')
+	+isnull(N',Da3:'+(select memo2 from adly where noa=c.classa),'')
+	+isnull(N',Da4:'+(select memo2 from adly where noa=c.zinc),'')
+	+isnull(N',In ép:'+(select memo2 from adoth where noa=c.sizea),'')
+	+isnull(N',In ủi:'+(select memo2 from adpro where noa=c.source),'')
+	+isnull(N',Gọng:'+(select memo2 from adknife where noa=xa.groupgno),'')
+	+isnull(N',Bông:'+(select memo2 from adpipe where noa=xa.grouphno),'')
+	+isnull(N',Ống yên:'+(select memo2 from adtran where noa=xa.groupino),'')
+	+isnull(N',mạ:' +(select memo2 from addime where noa=c.hard),'')
+	from uca xa where noa=a.ucano),'')
+	else a.product end
+	from @tmpe a left join view_orde b on a.ordeno=b.noa
+	left join view_ordes c on a.ordeno=c.noa and a.no2=c.no2
+	left join view_ordei d on b.noa=d.noa
+end
+-----------------------------------------------------
+select 
+isnull((select process from process where noa=@s_process),'') procs
+,replace(replace((select "〈input id='btnIn' value='"+noa+"' type='button' style='font-size: medium' onclick='workin(this)' 〉 " from view_work where a.workno like '%'+noa+'%' and processno=@s_process and isnull(mount,0)-isnull(inmount,0)>0 for xml path('')),'〈','<'),'〉','>')btnlist
+,case when title='' then titleno else title end title
+,replace(convert(varchar, getdate(), 20),'-','/')q_datetime
+,ROW_NUMBER() over (order by cuano,cuanoq,idno) q_page
+,(select count(*) from @tmpe) q_totpage
+,* from @tmpe a 
+where (select count(*) from view_work where a.workno like '%'+noa+'%' and processno=@s_process and isnull(mount,0)-isnull(inmount,0)>0) >0
+order by cuano,cuanoq,idno;
+--*************************************************************************************************
+workg_jo_put:--workg_jo_put 流程卡入庫
+SET QUOTED_IDENTIFIER OFF 
+declare @t_workno nvarchar(50)=[1]
+declare @t_mount nvarchar(50) = [2]
+declare @datea nvarchar(50)=[3]
+declare @timea nvarchar(50)=[4]
+declare @t_year nvarchar(50)=[5]
+declare @t_userno nvarchar(50) = [6]
+declare @t_namea nvarchar(50) = [7]
+declare @t_err nvarchar(max)=''
+
+declare @mount float = cast(@t_mount as float)
+declare @accy nvarchar(50)=isnull((select accy from view_work where noa=@t_workno),@t_year)
+declare @workano nvarchar(50)=isnull((select noa from view_worka where noa like 'WA'+replace(@datea,'/','')+'%'),'000')
+declare @workbno nvarchar(50)=isnull((select noa from view_workb where noa like 'WB'+replace(@datea,'/','')+'%'),'000')
+set @workano='WA'+replace(@datea,'/','')+right('000'+cast(cast(right(@workano,3) as int)+1 as nvarchar(50)),3)
+set @workbno='WB'+replace(@datea,'/','')+right('000'+cast(cast(right(@workbno,3) as int)+1 as nvarchar(50)),3)
+
+BEGIN TRY
+	Begin Transaction
+
+		--領料
+		EXEC("
+		insert worka"+@accy+"(noa,typea,datea,timea,stationno,station,processno,process,workno,worker,memo
+		,storeno,store,modelno,model,mechno,mech,bdate,edate)
+		select '"+@workano+"','1','"+@datea+"','"+@timea+"',stationno,station,processno,process,'"+@t_workno+"','"+@t_namea+"','由流程卡入庫產生'
+		,'','','','','','','','' from view_work where noa='"+@t_workno+"'")
+
+		EXEC("
+		insert workas"+@accy+"(noa,noq,datea,productno,product,spec,style,unit,mount,workno,storeno,store,memo)
+		select  '"+@workano+"',b.noq,'"+@datea+"',b.productno,b.product,b.spec,b.style,b.unit
+		,case when a.mount=0 then 0 else round((b.mount/a.mount)*"+@t_mount+",2) end ,'"+@t_workno+"','','',''
+		from view_work a left join view_works b on a.noa=b.noa where a.noa='"+@t_workno+"'")
+
+		--入庫
+		EXEC("
+		insert workb"+@accy+"(noa,datea,worktime,stationno,station,workno,workano,worker,memo
+		,storeno,store,mechno,mech,bdate,edate)
+		select '"+@workbno+"','"+@datea+"','"+@timea+"',stationno,station,'"+@t_workno+"','"+@workano+"','"+@t_namea+"','由流程卡入庫產生'
+		,'','','','','','' from view_work where noa='"+@t_workno+"' ")
+
+		EXEC("
+		insert workbs"+@accy+"(noa,noq,datea,productno,product,spec,style,unit,mount,workno,storeno,store,memo)
+		select  '"+@workbno+"','001','"+@datea+"',a.productno,a.product,a.spec,a.style,a.unit,'"+@t_mount+"','"+@t_workno+"','','',''
+		from view_work a where a.noa='"+@t_workno+"'")
+		
+		Commit Transaction
+		
+	END TRY
+	BEGIN CATCH
+		ROLLBACK
+		set @t_err='入庫失敗，請聯絡工程師!!'
+	END CATCH
+
+select @workano workano,@workbno workbno,@t_err err
+
+;
