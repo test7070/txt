@@ -77,10 +77,15 @@ if(@t_project='YC')
 		--from ucc
 		--where  noa BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate and storeno between @t_bstoreno and @t_estoreno
 		--union all
-		select isnull(storeno,'')storeno ,store,productno,product xproduct,isnull(datea,'') datea,'01' typea,'盤點調整' typec, 
-		       noa,'' comp, unit, mount mount, weight weight,'ucce?noa=$noa?'+accy qhref
-		from view_ucces
-		where  productno BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate and isnull(storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(productno),@t_ucc)+1),'.',0)))
+		select isnull(a.storeno,'')storeno ,a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea,'01' typea,'盤點調整' typec, 
+		       a.noa,'' comp
+		       , case when isnull(c.unit,'')!='' then b.unit else a.unit end unit
+		       , case when isnull(c.unit,'')!='' then inmount else 1 end*mount mount
+		       , case when isnull(c.unit,'')!='' then inmount else 1 end*weight weight
+		       ,'ucce?noa=$noa?'+accy qhref
+		from view_ucces a left join view_ucaucc b on a.productno=b.noa
+		outer apply (select unit,inmount from pack2s where noa=a.productno and pack=a.unit and @t_project='XY' )c
+		where  a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
 		union all
 		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then 'A0' else '10' end typea,case a.typea when '2' then '進貨退回' else '進貨' end typec,
 		       b.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'rc2'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
@@ -687,14 +692,32 @@ z_ucc1:--z_ucc1
 		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
 	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
 		
-		insert #tmp
-		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0) 
-		from view_ucce a left join view_ucces b on a.noa=b.noa 
-		left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c
-		on b.storeno=c.storeno and b.productno=c.productno  
-		where a.datea<= @t_stkdate and a.noa=c.noa and a.datea=c.mdate
-		and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
-		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		--105/06/30 有達盤點 換成最小單位
+		if(@t_project='XY')
+		begin
+			insert #tmp
+			select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,'')
+			,isnull(b.mount,0)*case when isnull(d.inmount,0)>0 then d.inmount else 1 end 
+			,isnull(b.weight,0)*case when isnull(d.inmount,0)>0 then d.inmount else 1 end 
+			from view_ucce a left join view_ucces b on a.noa=b.noa 
+			left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c
+			on b.storeno=c.storeno and b.productno=c.productno  
+			left join pack2s d on b.productno=d.noa and b.unit=d.pack
+			where a.datea<= @t_stkdate and a.noa=c.noa and a.datea=c.mdate
+			and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+			and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		end
+		else
+		begin
+			insert #tmp
+			select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0) 
+			from view_ucce a left join view_ucces b on a.noa=b.noa 
+			left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c
+			on b.storeno=c.storeno and b.productno=c.productno  
+			where a.datea<= @t_stkdate and a.noa=c.noa and a.datea=c.mdate
+			and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+			and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		end
 		
 		delete a from #tmp a
 		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
