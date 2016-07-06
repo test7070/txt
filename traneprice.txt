@@ -1,3 +1,189 @@
+edit_discount:--edit_discount	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_name nvarchar(max) = [1]
+	declare @t_noa nvarchar(max) = [2]
+	-------------------------------------------------------------------------------
+	declare @t_tranno nvarchar(20) = ''
+	declare @t_bdate nvarchar(10) = ''
+	declare @t_edate nvarchar(10) = ''
+	declare @t_btrandate nvarchar(10) = ''
+	declare @t_etrandate nvarchar(10) = ''
+	declare @t_driverno nvarchar(max) = ''
+	declare @t_carno nvarchar(max) = ''
+	declare @t_calctype nvarchar(20) = ''
+	declare @t_discount float = 0
+	
+	select @t_tranno=tranno
+		,@t_bdate=bdate
+		,@t_edate=case when len(edate)=0 then CHAR(255) else edate end
+		,@t_btrandate=btrandate
+		,@t_etrandate=case when len(etrandate)=0 then CHAR(255) else etrandate end
+		,@t_driverno=driverno
+		,@t_carno=carno
+		,@t_calctype=calctype
+		,@t_discount=discount
+	from traneprice2 
+	where noa=@t_noa
+	-------------------------------------------------------------------------------
+	if ISNULL(@t_discount,0)=0
+	begin
+		select '錯誤：折扣為0' msg
+		return
+	end
+	-------------------------------------------------------------------------------
+	declare @tmp table(
+		sel int identity(1,1)
+		,accy nvarchar(10)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,ordeno nvarchar(max)
+	)
+	insert into @tmp(accy,noa,noq,ordeno)
+	select a.accy,a.noa,a.noq,a.ordeno
+	from view_trans a
+	where (len(@t_tranno)=0 or a.noa=@t_tranno)
+	and isnull(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.trandate,'') between @t_btrandate and @t_etrandate
+	and (len(@t_driverno)=0 or CHARINDEX(','+a.driverno+',',','+@t_driverno+',')>0)
+	and (len(@t_carno)=0 or CHARINDEX(','+a.carno+',',','+@t_carno+',')>0)
+	and (len(@t_calctype)=0 or a.calctype=@t_calctype)
+	and ISNULL(a.discount,0)!=@t_discount
+
+	-------------------------------------------------------------------------------
+	declare @accy nvarchar(10)
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @ordeno nvarchar(20)
+	declare @targetAccy nvarchar(10)
+	declare @targetNoa nvarchar(20)
+	declare @targetNoq nvarchar(10)
+	declare @targetDiscount float
+	
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+
+	begin try
+		declare cursor_table cursor for
+		select accy,noa,noq,ordeno from @tmp 
+		open cursor_table
+		fetch next from cursor_table
+		into @accy,@noa,@noq,@ordeno
+		while(@@FETCH_STATUS <> -1)
+		begin
+			--中鋼租車 carcsa	
+			if exists(select * from carcsas where noa=@ordeno and tranno=@noa)
+			begin
+				select @targetNoa=noa,@targetNoq=noq
+				from carcsas 
+				where noa=@ordeno and tranno=@noa
+					
+				update carcsas set discount = @t_discount 
+					,outmoney = ROUND(mount*outprice*@t_discount,0)
+				where noa=@targetNoa and noa=@targetNoq
+				IF @@Error <> 0 BEGIN SET @chk = 1 END 
+			end
+			--中鋼內銷 carcsb
+			if exists(select * from carcsb where noa=@ordeno and tranno=@noa)
+			begin
+				select @targetNoa=noa
+				from carcsb 
+				where noa=@ordeno and tranno=@noa
+				
+				update carcsb set discount = @t_discount 
+					,outmoney = ROUND(outmount*outprice*@t_discount,0)
+				where noa=@targetNoa
+				IF @@Error <> 0 BEGIN SET @chk = 1 END 
+			end
+			--中鋼外銷 carcsc
+			if exists(select * from carcsc where noa=@ordeno and tranno=@noa)
+			begin
+				select @targetNoa=noa
+				from carcsc
+				where noa=@ordeno and tranno=@noa
+				
+				update carcsc set discount = @t_discount 
+					,outmoney = ROUND(outmount*outprice*@t_discount,0)
+				where noa=@targetNoa
+				IF @@Error <> 0 BEGIN SET @chk = 1 END 
+			end
+			--派車轉出車 transvcce2tran
+			if exists(select * from view_transvcce2trans where noa+'-'+noq=@ordeno and tranno=@noa and trannoq=@noq)
+			begin
+				select @targetAccy=accy, @targetNoa=noa, @targetNoq=noq
+				from view_transvcce2trans 
+				where noa+'-'+noq=@ordeno and tranno=@noa and trannoq=@noq
+				
+				set @cmd = 
+				"update transvcce2trans"+@accy+" set discount = @t_discount 
+					,total2 = ROUND(outmount*(price2+price3)*@t_discount,0)
+				where noa=@targetNoa and noq=@targetNoq"
+				execute sp_executesql @cmd,N'@targetNoa nvarchar(20),@targetNoq nvarchar(10),@t_discount float'
+					,@targetNoa=@targetNoa,@targetNoq=@targetNoq,@t_discount=@t_discount
+				IF @@Error <> 0 BEGIN SET @chk = 1 END 
+				
+				set @cmd=	
+				"update transvcce2tran"+@accy+" set total2=isnull(b.total2,0)
+				from transvcce2tran"+@accy+" a
+				outer apply( select SUM(ISNULL(total2,0)) total2 from transvcce2trans"+@accy+" where noa=a.noa) b
+				where a.noa=@targetNoa"
+				execute sp_executesql @cmd,N'@targetNoa nvarchar(20),@targetNoq nvarchar(10),@t_discount float'
+					,@targetNoa=@targetNoa,@targetNoq=@targetNoq,@t_discount=@t_discount
+				IF @@Error <> 0 BEGIN SET @chk = 1 END 
+			end
+			--港務局 twport
+			if exists(select * from twports where noa+'-'+noq=@ordeno and tranaccy=@accy and tranno=@noa and trannoq=@noq)
+			begin
+				select @targetNoa=noa, @targetNoq=noq
+				from twports 
+				where noa+'-'+noq=@ordeno and tranaccy=@accy and tranno=@noa and trannoq=@noq
+				
+				update twports set discount=@t_discount
+					,total2 = ROUND(outmount*(price2+price3)*@t_discount,0)
+				where noa=@targetNoa and noq=@targetNoq
+				IF @@Error <> 0 BEGIN SET @chk = 1 END 
+			end
+			--出車單 trans
+			select @targetDiscount=discount 
+			from view_trans 
+			where accy=@accy and noa=@noa and noq=@noq
+			
+			insert into drun(datea,timea,usera,[action],noa,tablea,accno,title,memo)
+			select left(CONVERT(nvarchar,getdate(),111),10) ,left(CONVERT(nvarchar,getdate(),108),5)
+				,@t_name,'Edit',isnull(@noa,'')+'-'+isnull(@noq,''),'trans'+@accy,'出車單','批次修改-折扣',CAST(@targetDiscount as nvarchar)+'->'+CAST(@t_discount as nvarchar)
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			
+			set @cmd=
+			"update trans"+@accy+" set discount=@t_discount
+				,total2 = ROUND(mount2*(price2+price3)*@t_discount,0)
+			where noa=@noa and noq=@noq"
+			execute sp_executesql @cmd,N'@noa nvarchar(20),@noq nvarchar(10),@t_discount float'
+				,@noa=@noa,@noq=@noq,@t_discount=@t_discount
+			IF @@Error <> 0 BEGIN SET @chk = 1 END 
+			
+			--@@ROWCOUNT
+			fetch next from cursor_table
+			into @accy,@noa,@noq,@ordeno
+		end
+		close cursor_table
+		deallocate cursor_table
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select ERROR_MESSAGE() msg
+		return
+	end catch
+	
+	IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select '錯誤' msg
+		return
+	END
+	ELSE BEGIN
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	END
+	select '修改完成' msg;
+
 edit:--edit
 	--修改出車單單價,交運日期一定要輸入才會執行,單價必須大於0才會異動	
 	SET QUOTED_IDENTIFIER OFF
