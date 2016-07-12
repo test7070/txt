@@ -773,6 +773,12 @@ z_rc2_xy2:--z_rc2_xy2
 		total float,
 		cust nvarchar(MAX),
 		memo nvarchar(MAX),
+		oprice float,
+		omount float,
+		ocomp nvarchar(MAX),
+		ordeno nvarchar(50),
+		vccno nvarchar(50),
+		vmount float,
 		qhref nvarchar(max)
 	)
 	insert into @tmp
@@ -783,9 +789,18 @@ z_rc2_xy2:--z_rc2_xy2
 			,(case when a.typea='2' then -1 else 1 end)*b.weight
 			,b.price
 			,(case when a.typea='2' then -1 else 1 end)*b.total
-			,b.comp,b.memo,'rc2'+b.accy
+			,b.comp,b.memo
+			,e.price,e.mount,e.comp,e.noa+'-'+e.no2
+			,stuff((select ','+noa+'-'+noq from view_vccs where ordeno=e.noa and no2=e.no2 group by noa,noq FOR XML PATH('')),1,1,'')
+			,f.mount
+			,'rc2'+b.accy
 		from view_rc2s b
 		left join view_rc2 a on a.noa = b.noa
+		outer apply (select top 1 ordbno,no3 from view_ordcs where noa=b.ordeno and no2=b.no2)c
+		outer apply (select top 1 ordeno,no2 from view_ordbs where noa=c.ordbno and no3=c.no3)d
+		outer apply (select top 1 noa,no2,price,mount,comp from view_ordes where noa=d.ordeno and no2=d.no2)e
+		outer apply (select sum(mount)mount from view_vccs where ordeno=e.noa and no2=e.no2)f
+		
 		where (a.datea between @t_bdate and @t_edate) and
 			  ((case when a.mon='' then left(a.datea,6) else a.mon end)  between @t_bmon and @t_emon) and
 			  (a.tggno between @t_btggno and @t_etggno) and
@@ -799,20 +814,24 @@ z_rc2_xy2:--z_rc2_xy2
 			  and (len(@t_custno)=0 or b.custno=@t_custno)
 		order by datea desc,gno,noa,noq
 		
-	insert into @tmp(gno,datea,mount,total)
-		select '1',datea,sum(mount),sum(total) from @tmp group by datea
+	insert into @tmp(gno,datea,mount,total,omount,vmount)
+		select '1',datea,sum(mount),sum(total),sum(omount),sum(vmount) from @tmp group by datea
 		
-	insert into @tmp(gno,datea,mount,total)
-		select '2',left(datea,6)+'/99',sum(mount),sum(total) from @tmp where gno='1' group by left(datea,6)
+	insert into @tmp(gno,datea,mount,total,omount,vmount)
+		select '2',left(datea,6)+'/99',sum(mount),sum(total),sum(omount),sum(vmount) from @tmp where gno='1' group by left(datea,6)
 	update @tmp 
 	set qhref = substring(qhref,0,len(qhref)-2)+@qhref_acomp+'?left(noa,'+cast(len(noa) as nvarchar)+')=$noa?'+substring(qhref,len(qhref)-2,len(qhref))
 	
 	select gno, noa, noq, invono,type, datea, LEFT(datea,6) xdatea, mon, tggno, left(comp,4) comp, productno, xproduct,unit
 	,cust,memo
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mount 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,weight),1)),0,30)) weight 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,price),1)),0,30)) price 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,total),1)),4,30)) total 
+	,dbo.getComma(oprice,-1)oprice 
+	,dbo.getComma(omount,-1)omount 
+	,ocomp,ordeno,vccno
+	,dbo.getComma(vmount,-1)vmount 
+	,dbo.getComma(mount,-1) mount 
+	,dbo.getComma(weight,-1) weight 
+	,dbo.getComma(price,-1) price 
+	,dbo.getComma(total,-1) total 
 	,row_number()over(partition by datea,left(datea,6) order by datea desc,gno,noa,noq) idno,qhref
 	from @tmp order by datea,gno,noa,noq;
 --***********************************************************************************
