@@ -715,6 +715,7 @@ z_rc28:--z_rc28  ref:z_rc24
 	select * from @result where gno='0' order by tggno,gno,mon,datea,noa,noq; 
 ------------------------------------------------------------------------------------------------------------
 z_rc2_xy2:--z_rc2_xy2
+SET QUOTED_IDENTIFIER OFF
 	declare @t_accy nvarchar(10)
 	declare @t_bdate nvarchar(10)
 	declare @t_edate nvarchar(10)
@@ -749,11 +750,6 @@ z_rc2_xy2:--z_rc2_xy2
 	set @t_multtgg = case when '#non' = [14] then '' else [14] end
 	set @t_multucc = case when '#non' = [15] then '' else [15] end
 	--------------------------------------------------------------------------------------------------------------
-	if(charindex('楊家',@t_acomp)>0 or charindex('德芳',@t_acomp)>0)
-		set @qhref_acomp='_tn'
-	if(charindex('彩虹',@t_acomp)>0)
-		set @qhref_acomp='_rb'
-	---------------------------------------------------------------------------------------------------------------
 	declare @tmp table(
 		gno nvarchar(1),
 		noa nvarchar(15),
@@ -773,15 +769,29 @@ z_rc2_xy2:--z_rc2_xy2
 		total float,
 		cust nvarchar(MAX),
 		memo nvarchar(MAX),
+		
 		oprice float,
 		omount float,
 		ocomp nvarchar(MAX),
-		ordeno nvarchar(50),
-		vccno nvarchar(50),
+		vccno nvarchar(MAX),
 		vmount float,
-		qhref nvarchar(max)
+		
+		ordcno nvarchar(50),
+		ordcno2 nvarchar(50),
+		ordbno nvarchar(50),
+		ordbno3 nvarchar(50),
+		ordeno nvarchar(50),
+		ordeno2 nvarchar(50),
+		ordeaccy nvarchar(20),
+		vccaccy nvarchar(20),
+		
+		qhrefa nvarchar(max),
+		qhrefb nvarchar(max),
+		qhrefc nvarchar(max)
+		
 	)
-	insert into @tmp
+	insert into @tmp (gno,noa,noq,invono,type,datea,mon,tggno,comp,productno,xproduct,unit,mount,weight,price,total
+		,cust,memo,qhrefa,ordcno,ordcno2)
 		select '0' gno, a.noa noa, b.noq noq,a.invono, (case when a.typea='2' then '退' else '進' end) type
 			, a.datea datea, (case when a.mon='' then left(a.datea,6) else a.mon end), a.tggno, a.tgg, b.productno
 			,b.product+(case when @isspec='1' then ' '+b.spec else '' end), b.unit
@@ -790,16 +800,17 @@ z_rc2_xy2:--z_rc2_xy2
 			,b.price
 			,(case when a.typea='2' then -1 else 1 end)*b.total
 			,b.comp,b.memo
-			,e.price,e.mount,e.comp,e.noa+'-'+e.no2
-			,stuff((select ','+noa+'-'+noq from view_vccs where ordeno=e.noa and no2=e.no2 group by noa,noq FOR XML PATH('')),1,1,'')
-			,f.mount
 			,'rc2'+b.accy
+			,isnull(b.ordeno,''),isnull(b.no2,'')
+			--,e.price,e.mount,e.comp,e.noa+'-'+e.no2
+			--,stuff((select ','+noa+'-'+noq from view_vccs where ordeno=e.noa and no2=e.no2 group by noa,noq FOR XML PATH('')),1,1,'')
+			--,f.mount
 		from view_rc2s b
 		left join view_rc2 a on a.noa = b.noa
-		outer apply (select top 1 ordbno,no3 from view_ordcs where noa=b.ordeno and no2=b.no2)c
-		outer apply (select top 1 ordeno,no2 from view_ordbs where noa=c.ordbno and no3=c.no3)d
-		outer apply (select top 1 noa,no2,price,mount,comp from view_ordes where noa=d.ordeno and no2=d.no2)e
-		outer apply (select sum(mount)mount from view_vccs where ordeno=e.noa and no2=e.no2)f
+		--outer apply (select top 1 ordbno,no3 from view_ordcs where noa=b.ordeno and no2=b.no2)c
+		--outer apply (select top 1 ordeno,no2 from view_ordbs where noa=c.ordbno and no3=c.no3)d
+		--outer apply (select top 1 noa,no2,price,mount,comp from view_ordes where noa=d.ordeno and no2=d.no2)e
+		--outer apply (select sum(mount)mount from view_vccs where ordeno=e.noa and no2=e.no2)f
 		
 		where (a.datea between @t_bdate and @t_edate) and
 			  ((case when a.mon='' then left(a.datea,6) else a.mon end)  between @t_bmon and @t_emon) and
@@ -814,13 +825,38 @@ z_rc2_xy2:--z_rc2_xy2
 			  and (len(@t_custno)=0 or b.custno=@t_custno)
 		order by datea desc,gno,noa,noq
 		
+	update a
+	set ordbno=isnull(b.ordbno,''),ordbno3=isnull(b.no3,'')
+	from @tmp a outer apply (select top 1 * from view_ordcs where noa=a.ordcno and no2=a.ordcno2)b
+	where a.ordcno!='' and a.ordcno2 !=''
+	
+	update a
+	set ordeno=isnull(b.ordeno,''),ordeno2=isnull(b.no2,'')
+	from @tmp a outer apply (select top 1 * from view_ordbs where noa=a.ordbno and no3=a.ordbno3)b
+	where a.ordbno!='' and a.ordbno3 !=''
+	
+	update a
+	set oprice=b.price,omount=b.mount,ocomp=b.comp,ordeaccy=b.accy
+	from @tmp a outer apply (select top 1 * from view_ordes where noa=a.ordeno and no2=a.ordeno2)b
+	where a.ordeno!='' and a.ordeno2 !=''
+	
+	update a
+	set vccno=isnull(stuff((select ','+noa from view_vccs where ordeno=a.ordeno and no2=a.ordeno2 group by noa,noq FOR XML PATH('')),1,1,''),'')
+		,vmount=isnull((select sum(mount)mount from view_vccs where ordeno=a.ordeno and no2=a.ordeno2),0)
+		,vccaccy=isnull((select top 1 accy from view_vccs where ordeno=a.ordeno and no2=a.ordeno2),0)
+	from @tmp a 
+	where a.ordeno!='' and a.ordeno2 !=''
+	
+	update @tmp 
+	set qhrefa = substring(qhrefa,0,len(qhrefa)-2)+'?left(noa,'+cast(len(noa) as nvarchar)+')=$noa?'+substring(qhrefa,len(qhrefa)-2,len(qhrefa))
+	,qhrefb= 'orde_xy?noa=$ordeno?'+ordeaccy
+	,qhrefc= "vcc_xy?'$vccno' like '%noa%'?"+vccaccy
+	
 	insert into @tmp(gno,datea,mount,total,omount,vmount)
 		select '1',datea,sum(mount),sum(total),sum(omount),sum(vmount) from @tmp group by datea
 		
 	insert into @tmp(gno,datea,mount,total,omount,vmount)
 		select '2',left(datea,6)+'/99',sum(mount),sum(total),sum(omount),sum(vmount) from @tmp where gno='1' group by left(datea,6)
-	update @tmp 
-	set qhref = substring(qhref,0,len(qhref)-2)+@qhref_acomp+'?left(noa,'+cast(len(noa) as nvarchar)+')=$noa?'+substring(qhref,len(qhref)-2,len(qhref))
 	
 	select gno, noa, noq, invono,type, datea, LEFT(datea,6) xdatea, mon, tggno, left(comp,4) comp, productno, xproduct,unit
 	,cust,memo
@@ -832,6 +868,6 @@ z_rc2_xy2:--z_rc2_xy2
 	,dbo.getComma(weight,-1) weight 
 	,dbo.getComma(price,-1) price 
 	,dbo.getComma(total,-1) total 
-	,row_number()over(partition by datea,left(datea,6) order by datea desc,gno,noa,noq) idno,qhref
+	,row_number()over(partition by datea,left(datea,6) order by datea desc,gno,noa,noq) idno,qhrefa,qhrefb,qhrefc
 	from @tmp order by datea,gno,noa,noq;
 --***********************************************************************************
