@@ -2,9 +2,15 @@ z_workg_jo01:--z_workg_jo01
 declare @t_noa nvarchar(30)
 declare @t_noq nvarchar(30)
 declare @t_unenda nvarchar(30)
+declare @t_mount nvarchar(30)
 set @t_noa = case when '#non' = [5] then '' else  [5] end
 set @t_noq = case when '#non' = [6] then '' else  [6] end
 set @t_unenda = case when '#non' = [7] then '0' else  [7] end
+set @t_mount = case when '#non' = [10] then '0' else  [10] end
+
+declare @x_mount float
+set @x_mount=cast(@t_mount as float)
+
 --*****************************************************************************************
 --未完工排程
 declare @noend table(
@@ -19,6 +25,7 @@ declare @tmp table(
 	productno nvarchar(MAX),
 	parent nvarchar(MAX)
 )
+
 if(@t_unenda='1')
 begin
 	insert @noend (cuano,cuanoq)
@@ -208,7 +215,8 @@ deallocate cursor_table
 --輸出結果
 declare @tmpe table(
 	gno nvarchar(50),
-	idno nvarchar(50),
+	idno int,
+	idno2 int,
 	cuano nvarchar(50),
 	cuanoq nvarchar(50),
 	titleno nvarchar(MAX),
@@ -224,6 +232,7 @@ declare @tmpe table(
 	ucano nvarchar(50),--製成品
 	spec nvarchar(50),--型號
 	omount float,--訂單量
+	womount float,--製令產量
 	wmount float,--生產量
 	productno nvarchar(MAX),--製程完工成品/半成品名稱
 	product nvarchar(MAX),--製程完工成品/半成品名稱
@@ -232,10 +241,10 @@ declare @tmpe table(
 )
 if((select count(*) from @tmpc)>0)
 begin
-	insert @tmpe(gno,idno,cuano,cuanoq,titleno,title,workno,ordeno,wdate,ucano,spec,wmount
+	insert @tmpe(gno,idno,idno2,cuano,cuanoq,titleno,title,workno,ordeno,wdate,ucano,spec,womount,wmount
 	,productno,product,memo,pmemo)
-	select '0',a.idno,a.cuano,a.cuanoq,a.titleno,a.title,a.workno
-	,b.ordeno,b.rworkdate,b.productno,b.spec,b.mount
+	select '0',a.idno,0,a.cuano,a.cuanoq,a.titleno,a.title,a.workno
+	,b.ordeno,b.rworkdate,b.productno,b.spec,b.mount,b.mount
 	,isnull((select top 1 productno from @tmpd where idno=a.idno),'')
 	,isnull((select top 1 product from @tmpd where idno=a.idno),'')
 	,'<BR>總工時：'+cast(round(isnull((select SUM(hours) from view_work where cuano=a.cuano and cuanoq=a.cuanoq and a.workno like '%'+noa+'%'),0)/60/60,4) as nvarchar(50))
@@ -287,16 +296,59 @@ begin
 	from @tmpe a left join view_orde b on a.ordeno=b.noa
 	left join view_ordes c on a.ordeno=c.noa and a.no2=c.no2
 	left join view_ordei d on b.noa=d.noa
+
+	--依據移轉數量 增加流程卡張數
+	if(@x_mount>0)
+	begin
+		declare @womount float
+		declare @twmount float
+		declare @idno2 int
+		
+		declare cursor_table cursor for
+		select idno,womount from @tmpe where idno2=0 and womount>@x_mount
+		open cursor_table
+		fetch next from cursor_table
+		into @idno,@womount
+		while(@@FETCH_STATUS <> -1)
+		begin
+			update @tmpe 
+			set wmount=@x_mount
+			where idno=@idno and idno2=0
+			
+			set @twmount=@x_mount
+			set @idno2=1
+			while (@twmount<@womount)
+			begin
+				set @twmount=@twmount+@x_mount
+				
+				insert @tmpe(gno,idno,idno2,cuano,cuanoq,titleno,title,workno,ordeno,no2,custno,comp,odate,wdate,tdate,ucano,spec,omount,womount
+				,wmount,productno,product,memo,pmemo)
+				select gno,idno,@idno2,cuano,cuanoq,titleno,title,workno,ordeno,no2,custno,comp,odate,wdate,tdate,ucano,spec,omount,womount
+				,case when  @twmount>@womount then @womount-(@x_mount*@idno2) else @x_mount end
+				,productno,product,memo,pmemo
+				from @tmpe where idno=@idno and idno2=0
+				
+				set @idno2=@idno2+1
+			end
+			
+			fetch next from cursor_table
+			into @idno,@womount
+		end
+		close cursor_table
+		deallocate cursor_table
+	end
+	
 end
 -----------------------------------------------------
 --select * from @tmpc
 --select * from @tmpd
-select case when title='' then titleno else title end title
+select case when title='' then titleno else title end+'　('+cast(idno2+1 as nvarchar(10))+'/'+cast((select MAX(idno2)+1 from @tmpe where idno=a.idno) as nvarchar(10))+')' title
 ,replace(convert(varchar, getdate(), 20),'-','/')q_datetime
-,ROW_NUMBER() over (order by cuano,cuanoq,idno) q_page
+,ROW_NUMBER() over (order by cuano,cuanoq,idno,idno2) q_page
 ,(select count(*) from @tmpe) q_totpage
-,* from @tmpe
-order by cuano,cuanoq,idno;
+,* from @tmpe a
+order by cuano,cuanoq,idno,idno2;
+
 --*************************************************************************************************
 z_workg_jo02:--z_workg_jo02
 SET QUOTED_IDENTIFIER OFF 
