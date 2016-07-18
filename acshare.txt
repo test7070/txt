@@ -2,20 +2,19 @@ acshare2accc:--acshare2accc
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
 	declare @t_name nvarchar(max) = [1]
-	declare @t_noa nvarchar(max) = [2]
+	declare @t_noa nvarchar(max) =  [2]
 	-------------------------------------------------------------------------------
-	declare @t_accy nvarchar(10) = ''
-	declare @t_dc nvarchar(20) = ''
-	declare @t_accc2 nvarchar(20) = ''
-	declare @t_accno2 nvarchar(20) = ''
-	select @t_accy=accy,@t_dc=dc,@t_accc2=RIGHT(datea,5),@t_accno2=accno2 from acshare where noa=@t_noa
-	
+	declare @t_zno nvarchar(max) = '傳票分攤'+@t_noa
+	-------------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#acshare2accc')is not null
 	BEGIN
 		drop table #acshare2accc
 	END
 	create table #acshare2accc (
 		sel int identity(1,1)
+		,[key] nvarchar(10) -- acsharet.noq
+		,datea nvarchar(10)
+		,accy nvarchar(10)
 		,accc1 nvarchar(10)
 		,accc2 nvarchar(10)
 		,accc3 nvarchar(20)
@@ -30,6 +29,8 @@ acshare2accc:--acshare2accc
 	END
 	create table #acshare2acccs(
 		sel int identity(1,1)
+		,[key] nvarchar(10)
+		,accy nvarchar(10)
 		,accc1 nvarchar(10)
 		,accc2 nvarchar(10)
 		,accc3 nvarchar(20)
@@ -46,69 +47,286 @@ acshare2accc:--acshare2accc
 		,dmoney float
 		,proj nvarchar(20)
 	)
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
 	---------------------------------------------------------------------------------
-	declare @string nvarchar(max)='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-	declare @n int
-	declare @maxnoa nvarchar(20) = @t_accno2
-	if len(@maxnoa)=0
+	--刪除先前產生的傳票，依@t_zno為主。 
+	declare @name nvarchar(max)
+	--accc
+	declare cursor_table cursor for
+	select name from sys.tables where name like 'accc[0-9][0-9][0-9]_1'
+	open cursor_table
+	fetch next from cursor_table
+	into @name
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		begin try 
+			set @cmd = "delete "+@name+" where zno=@t_zno"
+			execute sp_executesql @cmd,N'@t_zno nvarchar(max)',@t_zno=@t_zno
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end try
+		begin catch
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select 0 [status],'刪除傳票異常' msg
+			deallocate cursor_table
+			return
+		end catch
+		fetch next from cursor_table
+		into @name
+	end
+	close cursor_table
+	deallocate cursor_table
+	--acccs
+	declare cursor_table cursor for
+	select name from sys.tables where name like 'acccs[0-9][0-9][0-9]_1'
+	open cursor_table
+	fetch next from cursor_table
+	into @name
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		begin try 
+			set @cmd = "delete "+@name+" where zno=@t_zno"
+			execute sp_executesql @cmd,N'@t_zno nvarchar(max)',@t_zno=@t_zno
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end try
+		begin catch
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select 0 [status],'刪除傳票異常' msg
+			deallocate cursor_table
+			return
+		end catch
+		fetch next from cursor_table
+		into @name
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--假如BBT沒資料就全刪了
+	if not exists(select * from acsharet where noa=@t_noa)
 	begin
-		select top 1 @maxnoa=accc3 from accc105_1 where accc3 like replace(@t_accc2,'/','')+'[0-9,A-Z][0-9][0-9]' order by accc3 desc
-		if len(@maxnoa)=0
+		IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select 0 [status],'錯誤xx' msg
+			return
+		END
+		ELSE BEGIN
+			Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		END
+	
+		select 1 [status],'done' msg, '' noq,'' accy,'' accno
+		drop table #acshare2accc
+		drop table #acshare2acccs
+		return
+	end	
+	
+	--需要產生幾張傳票
+	insert into #acshare2accc([key],datea,accy,accc1
+		,accc2,accc3,worker,zno,cmoney,dmoney)
+	select noq,datea,LEFT(datea,3),'3'
+		,RIGHT(datea,5),accno,@t_name,@t_zno,null,null
+	from acsharet 
+	where noa=@t_noa order by noq 
+	
+	--檢查傳票號碼是否已被佔用
+	declare @accy nvarchar(10)
+	declare @accc3 nvarchar(20)
+	declare @accno nvarchar(20)
+	
+	declare cursor_table cursor for
+	select accy,accc3 from #acshare2accc where len(isnull(accc3,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc3
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		set @accno =''
+		set @cmd = "select @accno=accc3 from accc"+@accy+"_1 where accc3=@accc3"
+		execute sp_executesql @cmd,N'@accc3 nvarchar(20),@accno nvarchar(20) output'
+			,@accc3=@accc3,@accno=@accno
+		if len(isnull(@accno,''))>0
 		begin
-			set @maxnoa = replace(@t_accc2,'/','')+'001'
+			--已先刪除所有傳票，不應該還有
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select 0 [status],'傳票編號重覆，請檢查。'+@accc3 msg
+			deallocate cursor_table
+			return
+		end
+		fetch next from cursor_table
+		into @accy,@accc3
+	end
+	close cursor_table
+	deallocate cursor_table
+	--產生傳票號碼
+	declare @sel int
+	declare @accc2 nvarchar(10)
+	declare @string nvarchar(max)='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @maxnoa nvarchar(20)
+	declare @maxnoa1 nvarchar(20)
+	declare @maxnoa2 nvarchar(20)
+	declare @n int
+	
+	declare cursor_table cursor for
+	select sel,accy,accc2 from #acshare2accc where len(isnull(accc3,''))=0
+	open cursor_table
+	fetch next from cursor_table
+	into @sel,@accy,@accc2
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		select @maxnoa1 = '',@maxnoa2 = ''
+		select @maxnoa1=accc3 from accc105_1 where accc3 like replace(@accc2,'/','')+'[0-9,A-Z][0-9][0-9]' order by accc3 desc
+		select @maxnoa2=accc3 from #acshare2accc where accy=@accy and accc3 like replace(@accc2,'/','')+'[0-9,A-Z][0-9][0-9]' order by accc3 desc
+		set @maxnoa = case when @maxnoa1>@maxnoa2 then @maxnoa1 else @maxnoa2 end
+		if LEN(@maxnoa)=0
+		begin
+			set @maxnoa = replace(@accc2,'/','') + '001' 
 		end
 		else
 		begin
 			set @n = (charindex(left(RIGHT(@maxnoa,3),1),@string)-1)*10+CAST(RIGHT(@maxnoa,3) as int)+1
-			set @maxnoa = replace(@t_accc2,'/','') + SUBSTRING(@string,floor(@n/100)+1,1)+CAST(@n%100 as nvarchar)
+			set @maxnoa = replace(@accc2,'/','') + SUBSTRING(@string,floor(@n/100)+1,1)+right('00'+CAST(@n%100 as nvarchar),2)
 		end
+		update #acshare2accc set accc3=@maxnoa where sel=@sel
+		
+		fetch next from cursor_table
+		into @sel,@accy,@accc2
 	end
-	-------------------------------------------------------------------------------------
-	insert into #acshare2acccs(noq,dc,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,dmoney,cmoney,zno)
-	select '000','3',dc
-		,@t_accc2,@maxnoa,case when @t_dc='2' then '借' else '貸' end
-		,acc1,acc2,'傳票費用分攤：'+accno,[money]
-		,case when @t_dc='2' then [money] else 0 end
-		,case when @t_dc='2' then 0 else [money] end
-		,@t_noa+'傳票分攤'
-	from acshare
-	where noa=@t_noa
+	close cursor_table
+	deallocate cursor_table
+	---------------------------------------------------------------------------------
+	declare @t_dc nvarchar(20) = ''
+	declare @noq nvarchar(10)
+	declare @dc nvarchar(10)
+	declare @partno nvarchar(20)
+	declare @proj nvarchar(20)
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @money float
+	declare @memo nvarchar(max)
+	declare @moneys float
 	
-	insert into #acshare2acccs(noq,dc,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,dmoney,cmoney,zno,part,proj)
-	select noq,'3',@t_dc
-		,@t_accc2,@maxnoa,case when @t_dc='2' then '貸' else '借' end
-		,acc1,acc2,memo,[money]
-		,case when @t_dc='2' then 0 else [money] end
-		,case when @t_dc='2' then [money] else 0 end
-		,@t_noa+'傳票分攤'
-		,part,proj
-	from acshares
-	where noa=@t_noa
-	-------------------------------------------------------------------------------------
-	insert into #acshare2accc(accc1,accc2,accc3,worker,zno,dmoney,cmoney)
-	select '3',@t_accc2,@maxnoa,'',@t_noa+'傳票分攤',SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0))
-	from #acshare2acccs
-	--------------------------------------------------------------------------------------
-	DECLARE @chk tinyint = 0
-	Begin Transaction [Trans_Name]
+	set @n = 0
+	select @n = count(1) from #acshare2accc
+
+	select @acc1='',@acc2='',@memo=''
+	select @t_dc=dc,@acc1=acc1,@acc2=acc2,@memo=memo from acshare where noa=@t_noa
 	
-	begin try
-		set @cmd=
-		"delete accc"+@t_accy+"_1 where accc3=@maxnoa
-		delete acccs"+@t_accy+"_1 where accc3=@maxnoa
-		insert into accc"+@t_accy+"_1(accc1,accc2,accc3,worker,zno,cmoney,dmoney)
-		select accc1,accc2,accc3,worker,zno,cmoney,dmoney
+	insert into #acshare2acccs([key],accy,dc,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,dmoney,cmoney
+		,zno,part,proj,noq)
+	select [key],accy
+		,'3',accc1,accc2,accc3
+		,case when @t_dc='2' then '借' else '貸' end
+		,@acc1,@acc2,@memo,null,0,0
+		,@t_zno,'','','000'
+	from #acshare2accc
+	
+	declare cursor_table cursor for
+	select noq,dc,partno,proj,acc1,acc2,[money],memo from acshares where noa=@t_noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noq,@dc,@partno,@proj,@acc1,@acc2,@money,@memo
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		set @moneys = floor(@money/@n)
+		insert into #acshare2acccs([key],accy,dc,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,dmoney,cmoney,zno,part,proj,noq)
+		select [key],accy
+			,'3',accc1,accc2,accc3
+			,case when @t_dc='2' then '貸' else '借' end
+			,@acc1,@acc2,@memo,@moneys
+			,case when @t_dc='2' then 0 else @moneys end
+			,case when @t_dc='2' then @moneys else 0 end
+			,@t_zno
+			,@partno,@proj,@noq
 		from #acshare2accc
-		insert into acccs"+@t_accy+"_1(accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,zno,noq,part,dc,cmoney,dmoney,proj)
-		select accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,zno,noq,part,dc,cmoney,dmoney,proj from #acshare2acccs"
-		execute sp_executesql @cmd,N'@maxnoa nvarchar(20)',@maxnoa=@maxnoa
-		IF @@Error <> 0 BEGIN SET @chk = 1 END 
 		
-		update acshare set accno2=@maxnoa where noa=@t_noa
+		fetch next from cursor_table
+		into @noq,@dc,@partno,@proj,@acc1,@acc2,@money,@memo
+	end
+	close cursor_table
+	deallocate cursor_table
+	--補正金額
+	declare @dmoney float
+	declare @cmoney float
+	declare @accc8 float
+	declare @key nvarchar(10)
+	
+	declare cursor_table cursor for
+	select noq,max([key]) from #acshare2acccs group by noq 
+	open cursor_table
+	fetch next from cursor_table
+	into @noq,@key
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		select @money=0,@accc8=0,@dmoney =0,@cmoney =0
 		
-		insert into drun(datea,timea,usera,[action],noa,tablea,accno,title,memo)
-		select left(CONVERT(nvarchar,getdate(),111),10) ,left(CONVERT(nvarchar,getdate(),108),5)
-			,'','Insert',isnull(@t_noa,''),'acshare',@maxnoa,'傳票費用分攤',@t_accy
+		select @money=[money] from acshares where noa=@t_noa and noq=@noq
+		
+		select @accc8 = SUM(accc8),@dmoney = SUM(dmoney),@cmoney = SUM(cmoney) 
+		from #acshare2acccs where noq=@noq
+		
+		update #acshare2acccs set accc8 = case when @accc8=0 then 0 else accc8 - @accc8 + @money end
+			,dmoney = case when @dmoney=0 then 0 else dmoney - @dmoney + @money end
+			,cmoney = case when @cmoney=0 then 0 else cmoney - @cmoney + @money end
+		where noq=@noq and [key]=@key
+		
+		fetch next from cursor_table
+		into @noq,@key
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update #acshare2acccs set accc8=b.dmoney+b.cmoney,dmoney=b.cmoney,cmoney=b.dmoney
+	from #acshare2acccs a
+	left join(select [key],SUM(dmoney)dmoney,SUM(cmoney)cmoney from #acshare2acccs where noq!='000' group by [key]) b on a.[key]=b.[key]
+	where a.noq='000'
+	
+	--回寫表頭金額
+	update #acshare2accc set dmoney=b.dmoney,cmoney=b.cmoney
+	from #acshare2accc a
+	left join (select [key],SUM(dmoney) dmoney,SUM(cmoney) cmoney from #acshare2acccs group by [key]) b on a.[key]=b.[key]
+	--------------寫入 ACCC
+	declare cursor_table cursor for
+	select accy from #acshare2accc group by accy
+	open cursor_table
+	fetch next from cursor_table
+	into @accy
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		begin try 
+			set @cmd=
+			"insert into accc"+@accy+"_1(accc1,accc2,accc3,worker,zno,cmoney,dmoney,cno)
+			select accc1,accc2,accc3,worker,zno,cmoney,dmoney,''
+			from #acshare2accc where accy=@accy"
+			execute sp_executesql @cmd,N'@accy nvarchar(10)',@accy=@accy
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			
+			set @cmd=
+			"insert into acccs105_1(accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,zno
+				,noq,part,proj,dc,dmoney,cmoney)	
+			select accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,zno
+				,noq,part,proj,dc,dmoney,cmoney
+			from #acshare2acccs where accy=@accy"
+			execute sp_executesql @cmd,N'@accy nvarchar(10)',@accy=@accy
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end try
+		begin catch
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select 0 [status],ERROR_MESSAGE() msg
+			deallocate cursor_table
+			return
+		end catch
+
+		fetch next from cursor_table
+		into @accy
+	end
+	close cursor_table
+	deallocate cursor_table
+	--回寫acshare
+	begin try
+
+		update acsharet set accy=b.accy,accno=b.accc3
+		from acsharet a
+		left join #acshare2accc b on a.noq=b.[key]
+		where a.noa=@t_noa
 		IF @@Error <> 0 BEGIN SET @chk = 1 END
 	end try
 	begin catch
@@ -125,4 +343,8 @@ acshare2accc:--acshare2accc
 	ELSE BEGIN
 		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
 	END
-	select 1 [status],@maxnoa msg;
+	select 1 [status],'done' msg,[key] noq,accy,accc3 accno
+	from #acshare2accc
+	order by [key]
+	drop table #acshare2accc
+	drop table #acshare2acccs;
