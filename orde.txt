@@ -863,6 +863,17 @@ set @t_noa = [2] --訂單號
 set @t_datea = [3] --今天日期 由前端帶入
 set @t_worker = [4] --操作者
 
+--1050726 增加產生越南訂單
+declare @t_ip nvarchar(50) --IP
+declare @t_db nvarchar(50) --DB
+declare @t_factno nvarchar(50) --工廠編號
+declare @t_factory nvarchar(50) --工廠名稱
+
+set @t_ip = isnull((select (select ip from factory where noa=a.gdate) from view_orde a where noa=@t_noa),'')
+set @t_db = isnull((select (select db from factory where noa=a.gdate) from view_orde a where noa=@t_noa),'')
+set @t_factno = isnull((select gdate from view_orde a where noa=@t_noa),'')
+set @t_factory = isnull((select gtime from view_orde a where noa=@t_noa),'')
+
 declare @cmd nvarchar(max) 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -871,9 +882,9 @@ BEGIN
 END
 
 declare @err nvarchar(50)='採購單產生完畢!!'
+declare @accy nvarchar(90)=@t_accy
 
 --刪除已產生的採購單
-declare @accy nvarchar(90)=@t_accy
 while ((select count(*) from view_ordc where quatno=@t_noa)>0)
 begin
 	set @accy=isnull((select top 1 accy from view_ordc where quatno=@t_noa),@t_accy)
@@ -901,12 +912,14 @@ create table #tmp(
 
 insert #tmp
 select b.productno,b.product,b.mount,
-case when len(b.datea)>0 then dbo.q_cdn(b.datea,-1) else dbo.q_cdn(@t_datea,1) end,c.tggno
+case when len(b.datea)>0 then dbo.q_cdn(b.datea,-1) else dbo.q_cdn(@t_datea,1) end
+,case when len(@t_factno)>0 then isnull((select tggno from factory where noa=@t_factno),'') else c.tggno end
 from view_orde a left join view_ordes b on a.noa=b.noa
 left join ucx c on b.productno=c.noa
 where a.noa=@t_noa
 
 declare @tggno nvarchar(90)
+declare @custno nvarchar(90)
 declare @ordcno nvarchar(90)
 
 if((select count(*) from #tmp)=0)
@@ -923,6 +936,7 @@ begin
 	into @tggno
 	while(@@FETCH_STATUS <> -1) 
 	begin
+				
 		--新的採購單號
 		select @ordcno=MAX(noa) from view_ordc where noa like 'P'+REPLACE(@t_datea,'/','')+'%'
 		set @ordcno='P'+REPLACE(@t_datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@ordcno,'000'),3) as int)+1 as nvarchar(10)),3)
@@ -958,12 +972,103 @@ begin
 	deallocate cursor_table
 end
 
+declare @ordeno nvarchar(90)='' --越南訂單號
+--刪除已產生越南訂單
+if(len(@t_factno)>0 and len(@t_ip)>0 and len(@t_db)>0)
+begin
+	set @cmd ="if ((select count(*) from ["+@t_ip+",1799]."+@t_db+".dbo.view_orde where memo2='"+@t_noa+"')>0)
+	begin
+		set @accy=isnull((select accy from ["+@t_ip+",1799]."+@t_db+".dbo.view_orde where memo2='"+@t_noa+"'),'"+@t_accy+"')
+		set @ordeno=isnull((select noa from ["+@t_ip+",1799]."+@t_db+".dbo.view_orde where memo2='"+@t_noa+"'),'')
+		
+		delete a from ["+@t_ip+",1799]."+@t_db+".dbo.ordes"+@accy+" a where a.noa=@ordeno
+	end
+	"
+	--表頭不砍掉
+	--delete ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" where memo2='"+@t_noa+"'
+	execute sp_executesql @cmd,N'@accy nvarchar(90) output,@ordeno nvarchar(90) output',@accy=@accy output,@ordeno=@ordeno output
+	
+end
+
+set @custno=isnull((select custno from acomp where noa=isnull((select cno from view_orde where noa=@t_noa),'')),'')
+
+--新的越南訂單單號
+if(len(@custno)>0 and len(@t_factno)>0 and len(@t_ip)>0 and len(@t_db)>0)
+begin
+	if(LEN(@ordeno)=0)
+	begin
+		set @cmd ="select @ordeno=MAX(noa) from ["+@t_ip+",1799]."+@t_db+".dbo.view_orde where noa like 'E'+REPLACE('"+@t_datea+"','/','')+'%'"
+		execute sp_executesql @cmd,N'@ordeno nvarchar(90) output',@ordeno=@ordeno
+		
+		set @ordeno='E'+REPLACE(@t_datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@ordeno,'000'),3) as int)+1 as nvarchar(10)),3)
+		
+		EXEC("insert ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+"
+		(noa,odate,stype,cno,acomp,custno,comp,nick,paytype,tel,fax,agentno,agent
+		,post,addr,post2,addr2,payterms,trantype,custorde,salesno,sales,taxtype
+		,money,tax,total,worker,isproj,memo,memo2)
+		select '"+@ordeno+"','"+@t_datea+"','3'
+		,(select top 1 noa from ["+@t_ip+",1799]."+@t_db+".dbo.acomp order by noa)cno
+		,(select top 1 acomp from ["+@t_ip+",1799]."+@t_db+".dbo.acomp order by noa )acomp
+		,a.noa,a.comp,a.nick,a.paytype,a.tel,a.fax,b.agentno,b.agent
+		,a.zip_comp,a.addr_comp,a.zip_home,a.addr_home,b.payterms,a.trantype,'"+@t_noa+"'
+		,a.salesno,a.sales,b.taxtype,0,0,0,'"+@t_worker+"',1,'由典盈訂單【"+@t_noa+"】轉來'
+		,'"+@t_noa+"' memo2
+		from ["+@t_ip+",1799]."+@t_db+".dbo.cust a 
+		left join ["+@t_ip+",1799]."+@t_db+".dbo.custm b on a.noa=b.noa
+		where a.noa='"+@custno+"'
+		")
+	end
+	else
+	begin
+	
+		EXEC("
+		update a
+		set custno=b.noa,comp=b.comp,nick=b.nick
+		,paytype=b.paytype,tel=b.tel,fax=b.fax,agentno=c.agentno,agent=c.agent
+		,post=b.zip_comp,addr=b.addr_comp,post2=b.zip_home,addr2=b.addr_home
+		,payterms=c.payterms,trantype=b.trantype,custorde='"+@t_noa+"'
+		,salesno=b.salesno,sales=b.sales,taxtype=c.taxtype
+		,money=0,tax=0,total=0,worker2='"+@t_worker+"'
+		from ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" a 
+		outer apply (select * from ["+@t_ip+",1799]."+@t_db+".dbo.cust where noa='"+@custno+"')b
+		outer apply (select * from ["+@t_ip+",1799]."+@t_db+".dbo.custm where noa='"+@custno+"')c
+		where a.noa='"+@ordeno+"'
+		")
+	
+	end
+			
+	EXEC("insert ["+@t_ip+",1799]."+@t_db+".dbo.ordes"+@accy+"
+	(noa,no2,productno,product,spec,unit
+	,ucolor,scolor,class,classa,zinc,sizea,source,hard
+	,mount,sprice,price,total,payterms,packwayno,packway,cuft,c1,notv,memo
+	,quatno,no3,datea,enda,cancel)
+	select '"+@ordeno+"',a.no2
+	,b.ucano,a.product,a.spec,a.unit
+	,a.ucolor,a.scolor,a.class,a.classa,a.zinc,a.sizea,a.source,a.hard
+	,a.mount,0,isnull(c.price,0),isnull(a.mount*c.price,0),d.payterms
+	,a.packwayno,a.packway,a.cuft,0,a.mount,a.memo,a.noa,a.no2,'',0,0
+	from view_ordes a left join ucx b on a.productno=b.noa 
+	outer apply (select top 1 tb.price from ucctgg ta left join ucctggs tb on ta.noa=tb.noa 
+	where ta.tggno=isnull((select tggno from factory where noa='"+@t_factno+"'),'') and tb.productno=a.productno order by ta.pricedate desc ) c
+	outer apply (select * from ["+@t_ip+",1799]."+@t_db+".dbo.custm where noa='"+@custno+"')d
+	--outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@custno+"' and productno=a.productno) e
+	where a.noa='"+@t_noa+"' ")
+	
+	EXEC(" update ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" 
+	set money=isnull((select sum(total) from ["+@t_ip+",1799]."+@t_db+".dbo.view_ordes where noa='"+@ordeno+"'),0) 
+	,total=isnull((select sum(total) from ["+@t_ip+",1799]."+@t_db+".dbo.view_ordes where noa='"+@ordeno+"'),0) 
+	where noa='"+@ordeno+"'")
+end
+
+
 --更新orde的採購單號
 set @accy=isnull((select top 1 accy from view_orde where noa=@t_noa),@t_accy)
-EXEC("update orde"+@accy+" set ordcno=isnull(stuff((select ','+noa from view_ordc where quatno='"+@t_noa+"' FOR XML PATH('')),1,1,''),'') where noa='"+@t_noa+"' ")
+EXEC("update orde"+@accy+" set ordcno=isnull(stuff((select ','+noa from view_ordc where quatno='"+@t_noa+"' FOR XML PATH('')),1,1,''),'') 
+,memo2='"+@ordeno+"'
+where noa='"+@t_noa+"' ")
 
 --回傳採購單號
-select @err err,isnull(stuff((select ','+noa from view_ordc where quatno=@t_noa FOR XML PATH('')),1,1,''),'') ordcno
+select @err err,isnull(stuff((select ','+noa from view_ordc where quatno=@t_noa FOR XML PATH('')),1,1,''),'') ordcno,@ordeno ordeno
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
