@@ -1,4 +1,204 @@
-﻿post:--deli
+﻿post_rk:--deli RK用
+	--報關轉進貨單
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_noa nvarchar(20)=[1]--報關贖單單據編號
+	declare @t_condition nvarchar(20)=[2]--動作 0 刪除, 1 新增[3]
+	declare @t_userno nvarchar(20)=[3]--使用者
+	---------------------------------------------------------------------------------
+	if @t_condition='0'
+	begin
+		return
+	end
+	
+	declare @rc2key nvarchar(10) = 'B'
+	-- 進口報單修改時不能改數量、重量
+	declare @accy nvarchar(10)=''
+	declare @rc2no nvarchar(20)=''
+	declare @datea nvarchar(20)=''
+	declare @floata float = 0
+	declare @maxno nvarchar(20) = ''
+	declare @n int
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	--依報關日
+	select @datea=datea,@floata=floata from deli where noa=@t_noa
+	--找進貨單號
+	select @rc2no=rc2no from deli where noa=@t_noa
+	if len(ISNULL(@rc2no,''))>0
+	begin
+		if exists(select * from view_rc2 where noa=@rc2no)
+		begin
+			select @accy=accy from view_rc2 where noa=@rc2no
+		end
+		else
+		begin
+			select @accy=LEFT(@datea,3)
+		end
+	end
+	else
+	begin
+		select top 1 @maxno=noa from view_rc2 where noa like @rc2key+REPLACE(@datea,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+		set @n = (charindex(left(right(@maxno,3),1),@string)-1)*100 + cast(RIGHT(@maxno,2) as int) + 1
+		set @rc2no = @rc2key+REPLACE(@datea,'/','')+ substring(@string,floor(@n/100)+1,1) + right('00'+cast(@n%100 as int),2)
+		select @accy=LEFT(@datea,3)
+	end
+	----------------------------------------------
+	
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	---------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_deli')is not null
+	BEGIN
+		drop table #z_deli
+	END
+	create table #z_deli(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,typea nvarchar(10)
+		,tggno nvarchar(20)
+		,comp nvarchar(50)
+		,nick nvarchar(20)
+		,tel nvarchar(50)
+		,post nvarchar(20)
+		,addr nvarchar(100)
+		,datea nvarchar(10)
+		,[money] float
+		,tax float
+		,total float
+		,memo nvarchar(max)
+		,mon nvarchar(10)
+		,kind nvarchar(20)
+		,cno nvarchar(20)
+		,acomp nvarchar(30)
+	)
+	IF OBJECT_ID('tempdb..#z_delis')is not null
+	BEGIN
+		drop table #z_delis
+	END
+	create table #z_delis(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,ordeno nvarchar(20)
+		,no2 nvarchar(10)
+		,tggno nvarchar(20)
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,product nvarchar(50)
+		,spec nvarchar(20)
+		,unit nvarchar(20)
+		,price float
+		,mount float
+		,total float
+		,aprice float
+		,mon nvarchar(20)
+		,storeno nvarchar(20)
+		,store nvarchar(20)
+		,place nvarchar(20)
+		,[weight] float
+		,sprice float
+		--,uno nvarchar(30) rc2.post
+		,cno nvarchar(20)
+		,memo nvarchar(max)
+		,dime float
+		,width float
+		,lengthb float
+		,radius float
+		,gweight float 
+		,kind nvarchar(20)
+		,[source] nvarchar(20)
+	)
+	insert into #z_deli(noa,typea,tggno,comp,nick,tel,post,addr,datea,memo,mon,kind
+		,cno,acomp,[money],tax,total)
+	select @rc2no,'1',a.tggno,a.comp,a.nick,b.tel,b.zip_fact,b.addr_fact,a.datea,a.memo,LEFT(a.datea,3),a.kind
+		,a.cno,a.acomp,0,0,0
+	from deli a
+	left join tgg b on a.tggno=b.noa
+	where a.noa=@t_noa
+	
+	insert into #z_delis(noa,noq,ordeno,no2,tggno,datea,productno,product,spec,unit,price,mount,total,aprice
+		,mon,storeno,store,place,[weight],sprice,cno,memo,dime,width,lengthb,radius
+		,gweight,kind,[source])
+	select @rc2no,a.noq,a.ordcno,no2,b.tggno,b.datea,a.productno,a.product,a.spec,a.unit,a.price,a.mount,a.[money],a.aprice
+		,LEFT(b.datea,3),a.storeno,a.store,a.place,a.[weight],a.sprice,b.cno,a.memo,a.dime,a.width,a.lengthb,a.radius
+		,a.[weight],b.kind,a.[source]
+	from delis a
+	left join deli b on a.noa=b.noa
+	where b.noa=@t_noa
+	------------------------------------------------------------------------------------
+	set @cmd = ''
+	-- 寫入RC2
+	if exists(select * from view_rc2 where accy=@accy and noa=@rc2no)
+	begin
+		--update
+		set @cmd = @cmd + ' ' +
+		"update rc2"+@accy+" set tggno=b.tggno,comp=b.comp,nick=b.nick,tel=b.tel,post=b.post,addr=b.addr
+			,datea=b.datea,[money]=b.[money],tax=b.tax,total=b.total
+			,memo=b.memo,mon=b.mon,kind=b.kind,cno=b.cno,acomp=b.acomp
+		from rc2"+@accy+" a
+		left join #z_deli b on a.noa=b.noa
+		where b.noa is not null"
+		
+	end
+	else
+	begin
+		--insert
+		set @cmd = @cmd + ' ' +
+		"insert into rc2"+@accy+"(noa,typea,tggno,comp,nick,tel,post,addr,datea,[money],tax,total
+			,memo,mon,kind,cno,acomp,txttype)
+		select noa,typea,tggno,comp,nick,tel,post,addr,datea,[money],tax,total
+			,memo,mon,kind,cno,acomp,'5'
+		from #z_deli"
+	end
+	
+	set @cmd = @cmd + ' ' +
+	"update rc2s"+@accy+" set ordeno=b.ordeno,no2=b.no2,tggno=b.tggno,datea=b.datea
+		,productno=b.productno,product=b.product,spec=b.spec,unit=b.unit,price=b.price,aprice=b.aprice,mount=b.mount,total=b.total
+		,mon=b.mon,storeno=b.storeno,store=b.store,place=b.place,[weight]=b.[weight],sprice=b.sprice
+		,cno=b.cno,memo=b.memo,dime=b.dime,width=b.width,lengthb=b.lengthb,radius=b.radius,gweight=b.gweight
+		,kind=b.kind,[source]=b.[source]
+	from rc2s"+@accy+" a
+	left join #z_delis b on a.noa=b.noa and a.noq=b.noq
+	where b.noa is not null"
+	
+	set @cmd = @cmd + ' ' +
+	"insert into rc2s"+@accy+"(noa,noq,ordeno,no2,tggno,datea,productno,product,spec,unit,price,mount,total,aprice
+		,mon,storeno,store,place,[weight],sprice,cno,memo,dime,width,lengthb,radius,gweight,kind,[source])
+	select a.noa,a.noq,a.ordeno,a.no2,a.tggno,a.datea,a.productno,a.product,a.spec,a.unit,a.price,a.mount,a.total,a.aprice
+		,a.mon,a.storeno,a.store,a.place,a.[weight],a.sprice,a.cno,a.memo,a.dime,a.width,a.lengthb,a.radius
+		,a.gweight,a.kind,a.[source]
+	from #z_delis a
+	left join rc2s"+@accy+" b on a.noa=b.noa and a.noq=b.noq
+	where b.noa is null"
+	
+	update deli set rc2no=@rc2no where noa=@t_noa and len(isnull(rc2no,''))=0
+	
+	set @cmd = 
+	"update rc2"+@accy+" set [money]=b.total,total=b.total
+	from rc2"+@accy+" a
+	outer apply(select SUM(isnull(total,0)) total from rc2s"+@accy+" where noa=a.noa ) b
+	where a.noa=@rc2no"
+	---------------------------------------------------------------------------------
+	begin try
+		execute sp_executesql @cmd
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+	end try
+	begin catch
+		print error_message()
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		return
+	end catch
+	
+	IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	END
+	ELSE BEGIN
+		print 'done'
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	END;
+
+
+post:--deli
 --報關轉進貨單
 SET QUOTED_IDENTIFIER OFF
 declare @year nvarchar(20)=[1]--年度[1]
