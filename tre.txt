@@ -1,3 +1,150 @@
+tre_import_dh:--tre_import_dh  整批	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_noa nvarchar(20) = [1]
+	declare @t_date nvarchar(10) = [2]
+	declare @t_bdate nvarchar(10) = [3]
+	declare @t_edate nvarchar(10) = [4]
+	declare @t_carno nvarchar(max) = [5]
+
+	----------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#trans_tre_dh')is not null
+	BEGIN
+		drop table #trans_tre_dh
+	END
+	create table #trans_tre_dh(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,carno nvarchar(20)
+		,driverno nvarchar(20)
+		,driver nvarchar(20)
+		,datea nvarchar(10)
+		,mon nvarchar(20)
+		,carchgno nvarchar(max)
+		,[money] float
+		,plusmoney float
+		,minusmoney float
+		,total float
+		,memo nvarchar(max)
+		,worker nvarchar(20)
+		,worker2 nvarchar(20)
+	)
+	IF OBJECT_ID('tempdb..#trans_tre_dhs')is not null
+	BEGIN
+		drop table #trans_tre_dhs
+	END
+	create table #trans_tre_dhs(
+		sel int identity(1,1)
+		,carno nvarchar(20)
+		,driverno nvarchar(20)
+		,driver nvarchar(20)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,datea nvarchar(10)
+		,trandate nvarchar(10)
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+		,straddrno nvarchar(20)
+		,straddr nvarchar(50)
+		,endaddrno nvarchar(20)
+		,endaddr nvarchar(50)
+		,productno nvarchar(20)
+		,product nvarchar(50)
+		,mount float
+		,price float
+		,discount float
+		,[money] float
+		,memo nvarchar(max)
+		,tranno nvarchar(20)
+		,trannoq nvarchar(10)
+	)
+	insert into #trans_tre_dhs(carno,driverno,driver,noa,noq,datea,trandate,custno,cust,straddrno,straddr,endaddrno,endaddr
+		,productno,product,mount,price,discount,[money],memo,tranno,trannoq)
+	select isnull(a.carno,''),isnull(a.driverno,''),a.driver,a.noa,a.noq,a.datea,a.trandate,a.custno,a.nick,a.straddrno,a.straddr
+		,a.endaddrno,a.endaddr,a.uccno,a.product,a.mount,isnull(a.price2,0)+ISNULL(a.price3,0),a.discount,a.total2
+		,a.memo,a.noa,a.noq
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno and a.noq=b.trannoq
+	where (b.noa is null or b.noa=@t_noa)
+	and a.datea between @t_bdate and @t_edate
+	and (len(@t_carno)=0 or CHARINDEX(','+a.carno+',',','+@t_carno+',')>0)
+	----------------------------------------------------------------------------------------------------
+	declare @sel int
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @key nvarchar(20) = 'BJ'
+	declare @maxno1 nvarchar(20) = ''
+	declare @maxno2 nvarchar(20) = ''
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @n int 
+
+	select @maxno1=max(noa) from view_tre where noa like @key+REPLACE(@t_date,'/','')+'[0-9,A-Z][0-9][0-9]'
+
+	declare cursor_table cursor for
+	select carno,driverno from #trans_tre_dhs group by carno,driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @carno,@driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @maxno2='',@noa=''
+		select @maxno2=max(noa) from #trans_tre_dhs where noa like @key+REPLACE(@t_date,'/','')+'[0-9,A-Z][0-9][0-9]'
+		select @noa = case when @maxno1 > @maxno2 then @maxno1 else @maxno2 end
+		if len(isnull(@noa,''))=0
+		begin
+			set @n = 1
+		end
+		else
+		begin
+			set @n = (charindex(left(RIGHT(@noa,3),1),@string)-1)*100 + cast(RIGHT(@noa,2) as int) + 1
+		end
+		
+		set @noa = @key+REPLACE(@t_date,'/','')+SUBSTRING(@string,floor(@n/100)+1,1) + right('000'+cast(@n%100 as nvarchar),2)
+		
+		declare cursor_table2 cursor for
+		select sel,row_number()over(order by trandate,tranno,trannoq) from #trans_tre_dhs 
+		where carno=@carno and driverno=@driverno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @sel,@n
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @noq = right('000'+CAST(@n as nvarchar),3)
+			update #trans_tre_dhs set noa=@noa,noq=@noq where sel=@sel
+			
+			
+			fetch next from cursor_table2
+			into @sel,@n
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		
+		fetch next from cursor_table
+		into @carno,@driverno
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	
+	insert into tre105(noa,carno,driverno,driver,datea,mon)
+	select noa,carno,driverno,driver,datea,mon
+	from #trans_tre_dh
+	
+	insert into tres105(noa,noq,driverno,driver,noa,noq,trandate
+		,straddr,endaddr,product,mount,price,discount,[money],memo,tranno,trannoq)
+	select noa,noq,driverno,driver,noa,noq,trandate
+		,straddr,endaddr,product,mount,price,discount,[money],memo,tranno,trannoq
+	from #trans_tre_dhs
+	;
+	
+	
+	
+
 tre_dc:--tre_dc  單筆匯入
 	declare @t_noa nvarchar(20) = [1]
 	declare @t_carteamno nvarchar(20)= [2]
