@@ -6,7 +6,6 @@ tre_import_dh:--tre_import_dh  整批
 	declare @t_bdate nvarchar(10) = [3]
 	declare @t_edate nvarchar(10) = [4]
 	declare @t_carno nvarchar(max) = [5]
-
 	----------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#trans_tre_dh')is not null
 	BEGIN
@@ -82,6 +81,13 @@ tre_import_dh:--tre_import_dh  整批
 
 	select @maxno1=max(noa) from view_tre where noa like @key+REPLACE(@t_date,'/','')+'[0-9,A-Z][0-9][0-9]'
 
+	declare @tmpnoa nvarchar(20)
+	declare @money1 float
+	declare @money2 float
+	declare @carchgno nvarchar(max)
+	declare @plusmoney float
+	declare @minusmoney float
+
 	declare cursor_table cursor for
 	select carno,driverno from #trans_tre_dhs group by carno,driverno
 	open cursor_table
@@ -102,7 +108,35 @@ tre_import_dh:--tre_import_dh  整批
 		end
 		
 		set @noa = @key+REPLACE(@t_date,'/','')+SUBSTRING(@string,floor(@n/100)+1,1) + right('000'+cast(@n%100 as nvarchar),2)
+
+		----------------------------------------------------------
+		--加減項
+		select @carchgno = '', @plusmoney=0, @minusmoney=0
 		
+		declare cursor_table2 cursor for
+		select a.noa,isnull(plusmoney,0) plusmoney,isnull(minusmoney,0) minusmoney 
+		from carchg a 
+		where a.carno=@carno
+		and a.driverno=@driverno
+		and not exists(select top 1 noa from view_tre where charindex(a.noa,carchgno)>0) 
+		and not exists(select top 1 noa from #trans_tre_dh where charindex(a.noa,carchgno)>0) 
+		open cursor_table2
+		fetch next from cursor_table2
+		into @tmpnoa,@money1,@money2
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @carchgno = @carchgno + case when LEN(@carchgno)>0 then ',' else '' end + @tmpnoa
+				,@plusmoney = @plusmoney + @money1
+				,@minusmoney = @minusmoney + @money2
+			fetch next from cursor_table2
+			into @tmpnoa,@money1,@money2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		----------------------------------------------------------------------
+		insert into #trans_tre_dh(noa,carno,driverno,datea,mon,carchgno,plusmoney,minusmoney)
+		select @noa,@carno,@driverno,@t_date,'',@carchgno,@plusmoney,@minusmoney
+		----------------------------------------------------------------------
 		declare cursor_table2 cursor for
 		select sel,row_number()over(order by trandate,tranno,trannoq) from #trans_tre_dhs 
 		where carno=@carno and driverno=@driverno
@@ -127,22 +161,55 @@ tre_import_dh:--tre_import_dh  整批
 	end
 	close cursor_table
 	deallocate cursor_table
+	
+	update #trans_tre_dh set driver=isnull(b.namea,'')
+	from #trans_tre_dh a
+	left join driver b on a.driverno=b.noa
+	
+	update #trans_tre_dh set [money]=b.[money]
+	from #trans_tre_dh a
+	left join (select noa,SUM(ISNULL([money],0)) [money] from #trans_tre_dhs group by noa) b on a.noa=b.noa
+	
+	update #trans_tre_dh set total = ISNULL([money],0)+ISNULL(plusmoney,0)-ISNULL(minusmoney,0)
+	
 	----------------------------------------------------
+	declare @accy nvarchar(10) = left(@t_date,3)
+	
 	DECLARE @chk tinyint = 0
 	Begin Transaction [Trans_Name]
 	
-	insert into tre105(noa,carno,driverno,driver,datea,mon)
-	select noa,carno,driverno,driver,datea,mon
-	from #trans_tre_dh
+	begin try
+		set @cmd ="
+		insert into tre"+@accy+"(noa,carno,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total)
+		select noa,carno,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total
+		from #trans_tre_dh"
+		execute sp_executesql @cmd
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name]
+		select ERROR_MESSAGE() msg
+		return
+	end catch
 	
-	insert into tres105(noa,noq,driverno,driver,noa,noq,trandate
-		,straddr,endaddr,product,mount,price,discount,[money],memo,tranno,trannoq)
-	select noa,noq,driverno,driver,noa,noq,trandate
-		,straddr,endaddr,product,mount,price,discount,[money],memo,tranno,trannoq
-	from #trans_tre_dhs
-	;
+	begin try
+		set @cmd =
+		"insert into tres"+@accy+"(noa,noq,driverno,driver,trandate
+			,straddr,endaddr,product,mount,price,discount,[money],memo,tranno,trannoq)
+		select noa,noq,driverno,driver,trandate
+			,straddr,endaddr,product,mount,price,discount,[money],memo,tranno,trannoq
+		from #trans_tre_dhs"
+		execute sp_executesql @cmd
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name]	
+		select ERROR_MESSAGE() msg	
+		return
+	end catch
 	
-	
+	Commit Transaction [Trans_Name]
+	drop table #trans_tre_dh
+	drop table #trans_tre_dhs
+	select 'done' msg;
 	
 
 tre_dc:--tre_dc  單筆匯入
