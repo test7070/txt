@@ -90,42 +90,44 @@ transvcce2tran:--transvcce2tran
 	declare @noa nvarchar(20)
 	declare @noq nvarchar(10)
 	declare @string nvarchar(max)
-	set @string = '0123456789ABCDEFGHIJKLMN'
+	set @string = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 	declare @num int
+	declare @maxnoa1 nvarchar(20)
+	declare @maxnoa2 nvarchar(20)
+	declare @maxnoa3 nvarchar(20)
 	
 	declare cursor_table cursor for
-	select recno,accy,transvcce2tranno,transvcce2trannoq,datea,tranno,trannoq from #transvcce2tran where LEN(isnull(tranno,''))=0
+	select recno,accy,transvcce2tranno,transvcce2trannoq,datea,tranno,trannoq 
+		from #transvcce2tran where LEN(isnull(tranno,''))=0
+		order by transvcce2tranno,transvcce2trannoq
 	open cursor_table
 	fetch next from cursor_table
 	into @recno,@accy,@transvcce2tranno,@transvcce2trannoq,@datea,@tranno,@trannoq
 	while(@@FETCH_STATUS <> -1)
 	begin	
-		set @cmd = 
-		" select @noa = MAX(noa) "+
-		" from(select noa from view_trans where noa like 'BA'+left(replace(@datea,'/',''),7)+'[A-Z,0-9][0-9][0-9]'"+
-		" union all"+
-		" select tranno from #transvcce2tran where tranno like 'BA'+left(replace(@datea,'/',''),7)+'[A-Z,0-9][0-9][0-9]') as a"
-		execute sp_executesql @cmd,N'@datea nvarchar(10),@noa nvarchar(20) output',@datea=@datea,@noa=@noa output	
+		select @maxnoa1='',@maxnoa2='',@maxnoa3=''
+		select top 1 @maxnoa1=noa from view_trans where noa like 'BA'+left(replace(@datea,'/',''),7)+'[A-Z,0-9][0-9][0-9]' order by noa desc
+		select top 1 @maxnoa2=tranno from #transvcce2tran where tranno like 'BA'+left(replace(@datea,'/',''),7)+'[A-Z,0-9][0-9][0-9]' order by tranno desc
+		select top 1 @maxnoa3=tranno from view_transvcce2trans where tranno like 'BA'+left(replace(@datea,'/',''),7)+'[A-Z,0-9][0-9][0-9]' order by tranno desc
 
-		if(LEN(ISNULL(@noa,''))=0)
+		select @maxnoa1=ISNULL(@maxnoa1,''),@maxnoa2=ISNULL(@maxnoa2,''),@maxnoa3=ISNULL(@maxnoa3,'')
+		set @noa = case when @maxnoa1>@maxnoa2 then @maxnoa1 else @maxnoa2 end
+		set @noa = case when @noa>@maxnoa3 then @noa else @maxnoa3 end
+		
+		if LEN(@noa)=0
 		begin
-			set @noq='001'
+			set @noq = '001' 
 		end
 		else
 		begin
-			set @noq = right(@noa,3)
-			if(right(@noq,2)='99')
-			begin
-				set @noq = Substring(@string,Charindex(LEFT(@noq,1),@string)+1,1)+'00'
-			end
-			else
-			begin
-				set @noq = LEFT(@noq,1) + right('00'+CAST(CAST(right(@noq,2) as int)+1 as nvarchar),2)
-			end
+			set @num = (charindex(left(RIGHT(@noa,3),1),@string)-1)*100+CAST(RIGHT(@noa,2) as int)+1
+			set @noq = SUBSTRING(@string,floor(@num/100)+1,1)+right('00'+CAST(@num%100 as nvarchar),2)
 		end
+		
 		set @noa = 'BA'+replace(@datea,'/','')+@noq
 		update #transvcce2tran set tranno= @noa,trannoq='001' where recno=@recno
 		
+		--寫入transvcce2trans
 		set @cmd = "update transvcce2trans"+@accy+" set tranno=@noa,trannoq='001' where noa=@transvcce2tranno and noq=@transvcce2trannoq"
 		execute sp_executesql @cmd,N'@noa nvarchar(20),@transvcce2tranno nvarchar(20),@transvcce2trannoq nvarchar(10)'
 		,@noa=@noa,@transvcce2tranno=@transvcce2tranno,@transvcce2trannoq=@transvcce2trannoq
