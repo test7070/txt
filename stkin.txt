@@ -1,0 +1,86 @@
+﻿stkintmoney:--stkin
+--訂單轉出貨單
+SET QUOTED_IDENTIFIER OFF
+declare @seaccount nvarchar(100)=[1]
+declare @feeno nvarchar(100)=[2]
+declare @tmoney float=[3]
+-------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#stkintmoney')is not null
+BEGIN
+	drop table #stkintmoney
+END
+-------------------------------------------------------------------------------
+create table #stkintmoney(
+	gno nvarchar(1),
+	seaccount nvarchar(100),
+	datea nvarchar(10),	
+	bdatea nvarchar(10),
+	typea nvarchar(50),
+	feeno nvarchar(100),
+	feerate float,--手續費
+	tdrate float,--交易折扣
+	sttrate float,--證交稅
+	tfrate float,--融資利率
+	tmrate float,--融券利率
+	tfpart float,--融資百分比
+	tmpert float,--融券百分比
+	tmfee float,--融券手續費率
+	mount float,
+	ptotal float,
+	stotal float,
+	total float,
+	ttotal float,
+	price float,--賣出價格
+	oprice float--買入價格
+)
+insert into #stkintmoney
+select '1',b.seaccount,transdate,'',case when transtype='除權股票入帳' then '除權入股' else transtype end,b.noa,'','','','','','','','',mount,money*-1,null,'','','',price
+from stkin a left join stksys b on a.feeno=b.noa
+
+insert #stkintmoney
+select '1',c.seaccount,a.datea,transdate,case when b.transtype='除權股票入帳' then '現股賣出' else (case when right(b.transtype,2)='買進' then left(b.transtype,2)+'賣出' else left(b.transtype,2)+'回補' end) end,c.noa,b.feerate,b.tdrate,b.sttrate,b.tfrate,b.tmrate,b.tfpert
+,c.tmpert,c.tmfee,a.buymount,null,'','','',a.buyprice,b.price
+from stkins a left join stkin b on a.noa=b.noa
+left join stksys c on b.feeno=c.noa
+
+insert #stkintmoney(gno,seaccount,feeno,datea,typea,ptotal,stotal)
+select '1',seaccount,b.noa,a.datea,typea,case when typea='現金支出' then price else null end,case when typea!='現金支出' then price else null end
+from stksyss a left join stksys b on a.noa=b.noa
+
+update #stkintmoney
+set 
+stotal=price*mount-price*mount*feerate/100*tdrate/100-price*mount*sttrate/100
+where typea='現股賣出'
+
+update #stkintmoney
+set 
+stotal=price*mount-price*mount*feerate/100*tdrate/100-price*mount*0.1/100-
+round((oprice*mount*tfpart/100)/1000,0)*1000
+-case when datea!=datea then (round((oprice*mount*tfpart/100)/1000,0)*1000*tfrate/100*(DATEDIFF (day,bdatea,datea))/365) else 0 end
+where typea='融資賣出'
+
+update #stkintmoney
+set 
+stotal=(oprice*mount*(1-feerate/100*tdrate/100-0.1/100-tmfee/100))-(price*mount*(1+feerate/100*tdrate/100))+oprice*mount*tmpert/100
++case when bdatea!=datea then ((oprice*mount*(1-feerate/100*tdrate/100-0.1/100-tmfee/100))+oprice*mount*tmpert/100)*tmrate/100*(DATEDIFF (day,bdatea,datea))/365 else 0 end
+where typea='融券回補'
+
+update #stkintmoney
+set 
+stotal=price*mount-price*mount*feerate/100*tdrate/100-price*mount*sttrate/100
+where typea='除權入股'
+		
+if ((select count(*) from #stkintmoney)>0)
+begin	
+	insert #stkintmoney(gno,seaccount,feeno,total)
+	select '2',seaccount,feeno,SUM(isnull(stotal,0)-isnull(ptotal,0))
+	from #stkintmoney
+	group by seaccount,feeno
+end
+
+update a
+set @seaccount=seaccount,@feeno=feeno,@tmoney=total
+from (select seaccount,feeno,round(total,0)total from #stkintmoney where gno='2')a
+
+select @seaccount seaccount,@feeno feeno,@tmoney tmoney
+;
