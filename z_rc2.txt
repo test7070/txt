@@ -787,76 +787,79 @@ SET QUOTED_IDENTIFIER OFF
 		
 		qhrefa nvarchar(max),
 		qhrefb nvarchar(max),
-		qhrefc nvarchar(max)
+		qhrefc nvarchar(max),
 		
+		lengthb float,
+		lengthc float,
+		radius float,
+		xunit nvarchar(50)
 	)
-	insert into @tmp (gno,noa,noq,invono,type,datea,mon,tggno,comp,productno,xproduct,unit,mount,weight,price,total
-		,cust,memo,qhrefa,ordcno,ordcno2)
-		select '0' gno, a.noa noa, b.noq noq,a.invono, (case when a.typea='2' then '退' else '進' end) type
-			, a.datea datea, (case when a.mon='' then left(a.datea,6) else a.mon end), a.tggno, a.tgg, b.productno
-			,b.product+(case when @isspec='1' then ' '+b.spec else '' end), b.unit
-			,(case when a.typea='2' then -1 else 1 end)*b.mount
-			,(case when a.typea='2' then -1 else 1 end)*b.weight
-			,b.price
-			,(case when a.typea='2' then -1 else 1 end)*b.total
-			,b.comp,b.memo
-			,'rc2'+b.accy
-			,isnull(b.ordeno,''),isnull(b.no2,'')
-			--,e.price,e.mount,e.comp,e.noa+'-'+e.no2
-			--,stuff((select ','+noa+'-'+noq from view_vccs where ordeno=e.noa and no2=e.no2 group by noa,noq FOR XML PATH('')),1,1,'')
-			--,f.mount
-		from view_rc2s b
-		left join view_rc2 a on a.noa = b.noa
-		--outer apply (select top 1 ordbno,no3 from view_ordcs where noa=b.ordeno and no2=b.no2)c
-		--outer apply (select top 1 ordeno,no2 from view_ordbs where noa=c.ordbno and no3=c.no3)d
-		--outer apply (select top 1 noa,no2,price,mount,comp from view_ordes where noa=d.ordeno and no2=d.no2)e
-		--outer apply (select sum(mount)mount from view_vccs where ordeno=e.noa and no2=e.no2)f
+	insert into @tmp (gno,noa,noq,invono,type,datea,mon,tggno,comp,productno,xproduct,unit,mount,weight,price,total,cust,memo,qhrefa,ordcno,ordcno2,lengthb,lengthc,radius,xunit)
+	select '0' gno, a.noa noa, b.noq noq,a.invono, (case when a.typea='2' then '退' else '進' end) type
+	, a.datea datea, (case when a.mon='' then left(a.datea,6) else a.mon end), a.tggno, a.tgg, b.productno
+	,b.product+(case when @isspec='1' then ' '+b.spec else '' end), b.unit
+	,(case when a.typea='2' then -1 else 1 end)*b.mount
+	,(case when a.typea='2' then -1 else 1 end)*b.weight
+	,b.price
+	,(case when a.typea='2' then -1 else 1 end)*b.total
+	,b.comp,b.memo
+	,'rc2'+b.accy
+	,isnull(b.ordeno,''),isnull(b.no2,'')
+	,case when isnull(d.inmount,0)!=0 then FLOOR(b.mount/d.inmount) else 0 end
+	,case when isnull(d.inmount,0)!=0 then b.mount%cast(d.inmount as int) else b.mount end
+	,d.inmount,c.unit
+	from view_rc2s b
+	left join view_rc2 a on a.noa = b.noa
+	left join ucc c on b.productno=c.noa
+	outer apply (select top 1 noq,inmount,pack,packway from pack2s where noa=b.productno and isnull(pack,'')!='' order by inmount desc)d	
+	where (a.datea between @t_bdate and @t_edate) and
+		  ((case when a.mon='' then left(a.datea,6) else a.mon end)  between @t_bmon and @t_emon) and
+		  (a.tggno between @t_btggno and @t_etggno) and
+		  --(a.salesno between @t_bsalesno and @t_esalesno) and
+		  (b.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_stype)=0 or a.stype=@t_stype) and
+		  (@t_multtgg='' or (RTRIM(a.tggno)=dbo.split(RIGHT(@t_multtgg,LEN(@t_multtgg)-CHARINDEX(RTRIM(a.tggno),@t_multtgg)+1),'.',0)and
+		  (SUBSTRING(@t_multtgg,CHARINDEX(RTRIM(a.tggno),@t_multtgg)-1,1)='.' or CHARINDEX(RTRIM(a.tgg),@t_multucc)=0)))and
+		  (@t_multucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_multucc,LEN(@t_multucc)-CHARINDEX(RTRIM(b.productno),@t_multucc)+1),'.',0)and
+		  (SUBSTRING(@t_multucc,CHARINDEX(RTRIM(b.productno),@t_multucc)-1,1)='.' or CHARINDEX(RTRIM(a.tgg),@t_multucc)=0)))
+		  and (len(@t_custno)=0 or b.custno=@t_custno)
+	order by datea desc,gno,noa,noq
+	
+	if((select count(*) from @tmp)>0)
+	begin	
+		update a
+		set ordbno=isnull(b.ordbno,''),ordbno3=isnull(b.no3,'')
+		from @tmp a outer apply (select top 1 * from view_ordcs where noa=a.ordcno and no2=a.ordcno2)b
+		where a.ordcno!='' and a.ordcno2 !=''
 		
-		where (a.datea between @t_bdate and @t_edate) and
-			  ((case when a.mon='' then left(a.datea,6) else a.mon end)  between @t_bmon and @t_emon) and
-			  (a.tggno between @t_btggno and @t_etggno) and
-			  --(a.salesno between @t_bsalesno and @t_esalesno) and
-			  (b.productno between @t_bproductno and @t_eproductno) and
-			  (len(@t_stype)=0 or a.stype=@t_stype) and
-			  (@t_multtgg='' or (RTRIM(a.tggno)=dbo.split(RIGHT(@t_multtgg,LEN(@t_multtgg)-CHARINDEX(RTRIM(a.tggno),@t_multtgg)+1),'.',0)and
-			  (SUBSTRING(@t_multtgg,CHARINDEX(RTRIM(a.tggno),@t_multtgg)-1,1)='.' or CHARINDEX(RTRIM(a.tgg),@t_multucc)=0)))and
-			  (@t_multucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_multucc,LEN(@t_multucc)-CHARINDEX(RTRIM(b.productno),@t_multucc)+1),'.',0)and
-			  (SUBSTRING(@t_multucc,CHARINDEX(RTRIM(b.productno),@t_multucc)-1,1)='.' or CHARINDEX(RTRIM(a.tgg),@t_multucc)=0)))
-			  and (len(@t_custno)=0 or b.custno=@t_custno)
-		order by datea desc,gno,noa,noq
+		update a
+		set ordeno=isnull(b.ordeno,''),ordeno2=isnull(b.no2,'')
+		from @tmp a outer apply (select top 1 * from view_ordbs where noa=a.ordbno and no3=a.ordbno3)b
+		where a.ordbno!='' and a.ordbno3 !=''
 		
-	update a
-	set ordbno=isnull(b.ordbno,''),ordbno3=isnull(b.no3,'')
-	from @tmp a outer apply (select top 1 * from view_ordcs where noa=a.ordcno and no2=a.ordcno2)b
-	where a.ordcno!='' and a.ordcno2 !=''
-	
-	update a
-	set ordeno=isnull(b.ordeno,''),ordeno2=isnull(b.no2,'')
-	from @tmp a outer apply (select top 1 * from view_ordbs where noa=a.ordbno and no3=a.ordbno3)b
-	where a.ordbno!='' and a.ordbno3 !=''
-	
-	update a
-	set oprice=b.price,omount=b.mount,ocomp=b.comp,ordeaccy=b.accy
-	from @tmp a outer apply (select top 1 * from view_ordes where noa=a.ordeno and no2=a.ordeno2)b
-	where a.ordeno!='' and a.ordeno2 !=''
-	
-	update a
-	set vccno=isnull(stuff((select ','+noa from view_vccs where ordeno=a.ordeno and no2=a.ordeno2 group by noa,noq FOR XML PATH('')),1,1,''),'')
-		,vmount=isnull((select sum(mount)mount from view_vccs where ordeno=a.ordeno and no2=a.ordeno2),0)
-		,vccaccy=isnull((select top 1 accy from view_vccs where ordeno=a.ordeno and no2=a.ordeno2),0)
-	from @tmp a 
-	where a.ordeno!='' and a.ordeno2 !=''
-	
-	update @tmp 
-	set qhrefa = substring(qhrefa,0,len(qhrefa)-2)+'?left(noa,'+cast(len(noa) as nvarchar)+')=$noa?'+substring(qhrefa,len(qhrefa)-2,len(qhrefa))
-	,qhrefb= 'orde_xy?noa=$ordeno?'+ordeaccy
-	,qhrefc= case when charindex(',',vccno)>0 then '' else 'vcc_xy?noa=$vccno?'+vccaccy end
-	
-	insert into @tmp(gno,datea,mount,total,omount,vmount)
-		select '1',datea,sum(mount),sum(total),sum(omount),sum(vmount) from @tmp group by datea
+		update a
+		set oprice=b.price,omount=b.mount,ocomp=b.comp,ordeaccy=b.accy
+		from @tmp a outer apply (select top 1 * from view_ordes where noa=a.ordeno and no2=a.ordeno2)b
+		where a.ordeno!='' and a.ordeno2 !=''
 		
-	insert into @tmp(gno,datea,mount,total,omount,vmount)
-		select '2',left(datea,6)+'/99',sum(mount),sum(total),sum(omount),sum(vmount) from @tmp where gno='1' group by left(datea,6)
+		update a
+		set vccno=isnull(stuff((select ','+noa from view_vccs where ordeno=a.ordeno and no2=a.ordeno2 group by noa,noq FOR XML PATH('')),1,1,''),'')
+			,vmount=isnull((select sum(mount)mount from view_vccs where ordeno=a.ordeno and no2=a.ordeno2),0)
+			,vccaccy=isnull((select top 1 accy from view_vccs where ordeno=a.ordeno and no2=a.ordeno2),0)
+		from @tmp a 
+		where a.ordeno!='' and a.ordeno2 !=''
+		
+		update @tmp 
+		set qhrefa = substring(qhrefa,0,len(qhrefa)-2)+'?left(noa,'+cast(len(noa) as nvarchar)+')=$noa?'+substring(qhrefa,len(qhrefa)-2,len(qhrefa))
+		,qhrefb= 'orde_xy?noa=$ordeno?'+ordeaccy
+		,qhrefc= case when charindex(',',vccno)>0 then '' else 'vcc_xy?noa=$vccno?'+vccaccy end
+		
+		insert into @tmp(gno,datea,mount,total,omount,vmount,lengthb,lengthc)
+		select '1',datea,sum(mount),sum(total),sum(omount),sum(vmount),SUM(lengthb),SUM(lengthc) from @tmp group by datea
+			
+		insert into @tmp(gno,datea,mount,total,omount,vmount,lengthb,lengthc)
+		select '2',left(datea,6)+'/99',sum(mount),sum(total),sum(omount),sum(vmount),SUM(lengthb),SUM(lengthc) from @tmp where gno='1' group by left(datea,6)
+	end
 	
 	select gno, noa, noq, invono,type, datea, LEFT(datea,6) xdatea, mon, tggno, left(comp,4) comp, productno, xproduct,unit
 	,cust,memo
@@ -869,5 +872,9 @@ SET QUOTED_IDENTIFIER OFF
 	,dbo.getComma(price,-1) price 
 	,dbo.getComma(total,-1) total 
 	,row_number()over(partition by datea,left(datea,6) order by datea desc,gno,noa,noq) idno,qhrefa,qhrefb,qhrefc
+	,dbo.getComma(lengthb,-1) lengthb 
+	,dbo.getComma(lengthc,-1) lengthc 
+	,dbo.getComma(radius,-1) radius 
+	,xunit
 	from @tmp order by datea,gno,noa,noq;
 --***********************************************************************************
