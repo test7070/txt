@@ -1,3 +1,215 @@
+import:--import	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)	
+	declare @t_key nvarchar(max) = [1]
+	declare @t_datea nvarchar(20) = [2]
+	declare @t_btrandate nvarchar(20) = [3]
+	declare @t_etrandate nvarchar(20) = [4]
+	-------------------------------------------------------------------------
+	declare @tmpa table(
+		sel int identity(1,1)
+		,accy nvarchar(10)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,trandate nvarchar(10)
+		,custno nvarchar(20)
+		,carno nvarchar(20)
+		,straddrno nvarchar(20)
+		,straddr nvarchar(50)
+		,product nvarchar(50)
+		,mount float
+		,price float
+		,total float
+		
+		,mount3 float
+		,mount4 float
+		,[status] nvarchar(20)
+		,[weight] float
+		,memo nvarchar(max)
+	)
+	insert into @tmpa(accy,noa,noq,trandate,custno,carno,straddrno,straddr,product,mount,price,total
+		,mount3,mount4,[status],[weight],memo)
+	select accy,noa,noq,trandate,custno,carno,straddrno,straddr,product,mount,price,total
+		,mount3,mount4,[status],[weight],memo
+	from view_trans a
+	where a.trandate between @t_btrandate and @t_etrandate
+	
+	--刪除已匯入過的
+	delete @tmpa
+	from @tmpa a
+	outer apply (select noa from view_trds where tranno=a.noa and trannoq=a.noq) b
+	where b.noa is not null
+	
+	---------------------------------------------------------------------------
+	declare @tmpb table(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,custno nvarchar(20)
+		,plusitem nvarchar(max)
+		,plusmoney float
+		,minusitem nvarchar(max)
+		,minusmoney float
+	)
+	insert into @tmpb(noa,custno,plusitem,plusmoney,minusitem,minusmoney)
+	select a.noa,a.custno,a.plusitem,a.plusmoney,a.minusitem,a.minusmoney
+	from custchg a
+	outer apply (select top 1 * from view_trd where CHARINDEX(','+a.noa+',',','+custchgno+',')>0) b
+	where b.noa is null
+	and a.datea between @t_btrandate and @t_etrandate
+	
+	----------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#trd_es')is not null
+	BEGIN
+		drop table #trd_es
+	END
+	create table #trd_es (
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,datea nvarchar(20)
+		,custno nvarchar(20)
+		,comp nvarchar(50)
+		,nick nvarchar(20)
+		,custchgno nvarchar(max)
+		
+		,[money] float
+		,plusmoney float
+		,minusmoney float
+		,tax float
+		,total float
+		,memo nvarchar(max)
+	)
+	
+	IF OBJECT_ID('tempdb..#trds_es')is not null
+	BEGIN
+		drop table #trds_es
+	END
+	create table #trds_es (
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,datea nvarchar(20)
+		,custno nvarchar(20)
+		,trandate nvarchar(10)
+		,carno nvarchar(20)
+		,straddrno nvarchar(20)
+		,straddr nvarchar(50)
+		,product nvarchar(50)
+		,mount float
+		,price float
+		,total float
+		,memo nvarchar(max)
+		,tranaccy nvarchar(10)
+		,tranno nvarchar(20)
+		,trannoq nvarchar(10)
+	)
+	insert into #trds_es(noa,noq,datea,custno,trandate,carno,straddrno,straddr,product,mount,price,total,memo,tranaccy,tranno,trannoq)
+	select '' noa,'' noq,@t_datea,custno,trandate,carno,straddrno,straddr,product,mount,price,total,memo,accy,noa,noq 
+	from @tmpa
+	
+	declare @custno nvarchar(20)
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @n int
+	declare @noa nvarchar(20)
+	declare @maxno1 nvarchar(20)
+	declare @maxno2 nvarchar(20)
+	
+	declare @money float
+	declare @plusmoney float
+	declare @minusmoney float
+	declare @total float
+	
+	declare @custchgno nvarchar(max)
+	declare @plus float
+	declare @minus float
+	
+	declare cursor_table cursor for
+	select custno 
+	from(select custno from @tmpa union all select custno from @tmpb) as a 
+	group by custno
+	open cursor_table
+	fetch next from cursor_table
+	into @custno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @money=0,@plusmoney=0,@minusmoney=0,@custchgno=''
+		select @money = SUM(ISNULL(total,0)) from @tmpa where custno=@custno
+		
+		declare cursor_table2 cursor for
+		select a.noa,a.plusmoney,a.minusmoney
+		from @tmpb a
+		where a.custno=@custno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa,@plus,@minus
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @custchgno = case when len(@custchgno)>0 then ',' else '' end+@noa
+				,@plusmoney=@plusmoney+ISNULL(@plus,0)
+				,@minusmoney=@minusmoney+ISNULL(@minus,0)
+			fetch next from cursor_table2
+			into @noa,@plus,@minus
+		end
+		close cursor_table2
+		deallocate cursor_table2	
+		
+		set @total = ISNULL(@money,0) + ISNULL(@plusmoney,0) - ISNULL(@minusmoney,0)
+		
+		select @noa='',@maxno1='',@maxno2=''
+		select top 1 @maxno1 = noa from view_trd where noa like @t_key+REPLACE(@t_datea,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+		select top 1 @maxno2 = noa from #trd_es where noa like @t_key+REPLACE(@t_datea,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+
+		set @noa = case when @maxno1>@maxno2 then @maxno1 else @maxno2 end
+		set @noa = case when len(@noa)=0 then @t_key+REPLACE(@t_datea,'/','')+'000' else @noa end
+
+		set @n = (charindex(left(RIGHT(@noa,3),1),@string)-1)*100 + cast(RIGHT(@noa,2) as int) + 1
+		set @noa = @t_key+REPLACE(@t_datea,'/','')+SUBSTRING(@string, floor(@n/100)+1,1) + right('00'+cast(@n%100 as nvarchar),2)
+
+		insert into #trd_es(noa,datea,custno,[money],plusmoney,minusmoney,total)
+		select @noa,@t_datea,@custno,@money,@plusmoney,@minusmoney,@total
+	
+		update #trds_es set noa=@noa where custno=@custno
+		
+		fetch next from cursor_table
+		into @custno
+	end
+	close cursor_table
+	deallocate cursor_table	
+	
+	update #trds_es set noq= RIGHT('00'+cast(b.recno as nvarchar),3)
+	from #trds_es a
+	left join (select sel,ROW_NUMBER()over(partition by noa order by sel) recno from #trds_es ) b on a.sel=b.sel
+	
+	update #trd_es set comp=ISNULL(b.comp,''),nick=ISNULL(b.nick,'')
+	from #trd_es a
+	left join cust b on a.custno=b.noa
+	---------------------------------------------------------------------------------------------------------
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	
+	declare @accy nvarchar(10) = left(@t_datea,3)
+	begin try
+		set @cmd =
+		"insert into trd"+@accy+"(noa,datea,custno,custchgno,[money],plusmoney,minusmoney,[total],memo)
+		select noa,datea,custno,custchgno,[money],plusmoney,minusmoney,[total],memo from #trd_es"
+		execute sp_executesql @cmd
+
+		set @cmd=
+		"insert into trds"+@accy+"(noa,noq,trandate,carno,straddr,product,mount,price,total,tranaccy,tranno,trannoq)
+		select noa,noq,trandate,carno,straddr,product,mount,price,total,tranaccy,tranno,trannoq from #trds_es"
+		execute sp_executesql @cmd
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		select 1 [status],'done' msg 
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select 0 [status],ERROR_MESSAGE() msg 
+	end catch
+
+	drop table #trd_es
+	drop table #trds_es;
+
+
 trd_rj:--trd_rj
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
