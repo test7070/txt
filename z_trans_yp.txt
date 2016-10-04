@@ -1,0 +1,301 @@
+﻿z_trans_yp01:--z_trans_yp01	
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_mon nvarchar(10)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	
+	set @t_mon = case when '#non'=[2] then '' else [2] end
+	set @t_bdriverno = case when '#non'=[3] then '' else [3] end
+	set @t_edriverno = case when '#non'=[4] then char(255) else [4] end
+	
+	declare @tmp table(
+		gno nvarchar(1),
+		driverno nvarchar(100),
+		driver nvarchar(200),
+		noa nvarchar(100),
+		oilnoa nvarchar(100),
+		mon nvarchar(10),
+		datea nvarchar(10),
+		custno nvarchar(100),
+		comp nvarchar(200),
+		productno nvarchar(100),
+		product nvarchar(200),
+		straddr nvarchar(max),
+		endaddr nvarchar(max),
+		price2 float,
+		mount4 float,
+		plusmoney float,
+		minusmoney float,
+		chgmemo nvarchar(max),
+		carno nvarchar(100),
+		bmiles float,
+		emiles float,
+		miles float,
+		oilrate float,
+		oilmount float,
+		oilprice float,
+		oiltotal float,
+		etcprice float,
+		total float
+	)
+	
+	insert @tmp
+	select '0',a.driverno,a.driver,a.noa,b.noa,@t_mon,a.trandate,a.custno,a.nick,a.uccno,a.product,a.straddr,isnull(a.endaddr,''),isnull(a.price2,0)*2,isnull(a.mount4,0)
+		,'','','',a.carno,b.bmiles,b.emiles,b.emiles-b.bmiles,b.rate,(b.emiles-b.bmiles)/nullif(b.rate,0)
+		,b.price,round(((b.emiles-b.bmiles)/nullif(b.rate,0)),0)*b.price,isnull(c.money,0),0
+	from view_trans a left join oil b on b.datea=a.trandate and a.carno=b.carno
+	left join etc c on a.driverno=c.driverno and a.trandate=c.datea
+	where left(a.trandate,6)=@t_mon
+	and a.driverno between @t_bdriverno and @t_edriverno
+	
+	insert @tmp(gno,datea,noa,plusmoney,minusmoney,chgmemo)
+	select '0',min(a.trandate),min(a.noa)noa,c.plusmoney,c.minusmoney,d.memo 
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno
+	left join view_tre c on c.noa=b.noa
+	left join carchg d on c.carchgno=d.noa
+	where left(a.trandate,6)=@t_mon
+	and a.driverno between @t_bdriverno and @t_edriverno
+	and (c.plusmoney!=0 or c.minusmoney!=0)
+	group by d.noa,c.plusmoney,c.minusmoney,d.memo
+	
+	insert @tmp(gno,driverno,price2,mount4)
+	select '3',driverno,price2,COUNT(price2)
+	from @tmp
+	where price2!=0 and gno=0
+	group by driverno,price2
+	
+	insert @tmp(gno,driverno,price2,mount4)
+	select '3',driverno,mount4,COUNT(mount4)
+	from @tmp
+	where mount4!=0 and gno=0
+	group by driverno,mount4
+	
+	insert @tmp(gno,driverno,price2,mount4)
+	select '4',driverno,price2,SUM(mount4)
+	from @tmp
+	group by driverno,price2
+		declare @tmpa table(
+		gno nvarchar(1),
+		rr int,
+		driverno nvarchar(100),
+		driver nvarchar(200),
+		noa nvarchar(100),
+		mon nvarchar(10),
+		datea nvarchar(10),
+		custno nvarchar(100),
+		comp nvarchar(200),
+		productno nvarchar(100),
+		product nvarchar(200),
+		straddr nvarchar(max),
+		endaddr nvarchar(max),
+		price2 float,
+		mount4 float,
+		plusmoney float,
+		minusmoney float,
+		chgmemo nvarchar(max),
+		carno nvarchar(100),
+		bmiles float,
+		emiles float,
+		miles float,
+		oilrate float,
+		oilmount float,
+		oilprice float,
+		oiltotal float,
+		etcprice float,
+		total float,
+		price float
+	)
+	
+	insert @tmpa
+	select '0','',driverno,max(driver),noa,max(mon),min(datea),max(custno),max(comp)
+			,max(productno),max(product),max(straddr),max(endaddr),sum(price2),sum(mount4)
+			,sum(plusmoney),sum(minusmoney),max(chgmemo),max(carno),sum(bmiles),sum(emiles)
+			,sum(miles),sum(oilrate),sum(oilmount),sum(oilprice),sum(oiltotal),sum(etcprice)
+			,0,0
+	from @tmp
+	where gno=0
+	group by driverno,noa
+	
+	update a
+	set rr=rx
+	from (select ROW_NUMBER()over(partition by datea,driverno order by noa)rx,rr from @tmpa) a
+	
+	update @tmpa
+	set gno=case when rr=1 then 0 else 1 end
+	
+	update a
+	set rr=rx
+	from (select ROW_NUMBER()over(partition by driverno order by datea,noa)rx,rr from @tmpa)a
+	
+	insert @tmpa(gno,rr,driverno,price2,mount4,plusmoney,minusmoney,miles,oilmount,oiltotal,etcprice)
+	select '2','9995',driverno,SUM(price2),sum(mount4),sum(plusmoney),sum(minusmoney),sum(miles),sum(oilmount),sum(oiltotal),sum(etcprice)
+	from @tmpa
+	group by driverno
+	
+	insert @tmpa(gno,rr,driverno,endaddr,price,mount4,total)
+	select '3',ROW_NUMBER()over(partition by driverno order by datea,noa),driverno,'',price2,mount4,price2*mount4
+	from @tmp
+	where gno=4 and price2!=0
+	
+	update @tmpa
+	set endaddr=case when rr=1 then '金額統計' else '' end,gno=case when rr=1 then 3 else 4 end,rr='9996'
+	where gno=3 
+	
+	insert @tmpa(gno,rr,driverno,total)
+	select '5','9997',driverno,SUM(total)
+	from @tmpa
+	where gno=3 or gno=4
+	group by driverno
+	
+	insert @tmpa(gno,rr,driverno,plusmoney,minusmoney,total)
+	select '6','9998',driverno,sum(plusmoney),sum(minusmoney),sum(total)+sum(plusmoney)-sum(minusmoney)
+	from @tmpa
+	where gno=2 or gno=5
+	group by driverno
+	
+	insert @tmpa(gno,rr,driverno)
+	select '7','9999',driverno
+	from @tmpa
+	group by driverno
+	
+	select 
+	gno,left(@t_mon,3)yy,right(@t_mon,2)mm,driverno,driver,right(datea,5)datea,comp,product,straddr,endaddr,chgmemo,carno
+	,price
+	,case when price2!=0 then dbo.getComma(price2,0)else null end price2
+	,case when mount4!=0 then dbo.getComma(mount4,0) else null end mount4
+	,case when plusmoney!=0 then dbo.getComma(plusmoney,0) else null end plusmoney
+	,case when minusmoney!=0 then dbo.getComma(minusmoney,0) else null end minusmoney
+	,dbo.getComma(bmiles,0)bmiles
+	,dbo.getComma(emiles,0)emiles
+	,dbo.getComma(miles,0)miles
+	,dbo.getComma(oilrate,3)oilrate
+	,dbo.getComma(oilmount,0)oilmount
+	,dbo.getComma(oilprice,3)oilprice
+	,dbo.getComma(oiltotal,0)oiltotal
+	,case when etcprice!=0 then dbo.getComma(etcprice,3) else null end etcprice
+	,dbo.getComma(total,0)total
+	from @tmpa
+	order by driverno,rr
+
+;
+-----------------------------------------------------------------------------------------------------------------------------------------------
+z_trans_yp02:--z_trans_yp02
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_mon nvarchar(10)
+set @t_mon = case when '#non' = '104/01' then '' else '104/01' end
+
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp3')is not null
+BEGIN
+	set @cmd = 'drop table #tmp3'
+	EXECUTE sp_executesql @cmd
+END
+------------車號<<Start>>------------
+create table #tmp(
+	noa nvarchar(100),
+	idno int,
+	pageno int,
+)
+insert #tmp(noa,pageno)
+select carno,'0' from view_trans where LEFT(trandate,6)=@t_mon and carno!='' order by carno
+
+insert #tmp(noa,pageno)
+select noa,'1' from #tmp group by noa
+
+delete #tmp where pageno='0'
+
+update a
+set idno=rr
+from (select ROW_NUMBER()over(PARTITION by pageno order by noa)rr,idno from #tmp)a
+
+-----更新頁數<<Start>>-----
+declare @pageno int=19
+update a
+set pageno=ceiling(cast(idno as float)/@pageno)
+from #tmp a
+-----更新頁數<<End>>-------
+
+create table #tmp2(
+	pageno int,
+	noa01 nvarchar(100),
+	noa02 nvarchar(100),
+	noa03 nvarchar(100),
+	noa04 nvarchar(100),
+	noa05 nvarchar(100),
+	noa06 nvarchar(100),
+	noa07 nvarchar(100),
+	noa08 nvarchar(100),
+	noa09 nvarchar(100),
+	noa10 nvarchar(100),
+	noa11 nvarchar(100),
+	noa12 nvarchar(100),
+	noa13 nvarchar(100),
+	noa14 nvarchar(100),
+	noa15 nvarchar(100),
+	noa16 nvarchar(100),
+	noa17 nvarchar(100),
+	noa18 nvarchar(100),
+	noa19 nvarchar(100)
+)
+
+insert #tmp2(pageno)
+select pageno from #tmp group by pageno
+
+declare @noacount int=1
+declare @tmp_noacol nvarchar(50)
+--while(@tmp_mon<=@t_emon and @moncount<=12)
+while(@noacount<=@pageno)
+begin
+	set @tmp_noacol='noa'+right('00'+cast(@noacount as nvarchar(10)),2)
+		
+	if(@noacount=1)
+		exec("update #tmp2 set "+@tmp_noacol+"=a.noa from #tmp a left join #tmp2 b on a.pageno=b.pageno where a.idno % "+@pageno+"="+@noacount)
+	else if(@noacount=19)
+		exec("update #tmp2 set "+@tmp_noacol+"=a.noa from #tmp a left join #tmp2 b on a.pageno=b.pageno where a.idno % "+@pageno+"=0")
+	else
+		exec("update #tmp2 set "+@tmp_noacol+"=a.noa from #tmp a left join #tmp2 b on a.pageno=b.pageno where a.idno % "+@pageno+"="+@noacount)
+	set @noacount=@noacount+1
+end
+------------車號<<End>>------------
+
+create table #tmp3(
+	gno nvarchar(1),
+	pageno int,
+	recno int,
+	title nvarchar(100),
+	a01 float,a02 float,a03 float,a04 float,a05 float,a06 float,a07 float,a08 float,a09 float,a10 float,a11 float,a12 float,a13 float,a14 float,a15 float,a16 float,a17 float,a18 float,a19 float
+)
+
+
+
+
+
+
+
+
+
+select * from #tmp2
+
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
