@@ -1,0 +1,851 @@
+﻿z_trans_yp01:--z_trans_yp01	
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_mon nvarchar(10)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	
+	set @t_mon = case when '#non'=[2] then '' else [2] end
+	set @t_bdriverno = case when '#non'=[3] then '' else [3] end
+	set @t_edriverno = case when '#non'=[4] then char(255) else [4] end
+	
+	declare @tmp table(
+		gno nvarchar(1),
+		driverno nvarchar(100),
+		driver nvarchar(200),
+		noa nvarchar(100),
+		oilnoa nvarchar(100),
+		mon nvarchar(10),
+		datea nvarchar(10),
+		custno nvarchar(100),
+		comp nvarchar(200),
+		productno nvarchar(100),
+		product nvarchar(200),
+		straddr nvarchar(max),
+		endaddr nvarchar(max),
+		price2 float,
+		mount4 float,
+		plusmoney float,
+		minusmoney float,
+		chgmemo nvarchar(max),
+		carno nvarchar(100),
+		bmiles float,
+		emiles float,
+		miles float,
+		oilrate float,
+		oilmount float,
+		oilprice float,
+		oiltotal float,
+		etcprice float,
+		total float
+	)
+	
+	insert @tmp
+	select '0',a.driverno,a.driver,a.noa,b.noa,@t_mon,a.trandate,a.custno,a.nick,a.uccno,a.product,a.straddr,isnull(a.endaddr,''),isnull(a.price2,0)*2,isnull(a.mount4,0)
+		,'','','',a.carno,b.bmiles,b.emiles,b.emiles-b.bmiles,b.rate,(b.emiles-b.bmiles)/nullif(b.rate,0)
+		,b.price,round(((b.emiles-b.bmiles)/nullif(b.rate,0)),0)*b.price,isnull(c.money,0),0
+	from view_trans a left join oil b on b.datea=a.trandate and a.carno=b.carno
+	left join etc c on a.driverno=c.driverno and a.trandate=c.datea
+	where left(a.trandate,6)=@t_mon
+	and a.driverno between @t_bdriverno and @t_edriverno
+	
+	insert @tmp(gno,datea,noa,plusmoney,minusmoney,chgmemo)
+	select '0',min(a.trandate),min(a.noa)noa,c.plusmoney,c.minusmoney,d.memo 
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno
+	left join view_tre c on c.noa=b.noa
+	left join carchg d on c.carchgno=d.noa
+	where left(a.trandate,6)=@t_mon
+	and a.driverno between @t_bdriverno and @t_edriverno
+	and (c.plusmoney!=0 or c.minusmoney!=0)
+	group by d.noa,c.plusmoney,c.minusmoney,d.memo
+	
+	insert @tmp(gno,driverno,price2,mount4)
+	select '3',driverno,price2,COUNT(price2)
+	from @tmp
+	where price2!=0 and gno=0
+	group by driverno,price2
+	
+	insert @tmp(gno,driverno,price2,mount4)
+	select '3',driverno,mount4,COUNT(mount4)
+	from @tmp
+	where mount4!=0 and gno=0
+	group by driverno,mount4
+	
+	insert @tmp(gno,driverno,price2,mount4)
+	select '4',driverno,price2,SUM(mount4)
+	from @tmp
+	group by driverno,price2
+		declare @tmpa table(
+		gno nvarchar(1),
+		rr int,
+		driverno nvarchar(100),
+		driver nvarchar(200),
+		noa nvarchar(100),
+		mon nvarchar(10),
+		datea nvarchar(10),
+		custno nvarchar(100),
+		comp nvarchar(200),
+		productno nvarchar(100),
+		product nvarchar(200),
+		straddr nvarchar(max),
+		endaddr nvarchar(max),
+		price2 float,
+		mount4 float,
+		plusmoney float,
+		minusmoney float,
+		chgmemo nvarchar(max),
+		carno nvarchar(100),
+		bmiles float,
+		emiles float,
+		miles float,
+		oilrate float,
+		oilmount float,
+		oilprice float,
+		oiltotal float,
+		etcprice float,
+		total float,
+		price float
+	)
+	
+	insert @tmpa
+	select '0','',driverno,max(driver),noa,max(mon),min(datea),max(custno),max(comp)
+			,max(productno),max(product),max(straddr),max(endaddr),sum(price2),sum(mount4)
+			,sum(plusmoney),sum(minusmoney),max(chgmemo),max(carno),sum(bmiles),sum(emiles)
+			,sum(miles),sum(oilrate),sum(oilmount),sum(oilprice),sum(oiltotal),sum(etcprice)
+			,0,0
+	from @tmp
+	where gno=0
+	group by driverno,noa
+	
+	update a
+	set rr=rx
+	from (select ROW_NUMBER()over(partition by datea,driverno order by noa)rx,rr from @tmpa) a
+	
+	update @tmpa
+	set gno=case when rr=1 then 0 else 1 end
+	
+	update a
+	set rr=rx
+	from (select ROW_NUMBER()over(partition by driverno order by datea,noa)rx,rr from @tmpa)a
+	
+	insert @tmpa(gno,rr,driverno,price2,mount4,plusmoney,minusmoney,miles,oilmount,oiltotal,etcprice)
+	select '2','9995',driverno,SUM(price2),sum(mount4),sum(plusmoney),sum(minusmoney),sum(miles),sum(oilmount),sum(oiltotal),sum(etcprice)
+	from @tmpa
+	group by driverno
+	
+	insert @tmpa(gno,rr,driverno,endaddr,price,mount4,total)
+	select '3',ROW_NUMBER()over(partition by driverno order by datea,noa),driverno,'',price2,mount4,price2*mount4
+	from @tmp
+	where gno=4 and price2!=0
+	
+	update @tmpa
+	set endaddr=case when rr=1 then '金額統計' else '' end,gno=case when rr=1 then 3 else 4 end,rr='9996'
+	where gno=3 
+	
+	insert @tmpa(gno,rr,driverno,total)
+	select '5','9997',driverno,SUM(total)
+	from @tmpa
+	where gno=3 or gno=4
+	group by driverno
+	
+	insert @tmpa(gno,rr,driverno,plusmoney,minusmoney,total)
+	select '6','9998',driverno,sum(plusmoney),sum(minusmoney),sum(total)+sum(plusmoney)-sum(minusmoney)
+	from @tmpa
+	where gno=2 or gno=5
+	group by driverno
+	
+	insert @tmpa(gno,rr,driverno)
+	select '7','9999',driverno
+	from @tmpa
+	group by driverno
+	
+	select 
+	gno,left(@t_mon,3)yy,right(@t_mon,2)mm,driverno,driver,right(datea,5)datea,comp,product,straddr,endaddr,chgmemo,carno
+	,price
+	,case when price2!=0 then dbo.getComma(price2,0)else null end price2
+	,case when mount4!=0 then dbo.getComma(mount4,0) else null end mount4
+	,case when plusmoney!=0 then dbo.getComma(plusmoney,0) else null end plusmoney
+	,case when minusmoney!=0 then dbo.getComma(minusmoney,0) else null end minusmoney
+	,dbo.getComma(bmiles,0)bmiles
+	,dbo.getComma(emiles,0)emiles
+	,dbo.getComma(miles,0)miles
+	,dbo.getComma(oilrate,3)oilrate
+	,dbo.getComma(oilmount,0)oilmount
+	,dbo.getComma(oilprice,3)oilprice
+	,dbo.getComma(oiltotal,0)oiltotal
+	,case when etcprice!=0 then dbo.getComma(etcprice,3) else null end etcprice
+	,dbo.getComma(total,0)total
+	from @tmpa
+	order by driverno,rr
+
+;
+-----------------------------------------------------------------------------------------------------------------------------------------------
+z_trans_yp02:--z_trans_yp02
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_mon nvarchar(10)
+set @t_mon = case when '#non'=[2] then '' else [2] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp3')is not null
+BEGIN
+	set @cmd = 'drop table #tmp3'
+	EXECUTE sp_executesql @cmd
+END
+
+------------車號<<Start>>------------
+create table #tmp(
+	noa nvarchar(100),
+	ton float,
+	driverno nvarchar(100),
+	driver nvarchar(100),
+	typea nvarchar(100),
+	datea nvarchar(10),
+	miles float,
+	total float,
+	idno int,
+	pageno int,
+	price1 float,--牌照稅
+	price2 float,--燃料稅
+	price3 float,--保險費
+	price4 float,--行費
+	price5 float,--代驗費
+	price6 float,--車輛折舊
+	price7 float,--GPRS費用
+	price8 float,--車輛輪胎
+	t1 float,
+	t2 float,--板台固定分攤成本
+	t3 float,--固定成本總計
+	
+	pricec1 float,--車輛輪胎
+	pricec2 float,--車輛油脂
+	pricec3 float,--車輛電瓶
+	pricec4 float,--車輛配材
+	pricec5 float,--車輛修車費
+	pricec6 float,--車輛輪胎修理費
+	pricec7 float,
+	pricec8 float,
+	pricec9 float,
+	pricec10 float,
+	pricec11 float,
+	pricec12 float,
+	pricec13 float,
+	tc1 float,
+	tc2 float,--板台固定分攤成本
+	tc3 float,--變動成本總計
+	msfee float,--管銷費用
+	ctotal float,--成本合計
+	tax float,--營所稅
+	ttotal float,--每車盈餘
+	carc float,--每車固定成本
+	atotal float,atotal2 float,atotal3 float,atotal4 float,atotal5 float,atotal6 float,atotal7 float,atotal8 float,atotal9 float,atotal10 float,
+	atotal11 float,atotal12 float,atotal13 float,atotal14 float,atotal15 float,atotal16 float,atotal17 float,atotal18 float,atotal19 float,atotal20 float,
+	atotal21 float,atotal22 float,atotal23 float,atotal24 float,atotal25 float,atotal26 float,atotal27 float,atotal28 float,atotal29 float,atotal30 float,
+	atotal31 float,atotal32 float,atotal33 float,atotal34 float--合計
+)
+
+
+insert #tmp(noa,pageno,ton,driverno,driver,typea,miles,total)
+select a.carno,'0',b.weight3,a.driverno,a.driver,b.carspecno,isnull(a.miles,0),isnull(a.total,0) 
+from view_trans a left join car2 b on a.carno=b.carno
+where LEFT(a.trandate,6)=@t_mon and a.carno!=''
+group by a.carno,b.weight3,a.driverno,a.driver,b.carspecno,a.total,a.miles
+
+insert #tmp(noa,pageno,datea)
+select a.noa,'0',b.trandate from #tmp a left join view_trans b on a.noa=b.carno 
+where LEFT(trandate,6)=@t_mon and carno!=''
+group by b.trandate,a.noa
+
+-----固定資產<<Start>>-----
+insert #tmp(noa,pageno,price1,price2,price3,price4,price5)
+select a.noa,'99'
+		,case when c.caritem='牌照稅' then c.outmoney else 0 end
+		,case when c.caritem='燃料費' then c.outmoney else 0 end
+		,case when c.caritem='保險費' then c.outmoney else 0 end
+		,case when c.caritem='行費' then c.outmoney else 0 end
+		,case when c.caritem='檢驗費' then c.outmoney else 0 end
+from #tmp a
+left join cara b on a.noa=b.carno
+left join caras c on b.noa=c.noa and b.carno=c.carno
+where b.mon=@t_mon and accno!=''
+group by a.noa,c.caritem,c.outmoney
+
+--車輛折舊
+insert #tmp(noa,pageno,price6)
+select a.noa,'99',c.depl
+from #tmp a left join view_accz b on a.noa=b.namea 
+left join view_acczt c on b.acc1=c.acc1 and b.accy=c.accy 
+where c.mon=@t_mon and c.accno!=''
+group by a.noa,c.depl
+
+--GPS,規費
+insert #tmp(noa,pageno,price7,price8)
+select a.noa,'99'
+,case when b.minusitemno='23' then b.minusmoney else 0 end
+,case when b.minusitemno='03' then b.minusmoney else 0 end
+from #tmp a left join carchg b on a.noa=b.carno
+where left(b.datea,6)=@t_mon and b.accno!=''
+group by a.noa,b.minusitemno,b.minusmoney
+-----固定資產<<end>>-----
+
+-----變動資產<<Start>>-----
+insert #tmp(noa,pageno,pricec1,pricec2,pricec3,pricec4,pricec5,pricec6)
+select a.noa,'99'
+,case when c.acc2='輪胎'then b.total else 0 end
+,case when c.acc2='油脂'then b.total else 0 end
+,case when c.acc2='電瓶'then b.total else 0 end
+,case when c.acc2='配材'then b.total else 0 end
+,case when c.acc2='修繕費' then b.total else 0 end
+,case when c.acc2='輪胎修繕費' then b.total else 0 end
+from 
+#tmp a left join fixa b on a.noa=b.carno
+left join paybs c on b.noa=c.rc2no
+left join payb d on c.noa=d.noa
+where b.noa=c.rc2no
+and d.accno!=''
+and d.mon=@t_mon
+group by a.noa,c.acc2,b.wacc1,b.total
+
+--柴油、電話費、通行費、雜支、途中修車費,裝卸費
+insert #tmp(noa,pageno,pricec7,pricec8,pricec9,pricec10,pricec11,pricec12)
+select a.noa,'99'
+,case when b.minusitemno='26' then b.minusmoney else 0 end
+,case when b.plusitemno='11' then b.plusmoney else 0 end
+,case when b.plusitemno='01'then b.plusmoney else 0 end
+,case when b.minusitemno='16' then b.minusmoney else 0 end
+,case when b.minusitemno='11' then b.plusmoney else 0 end
+,case when b.plusitemno='06' then b.plusmoney else 0 end
+from #tmp a left join carchg b on a.noa=b.carno
+where left(b.datea,6)=@t_mon and b.accno!=''
+group by a.noa,b.acc2,b.minusitemno,b.minusmoney,b.plusmoney,b.plusitemno
+
+--薪資
+insert #tmp(noa,pageno,pricec13)
+select a.noa,'99',b.total
+from #tmp a left join carsals b on a.driverno=b.driverno
+left join carsal c on b.noa=c.noa
+where c.noa=@t_mon and c.accno!=''
+group by a.noa,b.total
+-----變動資產<<end>>-----
+
+
+insert #tmp(noa,pageno,ton,driverno,driver,typea,datea,miles,total,price1,price2,price3,price4,price5,price6,price7,price8,t2,pricec1,pricec2,pricec3,pricec4,pricec5,pricec6,pricec7,pricec8,pricec9,pricec10,pricec11,pricec12,pricec13,tc2)
+select noa,'1',max(ton),max(driverno),max(driver),max(typea),count(datea),sum(miles),sum(total),SUM(price1),SUM(price2),SUM(price3),SUM(price4),SUM(price5),SUM(price6),SUM(price7),SUM(price8),'0'
+		,sum(pricec1),sum(pricec2),sum(pricec3),sum(pricec4),sum(pricec5),sum(pricec6),sum(pricec7),sum(pricec8),sum(pricec9),sum(pricec10),sum(pricec11),sum(pricec12),sum(pricec13),'0'
+from #tmp
+group by noa
+
+delete #tmp where pageno='0' or pageno='99'
+
+update #tmp
+set
+ton=case when ton!=0 then ton else null end, 
+miles=case when miles!=0 then miles else null end,
+total=case when total!=0 then total else null end,
+price1=case when price1!=0 then price1 else null end,
+price2=case when price2!=0 then price2 else null end,
+price3=case when price3!=0 then price3 else null end,
+price4=case when price4!=0 then price4 else null end,
+price5=case when price5!=0 then price5 else null end,
+price6=case when price6!=0 then price6 else null end,
+price7=case when price7!=0 then price7 else null end,
+price8=case when price8!=0 then price8 else null end,
+pricec1=case when pricec1!=0 then pricec1 else null end,
+pricec2=case when pricec2!=0 then pricec2 else null end,
+pricec3=case when pricec3!=0 then pricec3 else null end,
+pricec4=case when pricec4!=0 then pricec4 else null end,
+pricec5=case when pricec5!=0 then pricec5 else null end,
+pricec6=case when pricec6!=0 then pricec6 else null end,
+pricec7=case when pricec7!=0 then pricec7 else null end,
+pricec8=case when pricec8!=0 then pricec8 else null end,
+pricec9=case when pricec9!=0 then pricec9 else null end,
+pricec10=case when pricec10!=0 then pricec10 else null end,
+pricec11=case when pricec11!=0 then pricec11 else null end,
+pricec12=case when pricec12!=0 then pricec12 else null end,
+pricec13=case when pricec13!=0 then pricec13 else null end,
+t1=isnull(price1,0)+isnull(price2,0)+isnull(price3,0)+isnull(price4,0)+isnull(price5,0)+isnull(price6,0)+isnull(price7,0)+isnull(price8,0),
+tc1=isnull(pricec1,0)+isnull(pricec2,0)+isnull(pricec3,0)+isnull(pricec4,0)+isnull(pricec5,0)+isnull(pricec6,0)+isnull(pricec7,0)+isnull(pricec8,0)+isnull(pricec9,0)+isnull(pricec10,0)+isnull(pricec11,0)+isnull(pricec12,0)+isnull(pricec13,0),
+msfee=round(total*0.09,0),tax=round(total*0.012,0),carc=round((total/nullif(miles,0)),0)
+
+update #tmp
+set t3=t1-t2,tc3=tc1-tc2,ctotal=t1-t2+tc1-tc2+msfee
+
+update #tmp
+set ttotal=total-ctotal-tax
+
+update a
+set idno=rr
+from (select ROW_NUMBER()over(PARTITION by pageno order by typea,ton desc,noa)rr,idno from #tmp)a
+-----更新頁數<<Start>>-----
+declare @pageno int=19
+update a
+set pageno=ceiling(cast(idno as float)/@pageno)
+from #tmp a
+-----更新頁數<<End>>-------
+
+insert #tmp(pageno,atotal,atotal2,atotal3,atotal4,atotal5,atotal6,atotal7,atotal8,atotal9,atotal10,
+	atotal11,atotal12,atotal13,atotal14,atotal15,atotal16,atotal17,atotal18,atotal19,atotal20,
+	atotal21,atotal22,atotal23,atotal24,atotal25,atotal26,atotal27,atotal28,atotal29,atotal30,
+	atotal31,atotal32,atotal33,atotal34)
+select pageno,SUM(miles),SUM(total),SUM(price1),SUM(price2),SUM(price3),SUM(price4),SUM(price5),SUM(price6),SUM(price7),SUM(price8),SUM(t1),SUM(t2),SUM(t3)
+		,sum(pricec1),sum(pricec2),sum(pricec3),sum(pricec4),sum(pricec5),sum(pricec6),sum(pricec7),sum(pricec8),sum(pricec9),sum(pricec10),sum(pricec11)
+		,sum(pricec12),sum(pricec13),SUM(tc1),SUM(tc2),SUM(tc3),SUM(msfee),SUM(ctotal),SUM(tax),SUM(ttotal),SUM(carc)
+from #tmp
+group by pageno
+
+create table #tmp2(
+	pageno int,
+	a1 nvarchar(100),
+	ac1 nvarchar(100),
+	acc1 nvarchar(100),
+	acc2 nvarchar(100),
+	acc3 nvarchar(100),	
+	acc4 nvarchar(100),	
+	acc5 nvarchar(100),	
+	acc6 nvarchar(100),	
+	acc7 nvarchar(100),	
+	acc8 nvarchar(100),
+	accc1 nvarchar(100),	
+	accc2 nvarchar(100),
+	accc3 nvarchar(100),
+	accc4 nvarchar(100),
+	accc5 nvarchar(100),
+	accc6 nvarchar(100),
+	accc7 nvarchar(100),
+	accc8 nvarchar(100),
+	accc9 nvarchar(100),
+	accc10 nvarchar(100),
+	accc11 nvarchar(100),
+	accc12 nvarchar(100),
+	accc13 nvarchar(100),
+)
+insert #tmp2(pageno)
+select pageno from #tmp group by pageno
+
+insert #tmp2(pageno,a1,ac1)
+select '0',acc1,caritem
+from  cara a left join caras b on a.noa=b.noa where  acc1='2195.16' or acc1='4102.' group by acc1,acc2,caritem
+
+insert #tmp2(pageno,a1,ac1)
+select '0',c.acc1,a.namea2
+from view_accz a left join view_acczt b on a.noa=b.acc1
+left join acc104_1 c on LEFT(a.acc1,5)=c.acc1
+group by c.acc1,a.namea2
+
+insert #tmp2(pageno,a1,ac1)
+select '0',noa,item
+from chgitem 
+
+insert #tmp2(pageno,a1,ac1)
+select '0',b.acc1,b.acc2
+from 
+fixa a 
+left join paybs b on a.noa=b.rc2no
+left join payb c on c.noa=b.noa
+where a.noa=b.rc2no
+group by b.acc1,b.acc2
+
+insert #tmp2(pageno,a1,ac1)
+select '0',b.accc5,b.accc6
+from carsal a left join view_acccs103_1 b on a.accno=b.accc3
+where right(b.accc6,2)='薪資'
+group by b.accc5,b.accc6
+
+
+declare @noacount int=1
+while(@noacount<=@pageno)
+begin
+	
+		exec("update #tmp2 set acc1='行車費用-'+a.ac1 from (select ac1 from #tmp2 where ac1='牌照稅')a")
+		exec("update #tmp2 set acc2='行車費用-'+a.ac1 from (select ac1 from #tmp2 where ac1='燃料費')a")
+		exec("update #tmp2 set acc3='行車費用-'+a.ac1 from (select ac1 from #tmp2 where ac1='保險費')a")
+		exec("update #tmp2 set acc4='行車費用-'+a.ac1 from (select ac1 from #tmp2 where ac1='行費')a")
+		exec("update #tmp2 set acc5='行車費用-'+a.ac1 from (select ac1 from #tmp2 where ac1='檢驗費')a")
+		exec("update #tmp2 set acc6='行車費用-車輛'+a.ac1 from (select ac1 from #tmp2 where a1='1461.')a")
+		exec("update #tmp2 set acc7='行車費用-'+a.ac1 from (select ac1 from #tmp2 where a1='23')a")
+		exec("update #tmp2 set acc8='行車費用-'+a.ac1 from (select ac1 from #tmp2 where a1='03')a")
+		exec("update #tmp2 set accc1='行車費用-車輛'+a.ac1 from (select ac1 from #tmp2 where ac1='輪胎')a")
+		exec("update #tmp2 set accc2='行車費用-車輛油脂'")
+		exec("update #tmp2 set accc3='行車費用-車輛電瓶'")
+		exec("update #tmp2 set accc4='行車費用-車輛配材'")
+		exec("update #tmp2 set accc5='行車費用-'+a.ac1 from (select ac1 from #tmp2 where ac1='修繕費')a")
+		exec("update #tmp2 set accc6='行車費用-輪胎修繕費'")
+		exec("update #tmp2 set accc7='行車費用-'+a.ac1 from (select ac1 from #tmp2 where a1='26')a")
+		exec("update #tmp2 set accc8='行車費用-電話費' from (select ac1 from #tmp2 where a1='11')a")
+		exec("update #tmp2 set accc9='行車費用-'+a.ac1 from (select ac1 from #tmp2 where a1='01')a")
+		exec("update #tmp2 set accc10='行車費用-'+a.ac1 from (select ac1 from #tmp2 where a1='16')a")
+		exec("update #tmp2 set accc11='行車費用-途中修車費' from (select ac1 from #tmp2 where a1='11')a")
+		exec("update #tmp2 set accc12='行車費用-裝卸費' from (select ac1 from #tmp2 where a1='06')a")
+		exec("update #tmp2 set accc13='行車費用-'+a.ac1 from (select ac1 from #tmp2 where a1='5850.07')a")
+	set @noacount=@noacount+1
+end
+
+delete #tmp2 where pageno='0'
+
+create table #tmp3(
+	gno nvarchar(1),
+	pageno int,
+	atotal nvarchar(20),atotal2 nvarchar(20),atotal3 nvarchar(20),atotal4 nvarchar(20),atotal5 nvarchar(20),atotal6 nvarchar(20),atotal7 nvarchar(20),atotal8 nvarchar(20),atotal9 nvarchar(20),atotal10 nvarchar(20),
+	atotal11 nvarchar(20),atotal12 nvarchar(20),atotal13 nvarchar(20),atotal14 nvarchar(20),atotal15 nvarchar(20),atotal16 nvarchar(20),atotal17 nvarchar(20),atotal18 nvarchar(20),atotal19 nvarchar(20),atotal20 nvarchar(20),
+	atotal21 nvarchar(20),atotal22 nvarchar(20),atotal23 nvarchar(20),atotal24 nvarchar(20),atotal25 nvarchar(20),atotal26 nvarchar(20),atotal27 nvarchar(20),atotal28 nvarchar(20),atotal29 nvarchar(20),atotal30 nvarchar(20),
+	atotal31 nvarchar(20),atotal32 nvarchar(20),atotal33 nvarchar(20),atotal34 nvarchar(20),
+	noa01 nvarchar(100),noa02 nvarchar(100),noa03 nvarchar(100),noa04 nvarchar(100),noa05 nvarchar(100),
+	noa06 nvarchar(100),noa07 nvarchar(100),noa08 nvarchar(100),noa09 nvarchar(100),noa10 nvarchar(100),
+	noa11 nvarchar(100),noa12 nvarchar(100),noa13 nvarchar(100),noa14 nvarchar(100),noa15 nvarchar(100),
+	noa16 nvarchar(100),noa17 nvarchar(100),noa18 nvarchar(100),noa19 nvarchar(100),
+	a01 float,a02 float,a03 float,a04 float,a05 float,a06 float,a07 float,a08 float,a09 float,a10 float,
+	a11 float,a12 float,a13 float,a14 float,a15 float,a16 float,a17 float,a18 float,a19 float,
+	b01 nvarchar(20),b02 nvarchar(20),b03 nvarchar(20),b04 nvarchar(20),b05 nvarchar(20),
+	b06 nvarchar(20),b07 nvarchar(20),b08 nvarchar(20),b09 nvarchar(20),b10 nvarchar(20),
+	b11 nvarchar(20),b12 nvarchar(20),b13 nvarchar(20),b14 nvarchar(20),b15 nvarchar(20),
+	b16 nvarchar(20),b17 nvarchar(20),b18 nvarchar(20),b19 nvarchar(20),
+	c01 nvarchar(20),c02 nvarchar(20),c03 nvarchar(20),c04 nvarchar(20),c05 nvarchar(20),
+	c06 nvarchar(20),c07 nvarchar(20),c08 nvarchar(20),c09 nvarchar(20),c10 nvarchar(20),
+	c11 nvarchar(20),c12 nvarchar(20),c13 nvarchar(20),c14 nvarchar(20),c15 nvarchar(20),
+	c16 nvarchar(20),c17 nvarchar(20),c18 nvarchar(20),c19 nvarchar(20),
+	d01 nvarchar(20),d02 nvarchar(20),d03 nvarchar(20),d04 nvarchar(20),d05 nvarchar(20),d06 nvarchar(20),d07 nvarchar(20),d08 nvarchar(20),d09 nvarchar(20),d10 nvarchar(20),
+	d11 nvarchar(20),d12 nvarchar(20),d13 nvarchar(20),d14 nvarchar(20),d15 nvarchar(20),d16 nvarchar(20),d17 nvarchar(20),d18 nvarchar(20),d19 nvarchar(20),
+	e01 nvarchar(20),e02 nvarchar(20),e03 nvarchar(20),e04 nvarchar(20),e05 nvarchar(20),e06 nvarchar(20),e07 nvarchar(20),e08 nvarchar(20),e09 nvarchar(20),e10 nvarchar(20),
+	e11 nvarchar(20),e12 nvarchar(20),e13 nvarchar(20),e14 nvarchar(20),e15 nvarchar(20),e16 nvarchar(20),e17 nvarchar(20),e18 nvarchar(20),e19 nvarchar(20),
+	al01 nvarchar(20),al02 nvarchar(20),al03 nvarchar(20),al04 nvarchar(20),al05 nvarchar(20),al06 nvarchar(20),al07 nvarchar(20),al08 nvarchar(20),al09 nvarchar(20),al10 nvarchar(20),
+	al11 nvarchar(20),al12 nvarchar(20),al13 nvarchar(20),al14 nvarchar(20),al15 nvarchar(20),al16 nvarchar(20),al17 nvarchar(20),al18 nvarchar(20),al19 nvarchar(20),
+	am01 nvarchar(20),am02 nvarchar(20),am03 nvarchar(20),am04 nvarchar(20),am05 nvarchar(20),am06 nvarchar(20),am07 nvarchar(20),am08 nvarchar(20),am09 nvarchar(20),am10 nvarchar(20),
+	am11 nvarchar(20),am12 nvarchar(20),am13 nvarchar(20),am14 nvarchar(20),am15 nvarchar(20),am16 nvarchar(20),am17 nvarchar(20),am18 nvarchar(20),am19 nvarchar(20),
+	f01 nvarchar(20),f02 nvarchar(20),f03 nvarchar(20),f04 nvarchar(20),f05 nvarchar(20),f06 nvarchar(20),f07 nvarchar(20),f08 nvarchar(20),f09 nvarchar(20),f10 nvarchar(20),
+	f11 nvarchar(20),f12 nvarchar(20),f13 nvarchar(20),f14 nvarchar(20),f15 nvarchar(20),f16 nvarchar(20),f17 nvarchar(20),f18 nvarchar(20),f19 nvarchar(20),
+	h01 nvarchar(20),h02 nvarchar(20),h03 nvarchar(20),h04 nvarchar(20),h05 nvarchar(20),h06 nvarchar(20),h07 nvarchar(20),h08 nvarchar(20),h09 nvarchar(20),h10 nvarchar(20),
+	h11 nvarchar(20),h12 nvarchar(20),h13 nvarchar(20),h14 nvarchar(20),h15 nvarchar(20),h16 nvarchar(20),h17 nvarchar(20),h18 nvarchar(20),h19 nvarchar(20),
+	i01 nvarchar(20),i02 nvarchar(20),i03 nvarchar(20),i04 nvarchar(20),i05 nvarchar(20),i06 nvarchar(20),i07 nvarchar(20),i08 nvarchar(20),i09 nvarchar(20),i10 nvarchar(20),
+	i11 nvarchar(20),i12 nvarchar(20),i13 nvarchar(20),i14 nvarchar(20),i15 nvarchar(20),i16 nvarchar(20),i17 nvarchar(20),i18 nvarchar(20),i19 nvarchar(20),
+	j01 nvarchar(20),j02 nvarchar(20),j03 nvarchar(20),j04 nvarchar(20),j05 nvarchar(20),j06 nvarchar(20),j07 nvarchar(20),j08 nvarchar(20),j09 nvarchar(20),j10 nvarchar(20),
+	j11 nvarchar(20),j12 nvarchar(20),j13 nvarchar(20),j14 nvarchar(20),j15 nvarchar(20),j16 nvarchar(20),j17 nvarchar(20),j18 nvarchar(20),j19 nvarchar(20),
+	k01 nvarchar(20),k02 nvarchar(20),k03 nvarchar(20),k04 nvarchar(20),k05 nvarchar(20),k06 nvarchar(20),k07 nvarchar(20),k08 nvarchar(20),k09 nvarchar(20),k10 nvarchar(20),
+	k11 nvarchar(20),k12 nvarchar(20),k13 nvarchar(20),k14 nvarchar(20),k15 nvarchar(20),k16 nvarchar(20),k17 nvarchar(20),k18 nvarchar(20),k19 nvarchar(20),
+	l01 nvarchar(20),l02 nvarchar(20),l03 nvarchar(20),l04 nvarchar(20),l05 nvarchar(20),l06 nvarchar(20),l07 nvarchar(20),l08 nvarchar(20),l09 nvarchar(20),l10 nvarchar(20),
+	l11 nvarchar(20),l12 nvarchar(20),l13 nvarchar(20),l14 nvarchar(20),l15 nvarchar(20),l16 nvarchar(20),l17 nvarchar(20),l18 nvarchar(20),l19 nvarchar(20),
+	m01 nvarchar(20),m02 nvarchar(20),m03 nvarchar(20),m04 nvarchar(20),m05 nvarchar(20),m06 nvarchar(20),m07 nvarchar(20),m08 nvarchar(20),m09 nvarchar(20),m10 nvarchar(20),
+	m11 nvarchar(20),m12 nvarchar(20),m13 nvarchar(20),m14 nvarchar(20),m15 nvarchar(20),m16 nvarchar(20),m17 nvarchar(20),m18 nvarchar(20),m19 nvarchar(20),
+	n01 nvarchar(20),n02 nvarchar(20),n03 nvarchar(20),n04 nvarchar(20),n05 nvarchar(20),n06 nvarchar(20),n07 nvarchar(20),n08 nvarchar(20),n09 nvarchar(20),n10 nvarchar(20),
+	n11 nvarchar(20),n12 nvarchar(20),n13 nvarchar(20),n14 nvarchar(20),n15 nvarchar(20),n16 nvarchar(20),n17 nvarchar(20),n18 nvarchar(20),n19 nvarchar(20),
+	o01 nvarchar(20),o02 nvarchar(20),o03 nvarchar(20),o04 nvarchar(20),o05 nvarchar(20),o06 nvarchar(20),o07 nvarchar(20),o08 nvarchar(20),o09 nvarchar(20),o10 nvarchar(20),
+	o11 nvarchar(20),o12 nvarchar(20),o13 nvarchar(20),o14 nvarchar(20),o15 nvarchar(20),o16 nvarchar(20),o17 nvarchar(20),o18 nvarchar(20),o19 nvarchar(20),
+	p01 nvarchar(20),p02 nvarchar(20),p03 nvarchar(20),p04 nvarchar(20),p05 nvarchar(20),p06 nvarchar(20),p07 nvarchar(20),p08 nvarchar(20),p09 nvarchar(20),p10 nvarchar(20),
+	p11 nvarchar(20),p12 nvarchar(20),p13 nvarchar(20),p14 nvarchar(20),p15 nvarchar(20),p16 nvarchar(20),p17 nvarchar(20),p18 nvarchar(20),p19 nvarchar(20),
+	q01 nvarchar(20),q02 nvarchar(20),q03 nvarchar(20),q04 nvarchar(20),q05 nvarchar(20),q06 nvarchar(20),q07 nvarchar(20),q08 nvarchar(20),q09 nvarchar(20),q10 nvarchar(20),
+	q11 nvarchar(20),q12 nvarchar(20),q13 nvarchar(20),q14 nvarchar(20),q15 nvarchar(20),q16 nvarchar(20),q17 nvarchar(20),q18 nvarchar(20),q19 nvarchar(20),
+	r01 nvarchar(20),r02 nvarchar(20),r03 nvarchar(20),r04 nvarchar(20),r05 nvarchar(20),r06 nvarchar(20),r07 nvarchar(20),r08 nvarchar(20),r09 nvarchar(20),r10 nvarchar(20),
+	r11 nvarchar(20),r12 nvarchar(20),r13 nvarchar(20),r14 nvarchar(20),r15 nvarchar(20),r16 nvarchar(20),r17 nvarchar(20),r18 nvarchar(20),r19 nvarchar(20),
+	s01 nvarchar(20),s02 nvarchar(20),s03 nvarchar(20),s04 nvarchar(20),s05 nvarchar(20),s06 nvarchar(20),s07 nvarchar(20),s08 nvarchar(20),s09 nvarchar(20),s10 nvarchar(20),
+	s11 nvarchar(20),s12 nvarchar(20),s13 nvarchar(20),s14 nvarchar(20),s15 nvarchar(20),s16 nvarchar(20),s17 nvarchar(20),s18 nvarchar(20),s19 nvarchar(20),
+	t01 nvarchar(20),t02 nvarchar(20),t03 nvarchar(20),t04 nvarchar(20),t05 nvarchar(20),t06 nvarchar(20),t07 nvarchar(20),t08 nvarchar(20),t09 nvarchar(20),t10 nvarchar(20),
+	t11 nvarchar(20),t12 nvarchar(20),t13 nvarchar(20),t14 nvarchar(20),t15 nvarchar(20),t16 nvarchar(20),t17 nvarchar(20),t18 nvarchar(20),t19 nvarchar(20),
+	u01 nvarchar(20),u02 nvarchar(20),u03 nvarchar(20),u04 nvarchar(20),u05 nvarchar(20),u06 nvarchar(20),u07 nvarchar(20),u08 nvarchar(20),u09 nvarchar(20),u10 nvarchar(20),
+	u11 nvarchar(20),u12 nvarchar(20),u13 nvarchar(20),u14 nvarchar(20),u15 nvarchar(20),u16 nvarchar(20),u17 nvarchar(20),u18 nvarchar(20),u19 nvarchar(20),
+	v01 nvarchar(20),v02 nvarchar(20),v03 nvarchar(20),v04 nvarchar(20),v05 nvarchar(20),v06 nvarchar(20),v07 nvarchar(20),v08 nvarchar(20),v09 nvarchar(20),v10 nvarchar(20),
+	v11 nvarchar(20),v12 nvarchar(20),v13 nvarchar(20),v14 nvarchar(20),v15 nvarchar(20),v16 nvarchar(20),v17 nvarchar(20),v18 nvarchar(20),v19 nvarchar(20),
+	w01 nvarchar(20),w02 nvarchar(20),w03 nvarchar(20),w04 nvarchar(20),w05 nvarchar(20),w06 nvarchar(20),w07 nvarchar(20),w08 nvarchar(20),w09 nvarchar(20),w10 nvarchar(20),
+	w11 nvarchar(20),w12 nvarchar(20),w13 nvarchar(20),w14 nvarchar(20),w15 nvarchar(20),w16 nvarchar(20),w17 nvarchar(20),w18 nvarchar(20),w19 nvarchar(20),
+	x01 nvarchar(20),x02 nvarchar(20),x03 nvarchar(20),x04 nvarchar(20),x05 nvarchar(20),x06 nvarchar(20),x07 nvarchar(20),x08 nvarchar(20),x09 nvarchar(20),x10 nvarchar(20),
+	x11 nvarchar(20),x12 nvarchar(20),x13 nvarchar(20),x14 nvarchar(20),x15 nvarchar(20),x16 nvarchar(20),x17 nvarchar(20),x18 nvarchar(20),x19 nvarchar(20),
+	y01 nvarchar(20),y02 nvarchar(20),y03 nvarchar(20),y04 nvarchar(20),y05 nvarchar(20),y06 nvarchar(20),y07 nvarchar(20),y08 nvarchar(20),y09 nvarchar(20),y10 nvarchar(20),
+	y11 nvarchar(20),y12 nvarchar(20),y13 nvarchar(20),y14 nvarchar(20),y15 nvarchar(20),y16 nvarchar(20),y17 nvarchar(20),y18 nvarchar(20),y19 nvarchar(20),
+	z01 nvarchar(20),z02 nvarchar(20),z03 nvarchar(20),z04 nvarchar(20),z05 nvarchar(20),z06 nvarchar(20),z07 nvarchar(20),z08 nvarchar(20),z09 nvarchar(20),z10 nvarchar(20),
+	z11 nvarchar(20),z12 nvarchar(20),z13 nvarchar(20),z14 nvarchar(20),z15 nvarchar(20),z16 nvarchar(20),z17 nvarchar(20),z18 nvarchar(20),z19 nvarchar(20),
+	aa01 nvarchar(20),aa02 nvarchar(20),aa03 nvarchar(20),aa04 nvarchar(20),aa05 nvarchar(20),aa06 nvarchar(20),aa07 nvarchar(20),aa08 nvarchar(20),aa09 nvarchar(20),aa10 nvarchar(20),
+	aa11 nvarchar(20),aa12 nvarchar(20),aa13 nvarchar(20),aa14 nvarchar(20),aa15 nvarchar(20),aa16 nvarchar(20),aa17 nvarchar(20),aa18 nvarchar(20),aa19 nvarchar(20),
+	ab01 nvarchar(20),ab02 nvarchar(20),ab03 nvarchar(20),ab04 nvarchar(20),ab05 nvarchar(20),ab06 nvarchar(20),ab07 nvarchar(20),ab08 nvarchar(20),ab09 nvarchar(20),ab10 nvarchar(20),
+	ab11 nvarchar(20),ab12 nvarchar(20),ab13 nvarchar(20),ab14 nvarchar(20),ab15 nvarchar(20),ab16 nvarchar(20),ab17 nvarchar(20),ab18 nvarchar(20),ab19 nvarchar(20),
+	ac01 nvarchar(20),ac02 nvarchar(20),ac03 nvarchar(20),ac04 nvarchar(20),ac05 nvarchar(20),ac06 nvarchar(20),ac07 nvarchar(20),ac08 nvarchar(20),ac09 nvarchar(20),ac10 nvarchar(20),
+	ac11 nvarchar(20),ac12 nvarchar(20),ac13 nvarchar(20),ac14 nvarchar(20),ac15 nvarchar(20),ac16 nvarchar(20),ac17 nvarchar(20),ac18 nvarchar(20),ac19 nvarchar(20),
+	ad01 nvarchar(20),ad02 nvarchar(20),ad03 nvarchar(20),ad04 nvarchar(20),ad05 nvarchar(20),ad06 nvarchar(20),ad07 nvarchar(20),ad08 nvarchar(20),ad09 nvarchar(20),ad10 nvarchar(20),
+	ad11 nvarchar(20),ad12 nvarchar(20),ad13 nvarchar(20),ad14 nvarchar(20),ad15 nvarchar(20),ad16 nvarchar(20),ad17 nvarchar(20),ad18 nvarchar(20),ad19 nvarchar(20),
+	ae01 nvarchar(20),ae02 nvarchar(20),ae03 nvarchar(20),ae04 nvarchar(20),ae05 nvarchar(20),ae06 nvarchar(20),ae07 nvarchar(20),ae08 nvarchar(20),ae09 nvarchar(20),ae10 nvarchar(20),
+	ae11 nvarchar(20),ae12 nvarchar(20),ae13 nvarchar(20),ae14 nvarchar(20),ae15 nvarchar(20),ae16 nvarchar(20),ae17 nvarchar(20),ae18 nvarchar(20),ae19 nvarchar(20),
+	af01 nvarchar(20),af02 nvarchar(20),af03 nvarchar(20),af04 nvarchar(20),af05 nvarchar(20),af06 nvarchar(20),af07 nvarchar(20),af08 nvarchar(20),af09 nvarchar(20),af10 nvarchar(20),
+	af11 nvarchar(20),af12 nvarchar(20),af13 nvarchar(20),af14 nvarchar(20),af15 nvarchar(20),af16 nvarchar(20),af17 nvarchar(20),af18 nvarchar(20),af19 nvarchar(20),
+	ag01 nvarchar(20),ag02 nvarchar(20),ag03 nvarchar(20),ag04 nvarchar(20),ag05 nvarchar(20),ag06 nvarchar(20),ag07 nvarchar(20),ag08 nvarchar(20),ag09 nvarchar(20),ag10 nvarchar(20),
+	ag11 nvarchar(20),ag12 nvarchar(20),ag13 nvarchar(20),ag14 nvarchar(20),ag15 nvarchar(20),ag16 nvarchar(20),ag17 nvarchar(20),ag18 nvarchar(20),ag19 nvarchar(20),
+	ah01 nvarchar(20),ah02 nvarchar(20),ah03 nvarchar(20),ah04 nvarchar(20),ah05 nvarchar(20),ah06 nvarchar(20),ah07 nvarchar(20),ah08 nvarchar(20),ah09 nvarchar(20),ah10 nvarchar(20),
+	ah11 nvarchar(20),ah12 nvarchar(20),ah13 nvarchar(20),ah14 nvarchar(20),ah15 nvarchar(20),ah16 nvarchar(20),ah17 nvarchar(20),ah18 nvarchar(20),ah19 nvarchar(20),
+	ai01 nvarchar(20),ai02 nvarchar(20),ai03 nvarchar(20),ai04 nvarchar(20),ai05 nvarchar(20),ai06 nvarchar(20),ai07 nvarchar(20),ai08 nvarchar(20),ai09 nvarchar(20),ai10 nvarchar(20),
+	ai11 nvarchar(20),ai12 nvarchar(20),ai13 nvarchar(20),ai14 nvarchar(20),ai15 nvarchar(20),ai16 nvarchar(20),ai17 nvarchar(20),ai18 nvarchar(20),ai19 nvarchar(20),
+	aj01 nvarchar(20),aj02 nvarchar(20),aj03 nvarchar(20),aj04 nvarchar(20),aj05 nvarchar(20),aj06 nvarchar(20),aj07 nvarchar(20),aj08 nvarchar(20),aj09 nvarchar(20),aj10 nvarchar(20),
+	aj11 nvarchar(20),aj12 nvarchar(20),aj13 nvarchar(20),aj14 nvarchar(20),aj15 nvarchar(20),aj16 nvarchar(20),aj17 nvarchar(20),aj18 nvarchar(20),aj19 nvarchar(20),
+	ak01 nvarchar(20),ak02 nvarchar(20),ak03 nvarchar(20),ak04 nvarchar(20),ak05 nvarchar(20),ak06 nvarchar(20),ak07 nvarchar(20),ak08 nvarchar(20),ak09 nvarchar(20),ak10 nvarchar(20),
+	ak11 nvarchar(20),ak12 nvarchar(20),ak13 nvarchar(20),ak14 nvarchar(20),ak15 nvarchar(20),ak16 nvarchar(20),ak17 nvarchar(20),ak18 nvarchar(20),ak19 nvarchar(20)
+)
+
+insert #tmp3(pageno,atotal,atotal2,atotal3,atotal4,atotal5,atotal6,atotal7,atotal8,atotal9,atotal10,
+	atotal11,atotal12,atotal13,atotal14,atotal15,atotal16,atotal17,atotal18,atotal19,atotal20,
+	atotal21,atotal22,atotal23,atotal24,atotal25,atotal26,atotal27,atotal28,atotal29,atotal30,
+	atotal31,atotal32,atotal33,atotal34)
+select a.pageno
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal2)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal3)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal4)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal5)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal6)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal7)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal8)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal9)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal10)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal11)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal12)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal13)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal14)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal15)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal16)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal17)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal18)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal19)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal20)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal21)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal22)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal23)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal24)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal25)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal26)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal27)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal28)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal29)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal30)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal31)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal32)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal33)),1),'.00','')
+	,Replace(Convert(nvarchar(12),CONVERT(money,MAX(a.atotal34)),1),'.00','')
+from #tmp a left join #tmp2 b on a.pageno=b.pageno 
+group by a.pageno
+
+set @noacount=1
+declare @tmp_noacol nvarchar(50)
+declare @tmp_noaa nvarchar(50)
+declare @tmp_noab nvarchar(50)
+declare @tmp_noac nvarchar(50)
+declare @tmp_noad nvarchar(50)
+declare @tmp_noae nvarchar(50)
+declare @tmp_noaal nvarchar(50)
+declare @tmp_noaam nvarchar(50)
+declare @tmp_noaf nvarchar(50)
+declare @tmp_noah nvarchar(50)
+declare @tmp_noai nvarchar(50)
+declare @tmp_noaj nvarchar(50)
+declare @tmp_noak nvarchar(50)
+declare @tmp_noal nvarchar(50)
+declare @tmp_noam nvarchar(50)
+declare @tmp_noan nvarchar(50)
+declare @tmp_noao nvarchar(50)
+declare @tmp_noap nvarchar(50)
+declare @tmp_noaq nvarchar(50)
+declare @tmp_noar nvarchar(50)
+declare @tmp_noas nvarchar(50)
+declare @tmp_noat nvarchar(50)
+declare @tmp_noau nvarchar(50)
+declare @tmp_noav nvarchar(50)
+declare @tmp_noaw nvarchar(50)
+declare @tmp_noax nvarchar(50)
+declare @tmp_noay nvarchar(50)
+declare @tmp_noaz nvarchar(50)
+declare @tmp_noaaa nvarchar(50)
+declare @tmp_noaab nvarchar(50)
+declare @tmp_noaac nvarchar(50)
+declare @tmp_noaad nvarchar(50)
+declare @tmp_noaae nvarchar(50)
+declare @tmp_noaaf nvarchar(50)
+declare @tmp_noaag nvarchar(50)
+declare @tmp_noaah nvarchar(50)
+declare @tmp_noaai nvarchar(50)
+declare @tmp_noaaj nvarchar(50)
+declare @tmp_noaak nvarchar(50)
+--while(@tmp_mon<=@t_emon and @moncount<=12)
+while(@noacount<=@pageno)
+begin
+	set @tmp_noacol='noa'+right('00'+cast(@noacount as nvarchar(10)),2)--車號
+	set @tmp_noaa='a'+right('00'+cast(@noacount as nvarchar(10)),2)--噸數
+	set @tmp_noab='b'+right('00'+cast(@noacount as nvarchar(10)),2)--駕駛
+	set @tmp_noac='c'+right('00'+cast(@noacount as nvarchar(10)),2)--出車天數
+	set @tmp_noad='d'+right('00'+cast(@noacount as nvarchar(10)),2)--行駛公里數
+	set @tmp_noae='e'+right('00'+cast(@noacount as nvarchar(10)),2)--貨運收入
+	set @tmp_noaal='al'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaam='am'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaf='f'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noah='h'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noai='i'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaj='j'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noak='k'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noal='l'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noam='m'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noan='n'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noao='o'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noap='p'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaq='q'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noar='r'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noas='s'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noat='t'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noau='u'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noav='v'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaw='w'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noax='x'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noay='y'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaz='z'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaaa='aa'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaab='ab'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaac='ac'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaad='ad'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaae='ae'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaaf='af'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaag='ag'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaah='ah'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaai='ai'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaaj='aj'+right('00'+cast(@noacount as nvarchar(10)),2)
+	set @tmp_noaak='ak'+right('00'+cast(@noacount as nvarchar(10)),2)
+
+	if(@noacount=1)
+		exec("update #tmp3 
+		set gno=0,"+@tmp_noacol+"=a.noa,"+@tmp_noaa+"=a.ton,"+@tmp_noab+"=a.driver,"+@tmp_noac+"=a.datea
+		,"+@tmp_noad+"=Replace(Convert(nvarchar(12),CONVERT(money, a.miles),1),'.00','')
+		,"+@tmp_noae+"=Replace(Convert(nvarchar(12),CONVERT(money, a.total),1),'.00','')
+		,"+@tmp_noaal+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price1),1),'.00','')
+		,"+@tmp_noaam+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price2),1),'.00','')
+		,"+@tmp_noaf+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price3),1),'.00','')
+		,"+@tmp_noah+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price4),1),'.00','')
+		,"+@tmp_noai+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price5),1),'.00','')
+		,"+@tmp_noaj+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price6),1),'.00','')
+		,"+@tmp_noak+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price7),1),'.00','')
+		,"+@tmp_noal+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price8),1),'.00','')
+		,"+@tmp_noam+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t1),1),'.00','')
+		,"+@tmp_noan+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t2),1),'.00','')
+		,"+@tmp_noao+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t3),1),'.00','')
+		,"+@tmp_noap+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec1),1),'.00','')
+		,"+@tmp_noaq+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec2),1),'.00','')
+		,"+@tmp_noar+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec3),1),'.00','')
+		,"+@tmp_noas+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec4),1),'.00','')
+		,"+@tmp_noat+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec5),1),'.00','')
+		,"+@tmp_noau+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec6),1),'.00','')
+		,"+@tmp_noav+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec7),1),'.00','')
+		,"+@tmp_noaw+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec8),1),'.00','')
+		,"+@tmp_noax+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec9),1),'.00','')
+		,"+@tmp_noay+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec10),1),'.00','')
+		,"+@tmp_noaz+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec11),1),'.00','')
+		,"+@tmp_noaaa+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec12),1),'.00','')
+		,"+@tmp_noaab+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec13),1),'.00','')
+		,"+@tmp_noaac+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc1),1),'.00','')
+		,"+@tmp_noaad+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc2),1),'.00','')
+		,"+@tmp_noaae+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc3),1),'.00','')
+		,"+@tmp_noaaf+"=Replace(Convert(nvarchar(12),CONVERT(money, a.msfee),1),'.00','')
+		,"+@tmp_noaag+"=Replace(Convert(nvarchar(12),CONVERT(money, a.ctotal),1),'.00','')
+		,"+@tmp_noaah+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tax),1),'.00','')
+		,"+@tmp_noaai+"=Replace(Convert(nvarchar(12),CONVERT(money, a.ttotal),1),'.00','')
+		,"+@tmp_noaaj+"=Replace(Convert(nvarchar(12),CONVERT(money, a.carc),1),'.00','')
+		from #tmp a left join #tmp3 b on a.pageno=b.pageno where a.idno % "+@pageno+"="+@noacount)
+	else if(@noacount=19)
+		exec("update #tmp3 
+		set "+@tmp_noacol+"=a.noa,"+@tmp_noaa+"=a.ton,"+@tmp_noab+"=a.driver,"+@tmp_noac+"=a.datea
+				,"+@tmp_noad+"=Replace(Convert(nvarchar(12),CONVERT(money, a.miles),1),'.00','')
+		,"+@tmp_noae+"=Replace(Convert(nvarchar(12),CONVERT(money, a.total),1),'.00','')
+		,"+@tmp_noaal+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price1),1),'.00','')
+		,"+@tmp_noaam+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price2),1),'.00','')
+		,"+@tmp_noaf+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price3),1),'.00','')
+		,"+@tmp_noah+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price4),1),'.00','')
+		,"+@tmp_noai+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price5),1),'.00','')
+		,"+@tmp_noaj+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price6),1),'.00','')
+		,"+@tmp_noak+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price7),1),'.00','')
+		,"+@tmp_noal+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price8),1),'.00','')
+		,"+@tmp_noam+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t1),1),'.00','')
+		,"+@tmp_noan+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t2),1),'.00','')
+		,"+@tmp_noao+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t3),1),'.00','')
+		,"+@tmp_noap+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec1),1),'.00','')
+		,"+@tmp_noaq+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec2),1),'.00','')
+		,"+@tmp_noar+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec3),1),'.00','')
+		,"+@tmp_noas+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec4),1),'.00','')
+		,"+@tmp_noat+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec5),1),'.00','')
+		,"+@tmp_noau+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec6),1),'.00','')
+		,"+@tmp_noav+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec7),1),'.00','')
+		,"+@tmp_noaw+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec8),1),'.00','')
+		,"+@tmp_noax+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec9),1),'.00','')
+		,"+@tmp_noay+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec10),1),'.00','')
+		,"+@tmp_noaz+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec11),1),'.00','')
+		,"+@tmp_noaaa+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec12),1),'.00','')
+		,"+@tmp_noaab+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec13),1),'.00','')
+		,"+@tmp_noaac+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc1),1),'.00','')
+		,"+@tmp_noaad+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc2),1),'.00','')
+		,"+@tmp_noaae+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc3),1),'.00','')
+		,"+@tmp_noaaf+"=Replace(Convert(nvarchar(12),CONVERT(money, a.msfee),1),'.00','')
+		,"+@tmp_noaag+"=Replace(Convert(nvarchar(12),CONVERT(money, a.ctotal),1),'.00','')
+		,"+@tmp_noaah+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tax),1),'.00','')
+		,"+@tmp_noaai+"=Replace(Convert(nvarchar(12),CONVERT(money, a.ttotal),1),'.00','')
+		,"+@tmp_noaaj+"=Replace(Convert(nvarchar(12),CONVERT(money, a.carc),1),'.00','')
+		from #tmp a left join #tmp3 b on a.pageno=b.pageno where a.idno % "+@pageno+"=0")
+	else
+		exec("update #tmp3 
+		set "+@tmp_noacol+"=a.noa,"+@tmp_noaa+"=a.ton,"+@tmp_noab+"=a.driver,"+@tmp_noac+"=a.datea
+				,"+@tmp_noad+"=Replace(Convert(nvarchar(12),CONVERT(money, a.miles),1),'.00','')
+		,"+@tmp_noae+"=Replace(Convert(nvarchar(12),CONVERT(money, a.total),1),'.00','')
+		,"+@tmp_noaal+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price1),1),'.00','')
+		,"+@tmp_noaam+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price2),1),'.00','')
+		,"+@tmp_noaf+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price3),1),'.00','')
+		,"+@tmp_noah+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price4),1),'.00','')
+		,"+@tmp_noai+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price5),1),'.00','')
+		,"+@tmp_noaj+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price6),1),'.00','')
+		,"+@tmp_noak+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price7),1),'.00','')
+		,"+@tmp_noal+"=Replace(Convert(nvarchar(12),CONVERT(money, a.price8),1),'.00','')
+		,"+@tmp_noam+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t1),1),'.00','')
+		,"+@tmp_noan+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t2),1),'.00','')
+		,"+@tmp_noao+"=Replace(Convert(nvarchar(12),CONVERT(money, a.t3),1),'.00','')
+		,"+@tmp_noap+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec1),1),'.00','')
+		,"+@tmp_noaq+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec2),1),'.00','')
+		,"+@tmp_noar+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec3),1),'.00','')
+		,"+@tmp_noas+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec4),1),'.00','')
+		,"+@tmp_noat+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec5),1),'.00','')
+		,"+@tmp_noau+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec6),1),'.00','')
+		,"+@tmp_noav+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec7),1),'.00','')
+		,"+@tmp_noaw+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec8),1),'.00','')
+		,"+@tmp_noax+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec9),1),'.00','')
+		,"+@tmp_noay+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec10),1),'.00','')
+		,"+@tmp_noaz+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec11),1),'.00','')
+		,"+@tmp_noaaa+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec12),1),'.00','')
+		,"+@tmp_noaab+"=Replace(Convert(nvarchar(12),CONVERT(money, a.pricec13),1),'.00','')
+		,"+@tmp_noaac+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc1),1),'.00','')
+		,"+@tmp_noaad+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc2),1),'.00','')
+		,"+@tmp_noaae+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tc3),1),'.00','')
+		,"+@tmp_noaaf+"=Replace(Convert(nvarchar(12),CONVERT(money, a.msfee),1),'.00','')
+		,"+@tmp_noaag+"=Replace(Convert(nvarchar(12),CONVERT(money, a.ctotal),1),'.00','')
+		,"+@tmp_noaah+"=Replace(Convert(nvarchar(12),CONVERT(money, a.tax),1),'.00','')
+		,"+@tmp_noaai+"=Replace(Convert(nvarchar(12),CONVERT(money, a.ttotal),1),'.00','')
+		,"+@tmp_noaaj+"=Replace(Convert(nvarchar(12),CONVERT(money, a.carc),1),'.00','')
+		from #tmp a left join #tmp3 b on a.pageno=b.pageno where a.idno % "+@pageno+"="+@noacount)
+	set @noacount=@noacount+1
+	
+end
+
+
+select
+LEFT(@t_mon,3)yy,right(@t_mon,2)mm, 
+* from #tmp3 a left join #tmp2 b on a.pageno=b.pageno
+order by b.pageno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#tmp3')is not null
+BEGIN
+	set @cmd = 'drop table #tmp3'
+	EXECUTE sp_executesql @cmd
+END
+;
