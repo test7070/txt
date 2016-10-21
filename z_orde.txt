@@ -1092,12 +1092,12 @@ declare @tmp table(
 	no2 nvarchar(50),
 	odate nvarchar(20),
 	datea nvarchar(20),
-	mount float,
-	lengthb float,
-	lengthc float,
+	mount decimal(25, 4),
+	lengthb decimal(25, 4),
+	lengthc decimal(25, 4),
 	unit nvarchar(10),
-	notv float,
-	notpercent float,
+	notv decimal(25, 4),
+	notpercent decimal(25, 4),
 	e nvarchar(10),
 	memo nvarchar(max),
 	qhrefa nvarchar(max),
@@ -1119,9 +1119,14 @@ declare @tmp table(
 	trandate nvarchar(50),
 	edate nvarchar(50),
 	
-	smount float,
-	cmount float,
-	dcmount float
+	smount decimal(25, 4),
+	cmount decimal(25, 4),
+	dcmount decimal(25, 4),
+	
+	cno nvarchar(20),
+	salesno nvarchar(20),
+	towork nvarchar(20),
+	stkmemo nvarchar(100)
 )
 
 	insert into @tmp
@@ -1139,46 +1144,33 @@ declare @tmp table(
 	,isnull((select sum(tranmoney2-tranmoney3) from view_vccs where productno=a.productno),0)
 	,isnull((select sum(notv) from view_ordcs where productno=a.productno and enda!=1 and cancel!=1),0) 
 	+isnull((select sum(notv) from view_cub where productno=a.productno and enda!=1 and cancel!=1),0) 
+	,b.cno,b.salesno,d.cdate,''
 	from view_ordes a
 	left join view_orde b on a.noa = b.noa
 	left join cust c on b.custno = c.noa
-	
+	left join ucc d on a.productno=d.noa	
 	outer apply (select noa,no3 from view_ordbs where ordeno=a.noa and no2=a.no2)xb
 	outer apply (select noa,no2,trandate from view_ordcs where ordbno=xb.noa and no3=xb.no3)xc
 	outer apply (select noa,noq from view_rc2s where ordeno=xc.noa and no2=xc.no2)xd
 	outer apply (select noa,edate from view_cub where ordeno=a.noa and no2=a.no2)xe
 	outer apply (select noa,noq from view_inas where rc2no=xe.noa)xf
-	
-	where (a.mount>0) and (b.odate between @t_bodate and @t_eodate) 
-	and (b.custno between @t_bcustno and @t_ecustno)
-	and (b.salesno between @t_bsalesno and @t_esalesno) 
-	and (a.productno between @t_bproductno and @t_eproductno) 
-	and isnull(a.enda,0)!=1 and isnull(b.enda,0)!=1 and isnull(a.cancel,0) !=1 and isnull(b.cancel,0) !=1
-	and(len(@t_cno)=0 or b.cno=@t_cno)
+	where (a.mount!=0) 
+	and isnull(a.enda,0)!=1 and isnull(b.enda,0)!=1 
+	and isnull(a.cancel,0)!=1 and isnull(b.cancel,0)!=1
 	order by b.custno,a.product,b.noa,b.odate,b.datea
 	
+	if(@t_bodate!='' and @t_eodate!=CHAR(255))
+		delete @tmp where odate not between @t_bodate and @t_eodate
+	if(@t_bcustno!='' and @t_ecustno!=CHAR(255))
+		delete @tmp where custno not between @t_bcustno and @t_ecustno
+	if(@t_bsalesno!='' and @t_esalesno!=CHAR(255))
+		delete @tmp where salesno not between @t_bodate and @t_eodate
+	if(@t_bproductno!='' and @t_eproductno!=CHAR(255))
+		delete @tmp where productno not between @t_bodate and @t_eodate
+	if(len(@t_cno)>0)
+		delete @tmp where cno!=@t_cno
+	
 update @tmp set notpercent = round((notv/mount)*100,2)
---update @tmp set products=REPLACE(REPLACE(products,'<','&#60'),'>','&#62') where products like '%<[A-Z]>%' or products like '%<[A-Z][A-Z]>%'
-
---update a
---set ordbnoa =isnull(b.noa,'')
---	,ordbno3=isnull(b.no3,'')
---	,ordcnoa=isnull(c.noa,'')
---	,ordcno2=isnull(c.no2,'')
---	,rc2noa=isnull(d.noa,'')
---	,rc2noq=isnull(d.noq,'')
---	,cubnoa=isnull(e.noa,'')
---	,inanoa=isnull(f.noa,'')
---	,inanoq=isnull(f.noq,'')
---	,trandate=c.trandate
---	,edate=e.edate
---from @tmp a
---outer apply (select noa,no3 from view_ordbs where ordeno=a.ordeno and no2=a.no2)b
---outer apply (select noa,no2,trandate from view_ordcs where ordbno=b.noa and no3=b.no3)c
---outer apply (select noa,noq from view_rc2s where ordeno=c.noa and no2=c.no2)d
---outer apply (select noa,edate from view_cub where ordeno=a.ordeno and no2=a.no2)e
---outer apply (select noa,noq from view_inas where rc2no=e.noa)f
---where isnull(b.noa,'')!='' or isnull(c.noa,'')!='' or isnull(d.noa,'')!='' or isnull(e.noa,'')!='' or isnull(f.noa,'')!=''
 
 declare @stkmount table(
 	productno nvarchar(50),
@@ -1191,39 +1183,51 @@ insert @stkmount
 select productno,mount from stkucc(@t_sdate,'A','')
 
 update a
-set smount=b.mount
+set smount=b.mount,stkmemo=case when isnull(a.notv)-a.dcmount-a.cmount-b.mount>0 then case when len(towork)>0 then +'需'+towork else '庫存不足' end else '' end
 from @tmp a left join @stkmount b on a.productno=b.productno
 
 if(@t_order='odate')
 begin
 	select gno,custno,custnick,products,ordeno,no2,odate,datea,unit
-	,dbo.getComma(mount,1) mount
-	,dbo.getComma(notv,1) notv
-	,cast(notpercent as nvarchar) + '%' notpercent,e,memo,*
+	,dbo.getComma(mount,-1) mount
+	,dbo.getComma(notv,-1) notv
+	,dbo.getComma(smount,-1) smount
+	,dbo.getComma(cmount,-1) cmount
+	,dbo.getComma(dcmount,-1) dcmount
+	,dbo.getComma(notpercent,-1) + '%' notpercent,e,memo,*
 	from @tmp order by odate,custno,ordeno,no2,gno,products
 end
 else if (@t_order='cust')
 begin
 	select gno,custno,custnick,products,ordeno,no2,odate,datea,unit
-	,dbo.getComma(mount,1) mount
-	,dbo.getComma(notv,1) notv
-	,cast(notpercent as nvarchar) + '%' notpercent,e,memo,*
+	,dbo.getComma(mount,-1) mount
+	,dbo.getComma(notv,-1) notv
+	,dbo.getComma(smount,-1) smount
+	,dbo.getComma(cmount,-1) cmount
+	,dbo.getComma(dcmount,-1) dcmount
+	,dbo.getComma(notpercent,-1) + '%' notpercent,e,memo,*
 	from @tmp order by custno,odate,ordeno,no2,gno,products
 end
 else if (@t_order='datea')
 begin
 	select gno,custno,custnick,products,ordeno,no2,odate,datea,unit
-	,dbo.getComma(mount,1) mount
-	,dbo.getComma(notv,1) notv
-	,cast(notpercent as nvarchar) + '%' notpercent,e,memo,*
+	,dbo.getComma(mount,-1) mount
+	,dbo.getComma(notv,-1) notv
+	,dbo.getComma(smount,-1) smount
+	,dbo.getComma(cmount,-1) cmount
+	,dbo.getComma(dcmount,-1) dcmount
+	,dbo.getComma(notpercent,-1) + '%' notpercent,e,memo,*
 	from @tmp order by datea,custno,ordeno,no2,gno,products
 end
 else
 begin
 	select gno,custno,custnick,products,ordeno,no2,odate,datea,unit
-	,dbo.getComma(mount,1) mount
-	,dbo.getComma(notv,1) notv
-	,cast(notpercent as nvarchar) + '%' notpercent,e,memo,*
+	,dbo.getComma(mount,-1) mount
+	,dbo.getComma(notv,-1) notv
+	,dbo.getComma(smount,-1) smount
+	,dbo.getComma(cmount,-1) cmount
+	,dbo.getComma(dcmount,-1) dcmount
+	,dbo.getComma(notpercent,-1) + '%' notpercent,e,memo,*
 	from @tmp order by ordeno,no2,gno,odate,custno,products
 end
 ;
