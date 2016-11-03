@@ -845,7 +845,6 @@ z_gqb5:--z_gqb5
 	
 	declare @tmp table(
 		gno nvarchar(10),
-		rr int, 
 		noa nvarchar(50),
 		gqbno nvarchar(50),
 		datea nvarchar(20),
@@ -865,76 +864,111 @@ z_gqb5:--z_gqb5
 		money1 float,
 		money2 float,
 		pcount1 int,
-		pcount2 int
+		pcount2 int,
+		enda nvarchar(10)
 	)
 	
 	insert into @tmp
-	select '0' gno,'',noa,gqbno,datea,udate,indate,tdate,typea,account,bankno,left(bank,8),tbankno,tbank,compno,left(comp,5),replace(memo,'chr(10)','')
+	select '0' gno,noa,gqbno,datea,udate,indate,tdate,typea,account,bankno,left(bank,8),tbankno,tbank,compno,left(comp,5),replace(memo,'chr(10)','')
 		,case when typea ='3' then isnull(money,0)*-1 else isnull(money,0) end
 		,case when typea ='1' then isnull([money],0) else 0 end money1
 		,case when typea ='3' then isnull([money],0) else 0 end money2
 		,case when typea ='1' then 1 else 0 end pcount1
 		,case when typea ='3' then 1 else 0 end pcount2
+		,case when enda='Y' then enda else 'N' end
 	from gqb
-	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) and  (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)
-	      and (isnull(datea,'') between @t_bdate and @t_edate) 
+	where (len(@t_typea)=0 or @t_typea= isnull(typea,0)) 
+		and (len(@t_status)=0 or @t_status=case when enda='Y' then enda else 'N' end)
+		and (isnull(datea,'') between @t_bdate and @t_edate) 
 		and (isnull(indate,'') between @t_bindate and @t_eindate)
 		and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
-	    and  (typea ='1' or typea ='3')
+	    and (typea ='1' or typea ='3')
 	    and tcompno between @t_btcompno and @t_etcompno
 		and compno between @t_bcompno and @t_ecompno
 		and (isnull(cno,'') between @t_bacomp and @t_eacomp)
 	order by compno,gno,datea,noa
 	
-	delete @tmp where gqbno in (select a.checkno from ufs a left join uf b on a.noa=b.noa where b.datea not between @t_ubdate and @t_uedate)
-	-----------------------------------------------------------------
-	declare @compno nvarchar(20)
-	declare @money1 float
-	declare @money2 float
-	declare @pcount1 int
-	declare @pcount2 int
-	
-	declare cursor_table cursor for
-	select compno,sum(money1),sum(money2),sum(pcount1),sum(pcount2) from @tmp group by compno
-	open cursor_table
-	fetch next from cursor_table
-	into @compno,@money1,@money2,@pcount1,@pcount2
-	while(@@FETCH_STATUS <> -1)
+	if((select count(*) from @tmp)>0 and @t_edate!=CHAR(255)and @t_eindate!=CHAR(255))
 	begin
-		insert into @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
-		values('1',@compno,CHAR(255),@money1-@money2,@money1,@money2,@pcount1,@pcount2)
-		
-		fetch next from cursor_table
-		into @compno,@money1,@money2,@pcount1,@pcount2
+		insert @tmp(gno,compno,gqbno,[money],pcount1)
+		--收票日期區間 未兌現
+		select '3',CHAR(255),CHAR(255),SUM(money),SUM(pcounts) from (
+			select sum(case when typea ='1' then 1 else -1 end*isnull(a.money,0)) money,count(*) pcounts
+			from gqb a
+			where (len(@t_typea)=0 or @t_typea=isnull(a.typea,0)) 
+			and case when a.enda='Y' then a.enda else 'N' end='N'
+			and (isnull(a.datea,0) between @t_bdate and @t_edate) 
+			and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
+		    and (typea ='1' or typea ='3')
+		    and tcompno between @t_btcompno and @t_etcompno
+			and compno between @t_bcompno and @t_ecompno
+			and (isnull(cno,'') between @t_bacomp and @t_eacomp)
+			and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) 
+			union all
+			--收票日區間之後 且 收票到期日之內 全部票據金額 (都算未兌現)
+			select sum(case when typea ='1' then 1 else -1 end*isnull(a.money,0)) money,count(*) pcounts
+			from gqb a 
+			where (len(@t_typea)=0 or @t_typea=isnull(a.typea,0)) 
+			and (isnull(a.datea,0) > @t_edate) 
+			and (isnull(a.indate,0) between @t_bindate and @t_eindate) 
+			and (isnull(bankno,'') between @t_bbankno and @t_ebankno)
+		    and (typea ='1' or typea ='3')
+		    and tcompno between @t_btcompno and @t_etcompno
+			and compno between @t_bcompno and @t_ecompno
+			and (isnull(cno,'') between @t_bacomp and @t_eacomp)
+			and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) 
+		)tmp having SUM(money)!=0
 	end
-	close cursor_table
-	deallocate cursor_table 
-
-	update a
-	set rr=rx
-	from (select ROW_NUMBER()over(partition by compno order by gno)rx,rr from @tmp)a
-
-	insert @tmp(gno,rr,compno,money1,money2,pcount1,pcount2)
-	select '2','9998',CHAR(255),SUM(money1)-SUM(money2),SUM(money1)-SUM(money2),SUM(pcount1),SUM(pcount2)
-	from @tmp
-	where gno='1' 
-
-	if(@t_edate<@t_eindate)
-	insert @tmp(gno,rr,compno,pcount1,money)
-	select '3','9999',CHAR(255),count(enda),sum(money)
-	from gqb
-	where indate>@t_edate and indate<(LEFT(@t_eindate,3)+'/12/31')
+	
+	delete tmp from @tmp tmp 
+	where exists (select a.checkno from ufs a left join uf b on a.noa=b.noa 
+	where b.datea not between @t_ubdate and @t_uedate and a.checkno=tmp.gqbno)
+	-----------------------------------------------------------------
+	--declare @compno nvarchar(20)
+	--declare @money1 float
+	--declare @money2 float
+	--declare @pcount1 int
+	--declare @pcount2 int
+	
+	--declare cursor_table cursor for
+	--select compno,sum(money1),sum(money2),sum(pcount1),sum(pcount2) from @tmp group by compno
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @compno,@money1,@money2,@pcount1,@pcount2
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	insert into @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+	--	values('1',@compno,CHAR(255),@money1-@money2,@money1,@money2,@pcount1,@pcount2)
+	--	
+	--	fetch next from cursor_table
+	--	into @compno,@money1,@money2,@pcount1,@pcount2
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	if((select count(*) from @tmp)>0)
+	begin
+		insert @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+		select '1',compno,CHAR(255),sum(money1)-sum(money2),sum(money1),sum(money2),sum(pcount1),sum(pcount2)
+		from @tmp where gno='0' group by compno
+		
+		insert @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+		select '2',CHAR(255),CHAR(255),sum(money1)-sum(money2),sum(money1),sum(money2),sum(pcount1),sum(pcount2)
+		from @tmp where gno='0'
+	end
 	
 	select * 
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m0
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2
+	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m0
+	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1
+	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2
+	,dbo.getComma(money,0)m0
+	,dbo.getComma(money1,0)m1
+	,dbo.getComma(money2,0)m2
 	,pcount1 p1
 	,pcount2 p2
 	from @tmp order by compno,gno,datea,gqbno;
-		
 
-z_gqb6:--z_gab6
+z_gqb6:--z_gqb6
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
 	declare @t_accy nvarchar(10)
@@ -979,37 +1013,8 @@ z_gqb6:--z_gab6
 	set @t_eydate = case when '#non'=[15] then char(255) else [15] end
 	set @t_acc1 = case when '#non'=[16] then '' else [16] end
 	-------------------------------------------------------------------------------
-	declare @string nvarchar(max)
-	declare @n int
-	declare @string2 nvarchar(max)
-	declare @n2 int 
-
-	declare @stype table(
-		noa nvarchar(20),
-		typea nvarchar(20)
-	)
-	set @string = @c_typea
-	while(1=1)
-	begin
-		set @n = PATINDEX('%,%',@string)
-		if @n=0
-		begin
-			if LEN(@string)>0
-			begin
-				set @n2 = PATINDEX('%@%',@string)
-				insert into @stype select LEFT(@string,@n2-1),SUBSTRING(@string,@n2+1,len(@string)-@n2)
-			end
-			break
-		end
-		set @n2 = PATINDEX('%@%',@string)
-		set @string2 = LEFT(@string,@n-1)
-		insert into @stype select LEFT(@string2,@n2-1),SUBSTRING(@string2,@n2+1,len(@string2)-@n2)
-		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
-	end
-	
 	declare @tmp table(
 		gno nvarchar(1),
-		rr int,
 		noa nvarchar(50),
 		gqbno nvarchar(50),
 		datea nvarchar(20),
@@ -1029,85 +1034,112 @@ z_gqb6:--z_gab6
 		money1 float,
 		money2 float,
 		pcount1 int,
-		pcount2 int
+		pcount2 int,
+		enda nvarchar(10)
 	)
 	
 	insert into @tmp 
-	select '0' gno,'',a.noa,a.gqbno,a.datea,a.udate,a.indate,a.tdate,a.typea,a.account,a.bankno,a.bank,a.tbankno,a.tbank
-	,a.compno,case when len(b.nick)>0 then b.nick else (case when len(a.tcomp)>0 then a.tcomp else left(a.comp,4) end) end,replace(a.memo,'chr(10)','')
+	select '0' gno,a.noa,a.gqbno,a.datea,a.udate,a.indate,a.tdate,a.typea,a.account,a.bankno,a.bank,a.tbankno,a.tbank
+	,a.compno,case when len(b.nick)>0 then b.nick else (case when len(a.tcomp)>0 then a.tcomp else left(a.comp,4) end) end
+	,replace(a.memo,'chr(10)','')
 	,case when typea ='4' then isnull(a.money,0)*-1 else isnull(a.money,0) end
 	,case when typea ='2' then isnull(a.money,0) else 0 end money1 
 	,case when typea ='4' then isnull(a.money,0) else 0 end money2 
 	,case when typea ='2' then 1 else 0 end pcount1 
 	,case when typea ='4' then 1 else 0 end pcount2 
+	,case when enda='Y' then enda else 'N' end
 	from gqb a
 	left join view_cust_tgg b on a.compno = b.noa
-	where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) and 
-	(isnull(a.datea,0) between @t_bdate and @t_edate) and (isnull(a.indate,0) between @t_bindate and @t_eindate) and
-	 (isnull(a.bankno,0) between @t_bbankno and @t_ebankno) and 
-	(a.typea ='2' or a.typea ='4') 
+	where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) 
+	and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) 
+	and (isnull(a.datea,0) between @t_bdate and @t_edate) 
+	and (isnull(a.indate,0) between @t_bindate and @t_eindate) 
+	and (isnull(a.bankno,0) between @t_bbankno and @t_ebankno) 
+	and (a.typea ='2' or a.typea ='4') 
 	and a.tcompno between @t_btcompno and @t_etcompno
 	and a.compno between @t_bcompno and @t_ecompno
-	and a.cno between @t_bacomp and @t_eacomp
+	and (isnull(a.cno,'') between @t_bacomp and @t_eacomp)
 	order by a.compno,gno,a.datea,a.noa 
-
-	insert @tmp(gno,compno,datea,money,money1,pcount1,pcount2)
-	select '1',compno,datea,SUM(money),SUM(money1),SUM(pcount1),SUM(pcount2)
-	from @tmp
-	group by compno,datea 
 	
-	update a
-	set rr=rx
-	from (select ROW_NUMBER()over(partition by compno order by datea,gno)rx,rr from @tmp)a   
-
-	delete @tmp where gqbno in (select a.checkno from ufs a left join uf b on a.noa=b.noa where b.datea not between @t_ubdate and @t_uedate)
-	-----------------------------------------------------------------
-	declare @compno nvarchar(20)
-	declare @money1 float
-	declare @money2 float
-	declare @pcount1 int
-	declare @pcount2 int
-	
-	declare cursor_table cursor for
-	select compno,sum(money1),sum(money2),sum(pcount1),sum(pcount2) from @tmp where gno=0 group by compno
-	open cursor_table
-	fetch next from cursor_table
-	into @compno,@money1,@money2,@pcount1,@pcount2
-	while(@@FETCH_STATUS <> -1)
+	if((select count(*) from @tmp)>0 and @t_edate!=CHAR(255)and @t_eindate!=CHAR(255))
 	begin
-		insert into @tmp(gno,rr,compno,gqbno,[money],money1,money2,pcount1,pcount2)
-		values('2',9999,@compno,CHAR(255),@money1-@money2,@money1,@money2,@pcount1,@pcount2)
-		
-		fetch next from cursor_table
-		into @compno,@money1,@money2,@pcount1,@pcount2
+		insert @tmp(gno,compno,gqbno,[money],pcount1)
+		--開票日期區間 未兌現
+		select '3',CHAR(255),CHAR(255),SUM(money),SUM(pcounts) from (
+			select sum(case when typea ='2' then 1 else -1 end*isnull(a.money,0)) money,count(*) pcounts
+			from gqb a left join view_cust_tgg b on a.compno = b.noa
+			where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) 
+			and case when a.enda='Y' then a.enda else 'N' end='N'
+			and (isnull(a.datea,0) between @t_bdate and @t_edate) 
+			and (isnull(a.bankno,0) between @t_bbankno and @t_ebankno) 
+			and (a.typea ='2' or a.typea ='4')
+			and a.tcompno between @t_btcompno and @t_etcompno
+			and a.compno between @t_bcompno and @t_ecompno
+			and (isnull(a.cno,'') between @t_bacomp and @t_eacomp)
+			and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) 
+			union all
+			--開票日區間之後 且 開票到期日之內 全部票據金額 (都算未兌現)
+			select sum(case when typea ='2' then 1 else -1 end*isnull(a.money,0)) money,count(*) pcounts
+			from gqb a left join view_cust_tgg b on a.compno = b.noa
+			where (len(@t_typea)=0 or @t_typea= isnull(a.typea,0)) 
+			and (isnull(a.datea,0) > @t_edate) 
+			and (isnull(a.indate,0) between @t_bindate and @t_eindate) 
+			and (isnull(a.bankno,0) between @t_bbankno and @t_ebankno) 
+			and (a.typea ='2' or a.typea ='4') 
+			and a.tcompno between @t_btcompno and @t_etcompno
+			and a.compno between @t_bcompno and @t_ecompno
+			and (isnull(a.cno,'') between @t_bacomp and @t_eacomp)
+			and (len(@t_status)=0 or @t_status=case when a.enda='Y' then a.enda else 'N' end) 
+		)tmp having SUM(money)!=0
 	end
-	close cursor_table
-	deallocate cursor_table
-
-	insert @tmp(gno,rr,compno,[money],money1,money2,pcount1,pcount2)
-	select '3','9998',CHAR(255),SUM(money1)-SUM(money2),SUM(money1),SUM(money2),SUM(pcount1),SUM(pcount2)
-	from @tmp
-	where gno='2' 
 	
-	if(@t_edate<@t_eindate)
-	insert @tmp(gno,rr,pcount1,money)
-	select '4','9999',count(enda),sum(money)
-	from gqb
-	where indate>@t_edate and indate<(LEFT(@t_eindate,3)+'/12/31')
-
+	delete tmp from @tmp tmp 
+	where exists (select a.checkno from ufs a left join uf b on a.noa=b.noa 
+	where b.datea not between @t_ubdate and @t_uedate and a.checkno=tmp.gqbno)
+	-----------------------------------------------------------------
+	--declare @compno nvarchar(20)
+	--declare @money1 float
+	--declare @money2 float
+	--declare @pcount1 int
+	--declare @pcount2 int
+	
+	--declare cursor_table cursor for
+	--select compno,sum(money1),sum(money2),sum(pcount1),sum(pcount2) from @tmp group by compno
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @compno,@money1,@money2,@pcount1,@pcount2
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	insert into @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+	--	values('1',@compno,CHAR(255),@money1-@money2,@money1,@money2,@pcount1,@pcount2)
+		
+	--	fetch next from cursor_table
+	--	into @compno,@money1,@money2,@pcount1,@pcount2
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	if((select count(*) from @tmp)>0)
+	begin
+		insert @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+		select '1',compno,CHAR(255),sum(money1)-sum(money2),sum(money1),sum(money2),sum(pcount1),sum(pcount2)
+		from @tmp where gno='0' group by compno
+		
+		insert @tmp(gno,compno,gqbno,[money],money1,money2,pcount1,pcount2)
+		select '2',CHAR(255),CHAR(255),sum(money1)-sum(money2),sum(money1),sum(money2),sum(pcount1),sum(pcount2)
+		from @tmp where gno='0'
+	end
+	
 	select * 
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m0 
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1 
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2 
-	,dbo.getComma([money],0)m0 
-	,dbo.getComma(money1,0)m1 
-	,dbo.getComma(money2,0)m2 
-	,pcount1 p1 
+	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) m0
+	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money1),1)),4,12)) m1
+	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money2),1)),4,12)) m2
+	,dbo.getComma([money],0)m0
+	,dbo.getComma(money1,0)m1
+	,dbo.getComma(money2,0)m2
+	,pcount1 p1
 	,pcount2 p2
-	,@t_edate edate
-	,(LEFT(@t_eindate,3)+'/12/31') eindate
-	from @tmp order by rr,compno,gqbno 
-	;
+	from @tmp order by compno,gno,datea,gqbno;
 
 z_gqb8:--z_gqb8開票明細表
 	SET QUOTED_IDENTIFIER OFF
