@@ -5281,3 +5281,92 @@ BEGIN
  drop table #tmp
 END
 ;
+
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+z_vcc21:--z_vcc21
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bsalesno nvarchar(20)
+	declare @t_esalesno nvarchar(20)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(30)
+	declare @t_groupano nvarchar(30)
+	declare @t_groupbno nvarchar(30)
+	declare @t_groupcno nvarchar(30)
+	declare @t_salesgroup nvarchar(100)
+	declare @t_multcust nvarchar(max)
+	declare @t_multucc nvarchar(max)
+	
+	set @t_bdate = case when '#non'=[4] then '' else [4] end
+	set @t_edate = case when '#non'=[5] then char(255) else [5] end
+	set @t_bcustno = case when '#non'=[8] then '' else [8] end
+	set @t_ecustno = case when '#non'=[9] then char(255) else [9] end
+	set @t_bsalesno = case when '#non'=[10] then '' else [10] end
+	set @t_esalesno = case when '#non'=[11] then char(255) else [11] end
+	set @t_bproductno = case when '#non'=[12] then '' else [12] end
+	set @t_eproductno = case when '#non'=[13] then char(255) else [13] end
+	set @t_typea = case when '#non'=[16] then '' else [16] end
+	set @t_groupano = case when '#non'=[17] then '' else (case when [17] = ' ' then '' else [17] end) end
+	set @t_salesgroup = case when '#non' = [21] then '' else [21] end
+	set @t_multcust = case when '#non' = [26] then '' else [26]+',' end
+	set @t_multucc = case when '#non' = [27] then '' else [27]+',' end
+
+declare @tmp table(
+	gno nvarchar(1),
+	custno nvarchar(50),
+	comp nvarchar(250),
+	rr int,
+	productno nvarchar(100),
+	product nvarchar(max),
+	price float,
+	mount float,
+	makeup float,
+	aprice float,
+	amount float,
+	amakeup float
+)
+ insert @tmp
+ select '0',a.custno,c.comp,ROW_NUMBER()over(partition by a.custno order by b.productno),b.productno,b.product,SUM(b.total),SUM(b.mount),'','','',''
+ from  view_vccs b
+	left join view_vcc a on a.noa = b.noa
+	left join cust c on  a.custno = c.noa
+	left join view_ucaucc d on b.productno = d.noa
+	left join sss s on isnull(a.salesno,'')=s.noa
+ where (a.datea between @t_bdate and @t_edate) and
+		  (a.custno between @t_bcustno and @t_ecustno) and
+		  (isnull(a.salesno,'') between @t_bsalesno and @t_esalesno) and
+		  (b.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_groupano)=0 or d.groupano = @t_groupano) and 
+		  (len(@t_typea)=0 or isnull(d.typea,'null') = @t_typea)
+		  and (len(@t_salesgroup)=0 or s.salesgroup=@t_salesgroup)
+		  and (len(@t_multcust)=0 or CHARINDEX(a.custno+',',@t_multcust)>0)
+		  and (len(@t_multucc)=0 or CHARINDEX(b.productno+',',@t_multucc)>0)
+ group by a.custno,c.comp,b.productno,b.product
+  
+ insert @tmp(gno,custno,price,mount,aprice,amount)
+ select '1',custno,SUM(price),sum(mount),SUM(price),sum(mount)
+ from @tmp
+ group by custno
+ 
+ update @tmp
+ set makeup=a.price/nullif(b.price,0)*100,amakeup=a.price/nullif(b.price,0)*100
+ from @tmp a left join  (select custno,price from @tmp where gno='1')b on a.custno=b.custno
+
+insert @tmp(gno,custno)
+ select '2',custno
+ from @tmp
+ group by custno
+ 
+ select 
+ dbo.getComma(price,2) price,
+ dbo.getComma(makeup,2)+'%' makeup,
+ dbo.getComma(amakeup,2)+'%' amakeup,
+ 'US$' coin,
+ @t_bdate bdate,
+ @t_edate edate,
+ * from @tmp
+ order by custno,gno,rr
+ ;
