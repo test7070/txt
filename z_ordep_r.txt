@@ -1807,7 +1807,6 @@ z_ordep_r13:--z_ordep_r13
 	;
 
 ------------------------------------------------------------------------------------------------------------------------------------------------
-
 z_ordep_r14:--z_ordep_r14
 	SET QUOTED_IDENTIFIER OFF
 	declare @t_bdate nvarchar(10)
@@ -1823,65 +1822,65 @@ z_ordep_r14:--z_ordep_r14
 		declare @tmp table(
 			gno nvarchar(1),
 			rr int,
-			bdate nvarchar(10),
-			edate nvarchar(10),
-			odate nvarchar(10),
 			custno nvarchar(100),
+			comp nvarchar(200),
 			nick nvarchar(100),
-			salesno nvarchar(100),
-			sales nvarchar(100),
 			coin nvarchar(20),
 			moneya float,
 			total float,
 			ttotal float,
-			rangea float,
-			coins nvarchar(20),
-			ppercent float,
-			tpercent float
+			rtotal float,
+			coins nvarchar(5),
+			ppercent float
 		)
 		
 		insert @tmp
-		select '0','',@t_bdate,@t_edate,odate,custno,nick,salesno,sales
-				,case when coin!='' then coin+'$' else 'NT$' end,money,total
-				,case when coin!='' then (floata*100)*total else total end
-				,0,'US$','',''
-		from view_orde
-		where 
-		(noa between @t_bonoa and @t_eonoa)
-		and (odate between @t_bdate and @t_edate)
+		select '0',ROW_NUMBER()over(partition by custno order by custno),custno,b.comp,b.nick
+				,case when coin!='' then coin+'$' else 'NT$' end,sum(total),sum(total)
+				,case when coin!='' and floata!=0 then sum((isnull(floata,1)*100)*total) else sum(total) end
+				,0,'US$',''
+		from view_orde a
+		left join cust b on a.custno=b.noa
+		where(a.noa between @t_bonoa and @t_eonoa)
+		and(odate between @t_bdate and @t_edate)
+		group by custno,b.comp,b.nick,coin,floata
+		
+		update @tmp
+		set gno=case when a.rr=1 then 1 else 2 end,rtotal=b.ttotal
+		from @tmp a left join (select custno , SUM(ttotal)ttotal from @tmp group by custno)b on a.custno=b.custno
+		
+		insert @tmp(gno,coin,moneya,total,ttotal)
+		select '3',coin,SUM(moneya),SUM(total),sum(ttotal)
+		from @tmp
+		group by coin
+		
+		insert @tmp(gno,coin,moneya,total,ttotal)
+		select '5',coin,SUM(moneya),SUM(total),sum(ttotal)
+		from @tmp
+		where gno!='3'
+		group by coin
 		
 		update a
 		set rr=rx
-		from (select ROW_NUMBER() over(PARTITION by gno order by ttotal desc)rx,rr from @tmp)a
+		from (select ROW_NUMBER()over(partition by gno order by ttotal desc)rx,rr from @tmp where gno=3 or gno=5)a
+
+		update @tmp
+		set gno=case when rr=1 then 3 else 4 end
+		where gno='3'
 		
-		insert @tmp(gno,rr,coin,moneya,total,ttotal,tpercent)
-		select '1','9996',coin,SUM(moneya),SUM(total),SUM(ttotal),(SUM(moneya)/SUM(total))*100
-		from @tmp
-		where coin='US$'
-		group by coin
+		update @tmp
+		set gno=case when rr=1 then 5 else 6 end
+		where gno='5'
 		
-		insert @tmp(gno,rr,coin,moneya,total,ttotal,tpercent)
-		select '2','9997',coin,SUM(moneya),SUM(total),SUM(ttotal),(SUM(moneya)/SUM(total))*100
-		from @tmp
-		where coin='NT$'
-		group by coin
-		
-		insert @tmp(gno,rr,coin,moneya,total,ttotal,tpercent)
-		select '3','9998',coin,SUM(moneya),SUM(total),SUM(ttotal),(SUM(moneya)/SUM(total))*100
-		from @tmp
-		where coin='US$' and gno='0'
-		group by coin
-		
-		insert @tmp(gno,rr,coin,moneya,total,ttotal,tpercent)
-		select '4','9999',coin,SUM(moneya),SUM(total),SUM(ttotal),(SUM(moneya)/SUM(total))*100
-		from @tmp
-		where coin='NT$'and gno='0'
-		group by coin
-				
+		update @tmp
+		set ppercent=a.total/nullif(b.total,0)*100
+		from @tmp a left join (select coin,total from @tmp where gno=3 or gno=4)b on a.coin=b.coin
+
 		select
+		@t_bdate bdate,@t_edate edate,
 		dbo.getComma(moneya,0)moneya,
 		dbo.getComma(total,0)total,
-		dbo.getComma(round(tpercent,0,2),0)+'%' tpercent,
+		dbo.getComma(round(ppercent,0,2),0)+'%' ppercent,
 		 * from @tmp
-		order by rr,coin desc
+		 order by rtotal desc,gno,rr
 		;
