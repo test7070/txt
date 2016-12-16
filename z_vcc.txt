@@ -5281,6 +5281,169 @@ BEGIN
  drop table #tmp
 END
 ;
+---------------------------------------------------------------------------------------------------------------------------------------
+z_vcc20:--z_vcc20
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bcustno nvarchar(20)
+declare @t_ecustno nvarchar(20)
+declare @t_btggno nvarchar(50)
+declare @t_etggno nvarchar(50)
+
+set @t_bdate = case when '#non'=[4] then '' else [4] end
+set @t_edate = case when '#non'=[5] then char(255) else [5] end
+set @t_bcustno = case when '#non'=[8] then '' else [8] end
+set @t_ecustno = case when '#non'=[9] then char(255) else [9] end
+set @t_btggno = case when '#non' = [14] then '' else [14] end
+set @t_etggno = case when '#non' = [15] then char(255) else [15] end
+
+declare @tmp table (
+	gno nvarchar(2),
+	rr int,
+	custno nvarchar(50),
+	comp nvarchar(100),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	invdatea nvarchar(10),
+	boarddatea nvarchar(10),
+	invono nvarchar(50),
+	scnoa nvarchar(50),
+	lcnoa nvarchar(50),
+	froma nvarchar(max),
+	toa nvarchar(max),
+	ucoin nvarchar(10),
+	uprice float,
+	ufloata float,
+	floata float,
+	coin nvarchar(10),
+	nprice float,
+	item nvarchar(100),
+	ouprice float,
+	onprice float,
+	uiprice float,
+	niprice float,
+	ncuprice float,
+	ncnprice float,
+	ecuprice float,
+	ecnprice float,
+	prouprice float,
+	pronprice float,
+	[percent] float,
+	
+	custnoa nvarchar(100),
+	productno nvarchar(50),
+	mount float,
+	unit nvarchar(10),
+	price float,
+	cost float,
+	expence float,
+	itemprice float,
+	Profit float,
+	tax float
+)
+insert @tmp(invono,scnoa,custno)
+select a.noa,a.ordeno,a.custno
+from invo a
+left join view_orde b on a.ordeno=b.noa
+where (a.datea between @t_bdate and @t_edate) 
+and (a.custno between @t_bcustno and @t_ecustno) 
+and (isnull(b.agent,'') between @t_btggno and @t_etggno)
+
+insert @tmp(gno,custno,comp,agentno,agent,invdatea,boarddatea,invono,scnoa,lcnoa,froma,toa,ucoin,uprice,floata,coin,nprice,ouprice,onprice)
+select '01',b.custno,b.comp,c.agentno,c.agent,b.datea,b.saildate,b.noa,b.ordeno,b.lcno,b.froma,b.toa,'US$',b.amount,ROUND(c.floata*100,0),'NT$',b.amount*ROUND(b.floata*100,0),c.total,c.total*ROUND(c.floata*100,0)
+from @tmp a
+left join invo b on a.invono=b.noa
+left join view_orde c on b.ordeno=c.noa
+
+--P/O
+insert @tmp(gno,custno,invono,scnoa,item,ucoin,uiprice,coin,niprice)
+select '02',a.custno,a.invono,a.scnoa,b.chgitem+'  '+c.tggno+'  '+c.comp,'US$',b.total,'NT$',b.total*a.floata
+from paybs b
+left join @tmp a on b.invono=a.invono
+left join payb c on b.noa=c.noa
+where b.invono!=''
+
+--Net Cost
+insert @tmp(gno,custno,invono,scnoa,ucoin,ncuprice,coin,ncnprice)
+select '03',custno,invono,scnoa,'US$',sum(isnull(ouprice,0))-sum(isnull(uiprice,0)),'NT$',sum(isnull(onprice,0))-sum(isnull(niprice,0))
+from @tmp
+group by custno,invono,scnoa
+
+--Extra Cost
+insert @tmp(gno,custno,invono,scnoa,ucoin,ecuprice,coin,ecnprice)
+select '05',custno,invono,scnoa,'US$',0,'NT$',0
+from @tmp
+where gno ='01'
+
+--Estimated Pro
+insert @tmp(gno,custno,invono,scnoa,ucoin,prouprice,coin,pronprice)
+select '06',custno,invono,scnoa,'US$',sum(isnull(uprice,0))-sum(isnull(ncuprice,0))-sum(isnull(ecuprice,0)),'NT$',sum(isnull(nprice,0))-sum(isnull(ncnprice,0))-sum(isnull(ecnprice,0))
+from @tmp
+group by custno,invono,scnoa
+
+
+update @tmp
+set floata=b.floata,ufloata=1,[percent]=prouprice/b.uprice*100
+from @tmp a left join (select custno,floata,uprice from @tmp where gno=1) b on a.custno=b.custno
+where gno='06'
+
+-- Item No.
+insert @tmp(gno,rr,custno,invono,scnoa,custnoa,productno,mount,unit,price,cost,expence,itemprice,profit,[percent],coin,ucoin,uprice,floata,nprice)
+select '07',ROW_NUMBER()over(partition by a.invono order by c.product),a.custno,a.invono,scnoa,b.custorde,c.productno,c.mount,c.unit,c.price,c.sprice*a.floata,'','',c.profit*a.floata,c.profit/c.price,'NT$','US$',b.money,a.floata,b.money*a.floata
+from @tmp a
+left join view_orde b on a.scnoa=b.noa
+left join view_ordes c on b.noa=c.noa
+where gno ='01'  and c.productno!=''
+
+update @tmp
+set gno=case when rr=1 then '07' else '08' end
+where gno='07'
+
+-- A/R Received Detail
+insert @tmp(gno,custno,invono,scnoa,uprice,floata,nprice,ucoin,coin)
+select '09',custno,invono,scnoa,uprice,floata,uprice*floata,'US$','NT$'
+from @tmp
+where gno='01' 
+group by custno,invono,scnoa,uprice,floata
+
+--Material Cost Detail
+insert @tmp(gno,rr,custno,agentno,agent,invono,scnoa,custnoa,productno,mount,unit,cost,price,coin,ucoin)
+select '10',ROW_NUMBER()over(partition by a.invono order by c.product),a.custno,a.agentno,a.agent,a.invono,scnoa,b.custorde,c.productno,c.mount,c.unit,c.sprice*a.floata,c.mount*c.sprice*a.floata,'NT$',case when b.tax is null then '' else '(未含)' end
+from @tmp a
+left join view_orde b on a.scnoa=b.noa
+left join view_ordes c on b.noa=c.noa
+where gno ='01' and c.productno!=''
+
+update @tmp
+set gno=case when rr=1 then '10' else '11' end
+where gno='10'
+
+insert @tmp(gno,custno,invono,scnoa,custnoa,price,coin,ucoin,tax,cost)
+select '12',a.custno,a.invono,scnoa,b.custorde,sum(c.mount*c.sprice*a.floata),'NT$'
+	,case when b.tax is null then '' else '(含稅)' end,b.tax*a.floata*100,sum(c.mount*c.sprice*a.floata)+b.tax*a.floata
+from @tmp a
+left join view_orde b on a.scnoa=b.noa
+left join view_ordes c on b.noa=c.noa
+where gno ='01' and c.productno!=''
+group by a.custno,a.invono,a.invdatea,scnoa,b.custorde,taxtype,b.tax,a.floata
+
+insert @tmp(gno,custno,invono)
+select '13',custno,invono
+from @tmp
+group by invono,custno
+
+select 
+dbo.getComma(uprice,2)uprice,dbo.getComma(ouprice,2)ouprice,dbo.getComma(uiprice,2)uiprice,dbo.getComma(ncuprice,2)ncuprice,dbo.getComma(ecuprice,2)ecuprice,dbo.getComma(prouprice,2)prouprice
+,dbo.getComma(nprice,0)nprice,dbo.getComma(onprice,0)onprice,dbo.getComma(niprice,0)niprice,dbo.getComma(ncnprice,0)ncnprice,dbo.getComma(ecnprice,0)ecnprice,dbo.getComma(pronprice,0)pronprice
+,dbo.getComma([percent],2)+'%' [percent]
+,case when gno<=09 then dbo.getComma(price,2) else  dbo.getComma(price,0) end price
+,case when gno<=11 then dbo.getComma(cost,2) else  dbo.getComma(price,0) end cost
+,dbo.getComma(Profit,2)Profit
+,dbo.getComma(tax,0)tax
+,* 
+from @tmp
+order by custno,invono,gno
+;
 
 ------------------------------------------------------------------------------------------------------------------------------------------------------------
 z_vcc21:--z_vcc21
