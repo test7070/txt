@@ -1,0 +1,181 @@
+﻿z_pay_jo01:--z_pay_jo01
+declare @t_bdate nvarchar(20) = case when '#non' = [4] then '' else [4] end
+declare @t_edate nvarchar(20) = case when '#non' = [5] then CHAR(255) else [5] end
+declare @t_btggno nvarchar(50) = case when '#non'=[6] then '' else [6] end
+declare @t_etggno nvarchar(50) = case when '#non'=[7] then char(255) else [7] end
+
+declare @tmp table(
+	gno nvarchar(2),
+	idno int identity(0,1),
+	rr int,
+	page int,
+	pageno int,
+	pagecounta int,
+	tggno nvarchar(100),
+	comp nvarchar(200),
+	addr nvarchar(max),
+	tel nvarchar(50),
+	fax nvarchar(50),
+	boss nvarchar(50),
+	email nvarchar(50),
+	serial nvarchar(50),
+	
+	datea nvarchar(10),
+	typea nvarchar(10),
+	invo nvarchar(50),
+	coin nvarchar(10),
+	rc2no nvarchar(50),
+	noa nvarchar(50),
+	price float,
+	tax float,
+	opay float,
+	lcnoa nvarchar(50),--
+	lcdatea nvarchar(10),
+	lcprice float,
+
+	moneya float,
+	total float,
+	paysale float,
+	itotal float,
+	atotal float,
+	ntotal float
+)
+
+insert @tmp (gno,tggno,comp,datea,invo,rc2no,coin,price,tax,total)
+select '03',isnull(a.tggno,''),a.tgg,a.datea,b.noa,a.noa,a.coin,a.money,a.tax,a.total
+from view_rc2 a
+left join invoi b on a.invono=b.noa
+where (a.datea between @t_bdate and @t_edate)
+and (a.tggno between @t_btggno and @t_etggno)
+
+--已沖帳
+update @tmp
+set opay=b.opay
+from @tmp a left join (select SUM(b.paysale)opay,b.rc2no from pay a left join pays b on a.noa=b.noa where (datea between @t_bdate and @t_edate) group by b.rc2no )b on a.rc2no=b.rc2no
+
+--費用憑證
+insert @tmp (gno,tggno,comp,datea,invo,rc2no,coin,price,tax,total,lcnoa,lcdatea,lcprice)
+select'03',tggno,comp,a.datea,b.invono,a.noa,a.coin,a.money,a.tax,a.total,b.payno,b.datea,b.total
+from paybs b left join payb a on a.noa=b.noa
+
+update @tmp 
+set rr=rx
+from @tmp a left join (select ROW_NUMBER()over(PARTITION by tggno,rc2no order by datea,idno)rx,idno from @tmp)b on a.idno=b.idno
+
+update @tmp
+set gno=case when rr=1 then '03' else '04' end
+
+--總計
+insert @tmp(gno,tggno,coin,moneya,tax,total,paysale)
+select '05',tggno,coin,SUM(price),SUM(tax),SUM(total),SUM(opay)
+from @tmp
+where gno='03'
+group by tggno,coin
+
+update @tmp 
+set rr=rx
+from @tmp a left join (select ROW_NUMBER()over(PARTITION by tggno order by coin)rx,idno from @tmp where gno='05')b on a.idno=b.idno
+where gno='05'
+
+update @tmp
+set gno=case when rr=1 then '05' else '06' end
+where gno='05'
+
+insert @tmp(gno,tggno,coin,atotal,ntotal)
+select '07',a.tggno,a.coin,b.unpay,isnull(b.unpay,0)+SUM(total)
+from @tmp a
+outer apply(select noa,SUM(unpay)unpay,coin from tgg_2s where mon<LEFT(@t_bdate,7) and a.tggno=noa and a.coin=coin group by noa,coin)b
+where gno='03'
+group by a.tggno,a.coin,b.unpay
+
+update @tmp 
+set itotal=b.itotal,opay=c.opay
+from @tmp a left join(select tggno,sum(lcprice)itotal from @tmp group by tggno)b on a.tggno=b.tggno
+left join (select tggno,SUM(opay)opay from pay where datea between @t_bdate and @t_edate group by tggno)c on a.tggno=c.tggno
+where gno='07'
+
+update @tmp 
+set rr=rx
+from @tmp a left join (select ROW_NUMBER()over(PARTITION by tggno order by coin)rx,idno from @tmp where gno='07')b on a.idno=b.idno
+where gno='07'
+
+update @tmp
+set gno=case when rr=1 then '07' else '08' end
+where gno='07'
+
+update @tmp 
+set pagecounta=b.page,pageno=1
+from @tmp a left join (select tggno,idno,ROW_NUMBER()over(partition by tggno order by tggno,idno)page from @tmp)b 
+on a.tggno=b.tggno and a.idno=b.idno
+
+----更新頁數-------
+declare @pageline int =30
+declare @pageno int =1
+declare @tggno nvarchar(50) 
+declare @page int
+declare @pagecounta int
+
+update @tmp
+set pageno=(select SUM(pageno) from @tmp where tggno=a.tggno and pagecounta<=a.pagecounta)
+from @tmp a
+
+update a
+set page=ceiling(cast(a.pageno as float)/@pageline)
+from (select idno,page,pageno from @tmp)a
+--------------------
+
+insert @tmp(gno,rr,page,pageno,pagecounta,tggno,comp,addr,tel,fax,boss,email,serial)
+select case when page=1 then '01' else '02' end,'0',page,case when page=1 then 16 else 8 end,0,a.tggno,b.comp,'('+b.zip_comp+')'+b.addr_comp,b.tel,b.fax,b.boss+' '+b.head,b.email,b.serial
+from @tmp a left join tgg b on a.tggno= b.noa
+group by page,a.tggno,b.comp,b.addr_comp,b.tel,b.fax,b.boss,b.head,b.email,b.serial,b.zip_comp
+
+declare @tpageline int =32
+
+--補空白行
+declare cursor_table cursor for 
+select tggno,MAX(page) page,SUM(case when gno=1 or gno=2 or gno=7 then pageno else 0 end) pageno,MAX(pagecounta) pagecounta from @tmp group by tggno
+open cursor_table 
+fetch next from cursor_table 
+into @tggno,@page,@pageno,@pagecounta
+while(@@FETCH_STATUS <> -1) 
+begin
+	while ((@pageno)%@tpageline>0)
+	begin
+		set @pageno=@pageno+1
+		insert @tmp(gno,tggno,page,pagecounta)
+		select '09',@tggno,@page,@pagecounta+1
+	end
+
+	fetch next from cursor_table 
+	into @tggno,@page,@pageno,@pagecounta
+end 
+close cursor_table 
+deallocate cursor_table
+
+insert @tmp(gno,tggno,page,pagecounta)
+select '10',tggno,MAX(page),MAX(pagecounta)+1
+from @tmp
+group by tggno
+
+insert @tmp(gno,tggno,pagecounta)
+select '11',tggno,MAX(pagecounta)+1
+from @tmp
+group by tggno 
+
+select
+@t_bdate bdatea
+,@t_edate edatea
+,dbo.getComma(price,2)price
+,case when total<0 then '('+dbo.getComma(total*-1,2)+')' else  dbo.getComma(total,2) end ttotal
+,case when atotal<0 then '('+dbo.getComma(atotal*-1,2)+')' else  dbo.getComma(atotal,2) end  aatotal
+,case when ntotal<0 then '('+dbo.getComma(ntotal*-1,2)+')' else  dbo.getComma(ntotal,2) end nntotal
+,dbo.getComma(moneya,2)moneya
+,dbo.getComma(paysale,2)paysale
+,dbo.getComma(opay,2)opay
+,dbo.getComma(tax,2)tax
+,dbo.getComma(lcprice,2)lcprice
+,dbo.getComma(total,2)total
+,dbo.getComma(itotal,2)itotal
+,* from @tmp
+order by tggno,pagecounta
+;
