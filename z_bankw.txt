@@ -24,19 +24,12 @@ z_bankw02:--z_bankw02
 		,gqb2 float --開票
 		--應收帳款	
 		,vcc float
-		,vcctax float
-		,umm float
 		--應付帳款
 		,rc2 float
-		,rc2tax float
-		,pay float	
 		--預估採購/費用	
 		--預收	
 		,ummopay float
-		,ummunopay float
 		--預付	
-		,payopay float
-		,payunopay float
 		--借款、融資	
 		--還款金額	
 		--餘額
@@ -47,6 +40,10 @@ z_bankw02:--z_bankw02
 	declare @cno nvarchar(20)
 	declare @datea nvarchar(20)
 	declare @money float
+	declare @tax float
+	declare @paysale float
+	declare @mon nvarchar(20)
+	declare @custno nvarchar(20)
 	declare @memo nvarchar(max)
 	declare @paytype nvarchar(max)
 	declare @string nvarchar(max)
@@ -100,280 +97,207 @@ z_bankw02:--z_bankw02
 	end
 	close cursor_table
 	deallocate cursor_table
-
+	--================================================================================================
+	--================================================================================================
+	declare @tmpvcc table(
+		custno nvarchar(20)
+		,mon nvarchar(20)
+		,paytype nvarchar(20)
+		,[money] float
+		,tax float
+		,paysale float
+	)
+	insert into @tmpvcc(custno,mon,paytype,[money],tax,paysale)
+	select a.custno,a.mon,isnull(b.paytype,'')
+		,sum(isnull([money],0)) [money]
+		,sum(isnull([tax],0)) tax
+		,sum(isnull([paysale],0)) paysale
+	from(
+		select custno,mon
+			,sum(isnull([money],0)*case when typea='1' then 1 else -1 end) [money]
+			,0 tax
+			,0 paysale
+		from view_vcc
+		group by custno,mon
+		union all
+		select custno,mon
+			,0 [money]
+			,sum(isnull([tax],0)) 
+			,0 paysale
+		from vcca
+		group by custno,mon
+		union all
+		select custno,paymon mon
+			,0 [money]
+			,0 tax
+			,sum(isnull([paysale],0)) 
+		from umms
+		where len(ISNULL(custno,''))>0 and len(ISNULL(paymon,''))>0
+		group by custno,paymon) a
+	left join cust b on a.custno=b.noa
+	group by a.custno,a.mon,isnull(b.paytype,'')
+	having len(replace(isnull(a.mon,''),'/',''))>0
+		
 	--應收帳款
-	--vcc	
 	declare cursor_table cursor for
-	select a.cno,a.datea
-		,ISNULL(a.[money],0)*case when a.typea='1' then 1 else -1 end
-		,case when a.typea='1' then '' else '退' end +' '+isnull(a.nick,'')
-		,b.paytype
-	from view_vcc a
-	left join cust b on a.custno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[money],0)!=0
-	
+	select 	custno,mon,paytype,[money],tax,paysale from @tmpvcc
 	open cursor_table
 	fetch next from cursor_table
-	into @cno,@datea,@money,@memo,@paytype
+	into @custno,@mon,@paytype,@money,@tax,@paysale
 	while(@@FETCH_STATUS <> -1)
 	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
+		if @money + @tax > @paysale
 		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
-		end
-	
-		insert into #z_bankw02(cno,datea,vcc,memo,paytype)values(@cno,@datea,@money,@memo,@paytype)
-		fetch next from cursor_table
-		into @cno,@datea,@money,@memo,@paytype
-	end
-	close cursor_table
-	deallocate cursor_table
-	--vcctax
-	declare cursor_table cursor for
-	select a.cno,a.datea,isnull(a.tax,0) tax
-		,'稅-'+b.nick + ' '+a.noa
-		,b.paytype
-	from vcca a
-	left join cust b on a.custno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.tax,0)!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@memo,@paytype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
-		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
-		end
+			set @datea = @mon +'/01'
+			set @datea = dbo.AD2ChineseEraName(DATEADD(MM,1,dbo.ChineseEraName2AD(@datea)))
+			set @datea = LEFT(@datea,7)+'01'
+			-- +5d
+			set @datea = dbo.AD2ChineseEraName(DATEADD(DD,5,dbo.ChineseEraName2AD(@datea)))
 		
-		insert into #z_bankw02(cno,datea,vcctax,memo,paytype)values(@cno,@datea,@money,@memo,@paytype)
-		
+			if left(LTRIM(rtrim(@paytype)),2)='月結'
+			begin
+				set @string = ''
+				set @n = 1
+				while LEN(@paytype)>=@n
+				begin
+					if substring(@paytype,@n,1) like '[0-9]'
+						set @string = @string + substring(@paytype,@n,1)
+					set @n = @n + 1
+				end
+				set @n = case when LEN(@string)>0 then CAST(@string as int) else 0 end
+				set @datea = dbo.AD2ChineseEraName(DATEADD(DD,@n,dbo.ChineseEraName2AD(@datea)))
+			end
+				
+			insert into #z_bankw02(cno,datea,vcc,memo,paytype)
+			select '' cno
+				,@datea
+				,(@money + @tax - @paysale)
+				,'應收到期 '+@mon+' '+@paytype+' 加五天' memo
+				,@paytype
+		end
+
 		fetch next from cursor_table
-		into @cno,@datea,@money,@memo,@paytype
+		into @custno,@mon,@paytype,@money,@tax,@paysale
 	end
 	close cursor_table
 	deallocate cursor_table
-	--umm
-	declare cursor_table cursor for
-	select a.cno,b.datea,isnull(a.paysale,0),a.vccno
-	from umms a
-	left join umm b on a.noa=b.noa
-	where b.datea between @t_bdate and @t_edate
-	--where b.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[paysale],0)!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@memo
-	while(@@FETCH_STATUS <> -1)
-	begin
-		insert into #z_bankw02(cno,datea,umm,memo)values(@cno,@datea,@money,@memo)
-		fetch next from cursor_table
-		into @cno,@datea,@money,@memo
-	end
-	close cursor_table
-	deallocate cursor_table
-	--預收	
-	--ummopay
-	declare cursor_table cursor for
-	select a.cno,a.datea,isnull(a.opay,0),a.comp
-	from umm a
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[opay],0)!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@memo
-	while(@@FETCH_STATUS <> -1)
-	begin
-		insert into #z_bankw02(cno,datea,ummopay,memo)values(@cno,@datea,@money,@memo)
-		fetch next from cursor_table
-		into @cno,@datea,@money,@memo
-	end
-	close cursor_table
-	deallocate cursor_table
+	--================================================================================================
+	--================================================================================================
+	--預收
+	set @mon = LEFT(@t_bdate,6)
 	
-	--ummunopay
+	declare @unpay float
+	declare @opay float	
+	
 	declare cursor_table cursor for
-	select a.cno,a.datea,isnull(a.unopay,0),a.comp
-	from umm a
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[unopay],0)!=0
+		select custno
+			,SUM([money]+tax-paysale) unpay
+			,0 opay
+		from @tmpvcc
+		where custno=@custno and mon>=@mon
+		group by custno
+		having SUM([money]+tax-paysale)!=0
+		union all
+		select a.custno
+			,0 unpay
+			,sum(ISNULL(opay,0)-ISNULL(unopay,0)) opay
+		from umm a
+		group by a.custno,a.mon
+		having sum(ISNULL(opay,0)-ISNULL(unopay,0))!=0	
 	open cursor_table
 	fetch next from cursor_table
-	into @cno,@datea,@money,@memo
+	into @custno,@unpay,@opay
 	while(@@FETCH_STATUS <> -1)
 	begin
-		insert into #z_bankw02(cno,datea,ummunopay,memo)values(@cno,@datea,@money,@memo)
+		if @opay - @unpay >0
+		begin
+			set @cno = ''
+			insert into #z_bankw02(cno,datea,ummopay,memo)
+			select @cno
+				,@mon
+				,@opay - @unpay
+				,'預收>未收，' +dbo.getComma(@opay,-1)+'>'+dbo.getComma(@unpay,-1)
+		end 
+	
 		fetch next from cursor_table
-		into @cno,@datea,@money,@memo
+		into @custno,@unpay,@opay
 	end
 	close cursor_table
 	deallocate cursor_table
-	
+	--================================================================================================
+	--================================================================================================
 	--應付帳款
-	--rc2	
 	declare cursor_table cursor for
-	select a.cno,a.datea
-		,ISNULL(a.[money],0) * case when a.typea='1' then 1 else -1 end
-		,case when a.typea='1' then '' else '退' end +' '+isnull(a.nick,'')
-		,b.paytype
-	from view_rc2 a
-	left join tgg b on a.tggno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[money],0)!=0
+		select a.tggno,a.mon,isnull(b.paytype,'')
+			,sum(isnull([money],0)) [money]
+			,sum(isnull([tax],0)) tax
+			,sum(isnull([paysale],0)) paysale
+		from(
+			select tggno,mon
+				,sum(isnull([money],0)*case when typea='1' then 1 else -1 end) [money]
+				,0 tax
+				,0 paysale
+			from view_rc2
+			group by tggno,mon
+			union all
+			select tggno,mon
+				,0 [money]
+				,sum(isnull([tax],0)) 
+				,0 paysale
+			from rc2a
+			group by tggno,mon
+			union all
+			select tggno,paymon mon
+				,0 [money]
+				,0 tax
+				,sum(isnull([paysale],0)) 
+			from pays
+			where len(ISNULL(tggno,''))>0 and len(ISNULL(paymon,''))>0
+			group by tggno,paymon) a
+		left join tgg b on a.tggno=b.noa
+		group by a.tggno,a.mon,isnull(b.paytype,'')
+		having len(replace(isnull(a.mon,''),'/',''))>0
 	open cursor_table
 	fetch next from cursor_table
-	into @cno,@datea,@money,@memo,@paytype
+	into @custno,@mon,@paytype,@money,@tax,@paysale
 	while(@@FETCH_STATUS <> -1)
 	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
+		if @money + @tax > @paysale
 		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
+			set @datea = @mon +'/01'
+			--netx mon  1d
+			set @datea = dbo.AD2ChineseEraName(DATEADD(MM,1,dbo.ChineseEraName2AD(@datea)))
+			set @datea = LEFT(@datea,7)+'01'
+			
+			if left(LTRIM(rtrim(@paytype)),2)='月結'
+			begin
+				set @string = ''
+				set @n = 1
+				while LEN(@paytype)>=@n
+				begin
+					if substring(@paytype,@n,1) like '[0-9]'
+						set @string = @string + substring(@paytype,@n,1)
+					set @n = @n + 1
+				end
+				set @n = case when LEN(@string)>0 then CAST(@string as int) else 0 end
+				set @datea = dbo.AD2ChineseEraName(DATEADD(DD,@n,dbo.ChineseEraName2AD(@datea)))
+			end
+				
+			insert into #z_bankw02(cno,datea,rc2,memo,paytype)
+			select '' cno
+				,@datea
+				,(@money + @tax - @paysale)
+				,'應付到期 '+@mon+' '+@paytype memo
+				,@paytype
 		end
 		
-		insert into #z_bankw02(cno,datea,rc2,memo,paytype)values(@cno,@datea,@money,@memo,@paytype)
 		fetch next from cursor_table
-		into @cno,@datea,@money,@memo,@paytype
+		into @custno,@mon,@paytype,@money,@tax,@paysale
 	end
 	close cursor_table
 	deallocate cursor_table
-	
-	--rc2tax
-	declare cursor_table cursor for
-	select a.cno,a.datea,isnull(a.tax,0) tax
-		,'稅-'+b.nick + ' '+a.noa
-		,b.paytype
-	from rc2a a
-	left join tgg b on a.tggno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[tax],0)!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@memo,@paytype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
-		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
-		end
-		
-		insert into #z_bankw02(cno,datea,rc2tax,memo,paytype)values(@cno,@datea,@money,@memo,@paytype)
-		fetch next from cursor_table
-		into @cno,@datea,@money,@memo,@paytype
-	end
-	close cursor_table
-	deallocate cursor_table
-	--pay
-	declare cursor_table cursor for
-	select a.cno,b.datea,isnull(a.paysale,0),a.rc2no
-	from pays a
-	left join pay b on a.noa=b.noa
-	where b.datea between @t_bdate and @t_edate
-	--where b.datea<=@t_edate
-	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	and isnull(a.[paysale],0)!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@memo
-	while(@@FETCH_STATUS <> -1)
-	begin
-		insert into #z_bankw02(cno,datea,pay,memo)values(@cno,@datea,@money,@memo)
-		fetch next from cursor_table
-		into @cno,@datea,@money,@memo
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	----預付	
-	----payopay
-	--declare cursor_table cursor for
-	--select a.cno,a.datea,isnull(a.opay,0),a.comp
-	--from pay a
-	--where a.datea between @t_bdate and @t_edate
-	----where a.datea<=@t_edate
-	--and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	--and isnull(a.[opay],0)!=0
-	--open cursor_table
-	--fetch next from cursor_table
-	--into @cno,@datea,@money,@memo
-	--while(@@FETCH_STATUS <> -1)
-	--begin
-	--	insert into #z_bankw02(cno,datea,payopay,memo)values(@cno,@datea,@money,@memo)
-	--	fetch next from cursor_table
-	--	into @cno,@datea,@money,@memo
-	--end
-	--close cursor_table
-	--deallocate cursor_table
-	
-	----payunopay
-	--declare cursor_table cursor for
-	--select a.cno,a.datea,isnull(a.unopay,0),a.comp
-	--from pay a
-	--where a.datea between @t_bdate and @t_edate
-	----where a.datea<=@t_edate
-	--and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
-	--and isnull(a.[unopay],0)!=0
-	--open cursor_table
-	--fetch next from cursor_table
-	--into @cno,@datea,@money,@memo
-	--while(@@FETCH_STATUS <> -1)
-	--begin
-	--	insert into #z_bankw02(cno,datea,payunopay,memo)values(@cno,@datea,@money,@memo)
-		
-	--	fetch next from cursor_table
-	--	into @cno,@datea,@money,@memo
-	--end
-	--close cursor_table
-	--deallocate cursor_table
 	-----------------------------------------------------------------
-	delete #z_bankw02 where datea>@t_edate
+	delete #z_bankw02 where not datea between @t_bdate and @t_edate
 
 	update #z_bankw02 set gno='1'
 	
@@ -458,8 +382,8 @@ z_bankw02:--z_bankw02
 		while(@@FETCH_STATUS <> -1)
 		begin
 			set @money = 0	
-			select @money=ISNULL(gqb1,0)+ISNULL(vcc,0)+ISNULL(vcctax,0)-ISNULL(umm,0)+ISNULL(ummopay,0)-ISNULL(ummunopay,0) 
-				-(ISNULL(gqb2,0)+ISNULL(rc2,0)+ISNULL(rc2tax,0)-ISNULL(pay,0)+ISNULL(payopay,0)-ISNULL(payunopay,0) ) 
+			select @money=ISNULL(gqb1,0)+ISNULL(vcc,0)+ISNULL(ummopay,0)
+				-(ISNULL(gqb2,0)+ISNULL(rc2,0)) 
 			from #z_bankw02 where sel=@sel
 			
 			set @result = @result + ISNULL(@money,0)
@@ -506,11 +430,11 @@ z_bankw02:--z_bankw02
 		,acomp a00
 		,datea a01 --日期	
 		,dbo.getComma(ISNULL(gqb1,0)-isnull(gqb2,0),-1) a02--到期票據	
-		,dbo.getComma(ISNULL(vcc,0)+isnull(vcctax,0)-ISNULL(umm,0),-1) a03--應收帳款	
-		,dbo.getComma(ISNULL(rc2,0)+isnull(rc2tax,0)-ISNULL(pay,0),-1) a04--應付帳款	
+		,dbo.getComma(ISNULL(vcc,0),-1) a03--應收帳款	
+		,dbo.getComma(ISNULL(rc2,0),-1) a04--應付帳款	
 		,'' a05--預估採購/費用	
-		,dbo.getComma(ISNULL(ummopay,0)-isnull(ummunopay,0),-1) a06--預收	
-		,dbo.getComma(ISNULL(payopay,0)-isnull(payunopay,0),-1) a07--預付	
+		,dbo.getComma(ISNULL(ummopay,0),-1) a06--預收	
+		,'' a07--預付	
 		,'' a08--借款、融資	
 		,'' a09--還款金額	
 		,dbo.getComma(result,-1) a10--餘額
@@ -547,19 +471,12 @@ z_bankw01:--z_bankw01
 		,gqb2 float --開票
 		--應收帳款	
 		,vcc float
-		,vcctax float
-		,umm float
 		--應付帳款
 		,rc2 float
-		,rc2tax float
-		,pay float	
 		--預估採購/費用	
 		--預收	
 		,ummopay float
-		,ummunopay float
 		--預付	
-		,payopay float
-		,payunopay float
 		--借款、融資	
 		--還款金額	
 		--餘額
@@ -568,6 +485,11 @@ z_bankw01:--z_bankw01
 	declare @cno nvarchar(20)
 	declare @datea nvarchar(20)
 	declare @money float
+	declare @tax float
+	declare @paysale float
+	declare @mon nvarchar(20)
+	declare @custno nvarchar(20)
+	declare @memo nvarchar(max)
 	declare @paytype nvarchar(max)
 	declare @string nvarchar(max)
 	declare @n int
@@ -632,334 +554,218 @@ z_bankw01:--z_bankw01
 	end
 	close cursor_table
 	deallocate cursor_table
-	--應收帳款
-	--vcc	
-	declare cursor_table cursor for
-	select '',a.datea
-		,SUM(ISNULL(a.[money],0)*case when a.typea='1' then 1 else -1 end)
-		,ISNULL(b.paytype,'')
-	from view_vcc a
+	--================================================================================================
+	--================================================================================================
+	declare @tmpvcc table(
+		custno nvarchar(20)
+		,mon nvarchar(20)
+		,paytype nvarchar(20)
+		,[money] float
+		,tax float
+		,paysale float
+	)
+	insert into @tmpvcc(custno,mon,paytype,[money],tax,paysale)
+	select a.custno,a.mon,isnull(b.paytype,'')
+		,sum(isnull([money],0)) [money]
+		,sum(isnull([tax],0)) tax
+		,sum(isnull([paysale],0)) paysale
+	from(
+		select custno,mon
+			,sum(isnull([money],0)*case when typea='1' then 1 else -1 end) [money]
+			,0 tax
+			,0 paysale
+		from view_vcc
+		group by custno,mon
+		union all
+		select custno,mon
+			,0 [money]
+			,sum(isnull([tax],0)) 
+			,0 paysale
+		from vcca
+		group by custno,mon
+		union all
+		select custno,paymon mon
+			,0 [money]
+			,0 tax
+			,sum(isnull([paysale],0)) 
+		from umms
+		where len(ISNULL(custno,''))>0 and len(ISNULL(paymon,''))>0
+		group by custno,paymon) a
 	left join cust b on a.custno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	group by a.datea,isnull(b.paytype,'')
-	having SUM(ISNULL(a.[money],0)*case when a.typea='1' then 1 else -1 end)!=0
+	group by a.custno,a.mon,isnull(b.paytype,'')
+	having len(replace(isnull(a.mon,''),'/',''))>0
+	--應收帳款
+	declare cursor_table cursor for
+	select 	custno,mon,paytype,[money],tax,paysale from @tmpvcc	
 	open cursor_table
 	fetch next from cursor_table
-	into @cno,@datea,@money,@paytype
+	into @custno,@mon,@paytype,@money,@tax,@paysale
 	while(@@FETCH_STATUS <> -1)
 	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
+		if @money + @tax > @paysale
 		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
+			set @datea = @mon +'/01'
+			set @datea = dbo.AD2ChineseEraName(DATEADD(MM,1,dbo.ChineseEraName2AD(@datea)))
+			set @datea = LEFT(@datea,7)+'01'
+			-- +5d
+			set @datea = dbo.AD2ChineseEraName(DATEADD(DD,5,dbo.ChineseEraName2AD(@datea)))
+		
+			if left(LTRIM(rtrim(@paytype)),2)='月結'
+			begin
+				set @string = ''
+				set @n = 1
+				while LEN(@paytype)>=@n
+				begin
+					if substring(@paytype,@n,1) like '[0-9]'
+						set @string = @string + substring(@paytype,@n,1)
+					set @n = @n + 1
+				end
+				set @n = case when LEN(@string)>0 then CAST(@string as int) else 0 end
+				set @datea = dbo.AD2ChineseEraName(DATEADD(DD,@n,dbo.ChineseEraName2AD(@datea)))
+			end
+			
+			set @cno = ''
+			if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
+			begin
+				insert into #z_bankw01(cno,datea,vcc)
+				select @cno,@datea,(@money + @tax - @paysale)
+			end
+			else
+			begin
+				update #z_bankw01 set vcc=ISNULL(vcc,0)+(@money + @tax - @paysale) where cno=@cno and datea=@datea
+			end
 		end
 		
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,vcc)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set vcc=ISNULL(vcc,0)+@money where cno=@cno and datea=@datea
-		end
 		fetch next from cursor_table
-		into @cno,@datea,@money,@paytype
+		into @custno,@mon,@paytype,@money,@tax,@paysale
+	end
+	close cursor_table
+	deallocate cursor_table
+	--================================================================================================
+	--================================================================================================
+	--預收
+	set @mon = LEFT(@t_bdate,6)
+	
+	declare @unpay float
+	declare @opay float	
+	
+	declare cursor_table cursor for
+		select custno
+			,SUM([money]+tax-paysale) unpay
+			,0 opay
+		from @tmpvcc
+		where custno=@custno and mon>=@mon
+		group by custno
+		having SUM([money]+tax-paysale)!=0
+		union all
+		select a.custno
+			,0 unpay
+			,sum(ISNULL(opay,0)-ISNULL(unopay,0)) opay
+		from umm a
+		group by a.custno,a.mon
+		having sum(ISNULL(opay,0)-ISNULL(unopay,0))!=0	
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@unpay,@opay
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @opay - @unpay >0
+		begin
+			set @cno = ''
+			if not exists(select * from #z_bankw01 where cno=@cno and datea=@mon)
+			begin
+				insert into #z_bankw01(cno,datea,ummopay)values(@cno,@mon,@opay - @unpay)
+			end
+			else
+			begin
+				update #z_bankw01 set ummopay=ISNULL(ummopay,0)+(@opay - @unpay) where cno=@cno and datea=@mon
+			end
+		end 
+	
+		fetch next from cursor_table
+		into @custno,@unpay,@opay
+	end
+	close cursor_table
+	deallocate cursor_table
+	--================================================================================================
+	--================================================================================================
+	--應付帳款
+	declare cursor_table cursor for
+		select a.tggno,a.mon,isnull(b.paytype,'')
+			,sum(isnull([money],0)) [money]
+			,sum(isnull([tax],0)) tax
+			,sum(isnull([paysale],0)) paysale
+		from(
+			select tggno,mon
+				,sum(isnull([money],0)*case when typea='1' then 1 else -1 end) [money]
+				,0 tax
+				,0 paysale
+			from view_rc2
+			group by tggno,mon
+			union all
+			select tggno,mon
+				,0 [money]
+				,sum(isnull([tax],0)) 
+				,0 paysale
+			from rc2a
+			group by tggno,mon
+			union all
+			select tggno,paymon mon
+				,0 [money]
+				,0 tax
+				,sum(isnull([paysale],0)) 
+			from pays
+			where len(ISNULL(tggno,''))>0 and len(ISNULL(paymon,''))>0
+			group by tggno,paymon) a
+		left join tgg b on a.tggno=b.noa
+		group by a.tggno,a.mon,isnull(b.paytype,'')
+		having len(replace(isnull(a.mon,''),'/',''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @custno,@mon,@paytype,@money,@tax,@paysale
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @money + @tax > @paysale
+		begin
+			set @datea = @mon +'/01'
+			--netx mon  1d
+			set @datea = dbo.AD2ChineseEraName(DATEADD(MM,1,dbo.ChineseEraName2AD(@datea)))
+			set @datea = LEFT(@datea,7)+'01'
+			
+			if left(LTRIM(rtrim(@paytype)),2)='月結'
+			begin
+				set @string = ''
+				set @n = 1
+				while LEN(@paytype)>=@n
+				begin
+					if substring(@paytype,@n,1) like '[0-9]'
+						set @string = @string + substring(@paytype,@n,1)
+					set @n = @n + 1
+				end
+				set @n = case when LEN(@string)>0 then CAST(@string as int) else 0 end
+				set @datea = dbo.AD2ChineseEraName(DATEADD(DD,@n,dbo.ChineseEraName2AD(@datea)))
+			end
+			
+			set @cno = ''
+			if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
+			begin
+				insert into #z_bankw01(cno,datea,rc2)
+				select @cno,@datea,(@money + @tax - @paysale)
+			end
+			else
+			begin
+				update #z_bankw01 set rc2=ISNULL(rc2,0)+(@money + @tax - @paysale) where cno=@cno and datea=@datea
+			end	
+		end
+		
+		fetch next from cursor_table
+		into @custno,@mon,@paytype,@money,@tax,@paysale
 	end
 	close cursor_table
 	deallocate cursor_table
 
-	--vcctax
-	declare cursor_table cursor for
-	select '',a.datea,sum(isnull(a.tax,0)) tax
-	,isnull(b.paytype,'')
-	from vcca a
-	left join cust b on a.custno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	--where a.datea<=@t_edate
-	group by a.datea,isnull(b.paytype,'')
-	having sum(isnull(a.tax,0))!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@paytype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
-		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
-		end
-		
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,vcctax)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set vcctax=ISNULL(vcctax,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money,@paytype
-	end
-	close cursor_table
-	deallocate cursor_table
-	--umm
-	declare cursor_table cursor for
-	select '',b.datea,SUM(isnull(a.paysale,0))
-	from umms a
-	left join umm b on a.noa=b.noa
-	where b.datea between @t_bdate and @t_edate
-	group by b.datea
-	having sum(isnull(a.[paysale],0))!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,umm)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set umm=ISNULL(umm,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money
-	end
-	close cursor_table
-	deallocate cursor_table
-	--預收	
-	--ummopay
-	declare cursor_table cursor for
-	select '',a.datea,SUM(isnull(a.opay,0))
-	from umm a
-	where a.datea between @t_bdate and @t_edate
-	group by a.datea
-	having sum(isnull(a.[opay],0))!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,ummopay)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set ummopay=ISNULL(ummopay,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	--ummunopay
-	declare cursor_table cursor for
-	select '',a.datea,SUM(isnull(a.unopay,0))
-	from umm a
-	where a.datea between @t_bdate and @t_edate
-	group by a.datea
-	having sum(isnull(a.[unopay],0))!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,ummunopay)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set ummunopay=ISNULL(ummunopay,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	--應付帳款
-	--rc2	
-	declare cursor_table cursor for
-	select '',a.datea
-		,SUM(ISNULL(a.[money],0)*case when a.typea='1' then 1 else -1 end)
-		,ISNULL(b.paytype,'')
-	from view_rc2 a
-	left join tgg b on a.tggno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	group by a.datea,ISNULL(b.paytype,'')
-	having sum(ISNULL(a.[money],0)*case when a.typea='1' then 1 else -1 end)!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@paytype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
-		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
-		end
-		
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,rc2)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set rc2=ISNULL(rc2,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money,@paytype
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	--rc2tax
-	declare cursor_table cursor for
-	select '',a.datea,sum(isnull(a.tax,0)) tax
-	,ISNULL(b.paytype,'')
-	from rc2a a
-	left join tgg b on a.tggno=b.noa
-	where a.datea between @t_bdate and @t_edate
-	group by a.datea,ISNULL(b.paytype,'')
-	having sum(isnull(a.[tax],0))!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money,@paytype
-	while(@@FETCH_STATUS <> -1)
-	begin
-		set @string = ''
-		set @n = 1
-		while LEN(@paytype)>=@n
-		begin
-			if substring(@paytype,@n,1) like '[0-9]'
-				set @string = @string + substring(@paytype,@n,1)
-			set @n = @n + 1
-		end
-		if LEN(@string)>0
-		begin
-			set @datea = dbo.AD2ChineseEraName( DATEADD(DD,CAST(@string as int),DATEADD(MM,1,dbo.ChineseEraName2AD(@datea))))
-		end
-		
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,rc2tax)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set rc2tax=ISNULL(rc2tax,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money,@paytype
-	end
-	close cursor_table
-	deallocate cursor_table
-	--pay
-	declare cursor_table cursor for
-	select '',b.datea,SUM(isnull(a.paysale,0))
-	from pays a
-	left join pay b on a.noa=b.noa
-	where b.datea between @t_bdate and @t_edate
-	group by b.datea
-	having sum(isnull(a.[paysale],0))!=0
-	open cursor_table
-	fetch next from cursor_table
-	into @cno,@datea,@money
-	while(@@FETCH_STATUS <> -1)
-	begin
-		if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-		begin
-			insert into #z_bankw01(cno,datea,pay)values(@cno,@datea,@money)
-		end
-		else
-		begin
-			update #z_bankw01 set pay=ISNULL(pay,0)+@money where cno=@cno and datea=@datea
-		end
-		fetch next from cursor_table
-		into @cno,@datea,@money
-	end
-	close cursor_table
-	deallocate cursor_table
-	
-	----預付	
-	----payopay
-	--declare cursor_table cursor for
-	--select '',a.datea,SUM(isnull(a.opay,0))
-	--from pay a
-	--where a.datea between @t_bdate and @t_edate
-	--group by a.datea
-	--having sum(isnull(a.[opay],0))!=0
-	--open cursor_table
-	--fetch next from cursor_table
-	--into @cno,@datea,@money
-	--while(@@FETCH_STATUS <> -1)
-	--begin
-	--	if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-	--	begin
-	--		insert into #z_bankw01(cno,datea,payopay)values(@cno,@datea,@money)
-	--	end
-	--	else
-	--	begin
-	--		update #z_bankw01 set payopay=ISNULL(payopay,0)+@money where cno=@cno and datea=@datea
-	--	end
-	--	fetch next from cursor_table
-	--	into @cno,@datea,@money
-	--end
-	--close cursor_table
-	--deallocate cursor_table
-	
-	----payunopay
-	--declare cursor_table cursor for
-	--select '',a.datea,SUM(isnull(a.unopay,0))
-	--from pay a
-	--where a.datea between @t_bdate and @t_edate
-	--group by a.datea
-	--having sum(isnull(a.[unopay],0))!=0
-	--open cursor_table
-	--fetch next from cursor_table
-	--into @cno,@datea,@money
-	--while(@@FETCH_STATUS <> -1)
-	--begin
-	--	if not exists(select * from #z_bankw01 where cno=@cno and datea=@datea)
-	--	begin
-	--		insert into #z_bankw01(cno,datea,payunopay)values(@cno,@datea,@money)
-	--	end
-	--	else
-	--	begin
-	--		update #z_bankw01 set payunopay=ISNULL(payunopay,0)+@money where cno=@cno and datea=@datea
-	--	end
-	--	fetch next from cursor_table
-	--	into @cno,@datea,@money
-	--end
-	--close cursor_table
-	--deallocate cursor_table
 	-----------------------------------------------------------------
-	delete #z_bankw01 where datea>@t_edate
+	delete #z_bankw01 where not datea between @t_bdate and @t_edate
 	
 	update #z_bankw01 set gno='1'
 	
@@ -1043,8 +849,8 @@ z_bankw01:--z_bankw01
 		while(@@FETCH_STATUS <> -1)
 		begin
 			set @money = 0	
-			select @money=ISNULL(gqb1,0)+ISNULL(vcc,0)+ISNULL(vcctax,0)-ISNULL(umm,0)+ISNULL(ummopay,0)-ISNULL(ummunopay,0) 
-				-(ISNULL(gqb1,0)+ISNULL(rc2,0)+ISNULL(rc2tax,0)-ISNULL(pay,0)+ISNULL(payopay,0)-ISNULL(payunopay,0) ) 
+			select @money=ISNULL(gqb1,0)+ISNULL(vcc,0)+ISNULL(ummopay,0) 
+				-(ISNULL(gqb1,0)+ISNULL(rc2,0) ) 
 			from #z_bankw01 where sel=@sel
 			
 			set @result = @result + ISNULL(@money,0)
@@ -1091,11 +897,11 @@ z_bankw01:--z_bankw01
 		,acomp a00
 		,datea a01 --日期	
 		,dbo.getComma(ISNULL(gqb1,0)-isnull(gqb2,0),-1) a02--到期票據	
-		,dbo.getComma(ISNULL(vcc,0)+isnull(vcctax,0)-ISNULL(umm,0),-1) a03--應收帳款	
-		,dbo.getComma(ISNULL(rc2,0)+isnull(rc2tax,0)-ISNULL(pay,0),-1) a04--應付帳款	
+		,dbo.getComma(ISNULL(vcc,0),-1) a03--應收帳款	
+		,dbo.getComma(ISNULL(rc2,0),-1) a04--應付帳款	
 		,'' a05--預估採購/費用	
-		,dbo.getComma(ISNULL(ummopay,0)-isnull(ummunopay,0),-1) a06--預收	
-		,dbo.getComma(ISNULL(payopay,0)-isnull(payunopay,0),-1) a07--預付	
+		,dbo.getComma(ISNULL(ummopay,0),-1) a06--預收	
+		,'' a07--預付	
 		,'' a08--借款、融資	
 		,'' a09--還款金額	
 		,dbo.getComma(result,-1) a10--餘額
