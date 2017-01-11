@@ -1,4 +1,169 @@
-﻿z_bank01:--z_bank01
+﻿z_bank02:--z_bank02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	--declare @t_accy nvarchar(20) = [1]
+	declare @t_bdate nvarchar(10) = case when '#non'=[2] then '' else [2] end 
+	declare @t_edate nvarchar(10) = case when '#non'=[3] then char(255) else [3] end 
+	declare @t_baccno nvarchar(25) = case when '#non'=[4] then '' else [4] end 
+	declare @t_eaccno nvarchar(25) = case when '#non'=[5] then char(255) else [5] end 
+	--======================================================================================================
+	IF OBJECT_ID('tempdb..#z_bank02')is not null
+	BEGIN
+		drop table #z_bank02
+	END
+	create table #z_bank02(
+		sel int identity(1,1)
+		,gno nvarchar(10)
+		,pno int
+		,recno int
+		,accy nvarchar(10)
+		,acc1 nvarchar(20)
+		,acc2 nvarchar(50)
+		,account nvarchar(50)
+		,datea nvarchar(20)
+		,accc3 nvarchar(20)
+		,dmoney float
+		,cmoney float
+		,result float
+		,memo nvarchar(max)
+	)
+	
+	
+	declare @accy nvarchar(10)
+	declare @acc nvarchar(20)
+	declare @accc nvarchar(20)
+	declare @acccs nvarchar(20)
+	
+	declare cursor_table cursor for
+	
+	select  right(left(a.[name],7),3),a.[name],b.[name],c.[name]
+	from sys.tables a
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acccs[0-9][0-9][0-9][_]%') b on RIGHT(a.[name],5)=b.accy
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acc[0-9][0-9][0-9][_]%') c on RIGHT(a.[name],5)=c.accy
+	where a.[name] like 'accc[0-9][0-9][0-9][_]%'
+	and b.[name] is not null
+	and right(left(a.[name],7),3) between left(@t_bdate,3) and left(@t_edate,3)
+	order by RIGHT(a.[name],5)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc,@acccs,@acc
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		--前期
+		set @cmd = "
+		select '1',1,@accy
+			,a.accc5
+			,ISNULL(d.bank,'')
+			,isnull(d.account,'')
+			,@accy
+			,sum(ISNULL(a.dmoney,0)-ISNULL(a.cmoney,0))
+			,0
+			,'前期'
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		left join "+@acc+" c on a.accc5=c.acc1
+		outer apply(select top 1 * from bank where acc1=a.accc5) d
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') < @t_bdate 
+		and a.accc5 between @t_baccno and @t_eaccno 
+		group by a.accc5,ISNULL(d.bank,''),isnull(d.account,'')"
+		insert into #z_bank02(gno,pno,accy,acc1,acc2,account,datea,dmoney,cmoney,memo)
+		execute sp_executesql @cmd,N'@accc nvarchar(20),@accy nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20),@t_baccno nvarchar(20),@t_eaccno nvarchar(20)'
+			,@accc=@accc,@accy=@accy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_baccno=@t_baccno,@t_eaccno=@t_eaccno
+			
+		--本期
+		set @cmd = "
+		select '2',2,@accy
+			,a.accc5
+			,ISNULL(d.bank,'')
+			,isnull(d.account,'')
+			,@accy+'/'+isnull(b.accc2,'')
+			,ISNULL(a.dmoney,0)
+			,ISNULL(a.cmoney,0)
+			,a.accc7
+			,a.accc3
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		left join "+@acc+" c on a.accc5=c.acc1
+		outer apply(select top 1 * from bank where acc1=a.accc5) d
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') between @t_bdate and @t_edate
+		and a.accc5 between @t_baccno and @t_eaccno 
+		order by a.accc5,b.accc2,a.accc3"
+		insert into #z_bank02(gno,pno,accy,acc1,acc2,account,datea,dmoney,cmoney,memo,accc3)
+		execute sp_executesql @cmd,N'@accc nvarchar(20),@accy nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20),@t_baccno nvarchar(20),@t_eaccno nvarchar(20)'
+			,@accc=@accc,@accy=@accy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_baccno=@t_baccno,@t_eaccno=@t_eaccno
+		
+		fetch next from cursor_table
+		into @accy,@accc,@acccs,@acc
+	end
+	close cursor_table
+	deallocate cursor_table
+	---------------------------------------------------------
+	update #z_bank02 set recno=b.recno
+	from #z_bank02 a
+	left join (select sel,ROW_NUMBER()over(partition by accy,acc1 order by pno,datea,sel) recno from #z_bank02) b on a.sel=b.sel
+	
+	update #z_bank02 set result=b.result
+	from #z_bank02 a
+	outer apply(select SUM(dmoney-cmoney) result from #z_bank02 where accy=a.accy and acc1=a.acc1 and recno<=a.recno) b
+		
+	
+	--insert into #z_bank02(gno,pno,accy,acc1,acc2,account,datea,dmoney,cmoney,result,memo)
+	--select '3',3,a.accy,a.acc1,a.acc2,a.account,null,null,null,b.result,'結餘'
+	--from (select accy,acc1,acc2,account from #z_bank02 group by accy,acc1,acc2,account) a
+	--outer apply (select top 1 result from #z_bank02 where pno!=3 and accy=a.accy and acc1=a.acc1 and acc2=a.acc2 and account=a.account order by recno desc) b
+
+	--空白行
+	declare @t_pagecount int = 35
+	declare @n int
+	
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @account nvarchar(50)
+	declare @datea nvarchar(20)
+	
+	declare cursor_table cursor for
+	select accy,acc1,acc2,account,count(1) from #z_bank02 group by accy,acc1,acc2,account
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@acc1,@acc2,@account,@n
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		while @n%@t_pagecount!=0
+		begin
+			insert into #z_bank02(gno,pno,accy,acc1,acc2,account)
+			select '4',4,@accy,@acc1,@acc2,@account
+			
+			set @n = @n + 1
+		end
+	
+		fetch next from cursor_table
+		into @accy,@acc1,@acc2,@account,@n
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select gno
+		,recno rr
+		,acc2 a01
+		,account a02
+		,datea b00
+		,accc3 b01
+		,dbo.getComma(dmoney,-1) b02
+		,dbo.getComma(cmoney,-1) b03
+		,dbo.getComma(result,-1) b04
+		,memo b05
+	from #z_bank02	
+	order by accy,acc1,pno,recno
+	drop table #z_bank02;
+		
+
+
+z_bank01:--z_bank01
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
 	

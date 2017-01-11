@@ -1,4 +1,198 @@
-﻿z_cutp01:--z_cutp01
+﻿z_cutp02:--z_cutp02
+	SET QUOTED_IDENTIFIER OFF	
+	declare @t_bdate nvarchar(20) = case when '#non' = [4] then '' else [4] end
+	declare @t_edate nvarchar(20) = case when '#non' = [5] then char(255) else [5] end
+	declare @t_bproductno nvarchar(20) = case when '#non' = [15] then '' else [15] end
+	declare @t_eproductno nvarchar(20) = case when '#non' = [16] then '' else [16] end
+	declare @t_mechno nvarchar(max) = case when '#non' = [17] then '' else [17] end
+	declare @t_option nvarchar(max) = case when '#non' = [18] then '' else [18] end
+	--=====================================================================================
+	---CUT
+	declare @tmpa table(
+		sel int identity(1,1)
+		,accy nvarchar(10)
+		,noa nvarchar(20) 
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,dime float
+		,width float
+		,gweight float
+		,cweight float
+		,rweight float
+	)
+	declare @accy nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @datea nvarchar(20)
+	declare @productno nvarchar(20)
+	declare @dime float
+	declare @width float
+	declare @gweight float
+	declare @cweight float
+	declare @rweight float
+	declare @weight float
+	
+	declare @uno nvarchar(30)
+	declare @length float
+	
+	declare cursor_table cursor for
+	select a.accy,a.noa,a.datea,b.productno,b.dime,b.width,a.gweight
+	from view_cut a
+	left join view_uccb b on a.uno=b.uno 
+	where a.datea between @t_bdate and @t_edate
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and (len(@t_mechno)=0 or charindex(','+a.mechno+',',','+@t_mechno+',')>0)
+	and (len(@t_option)=0 or charindex('cut',@t_option)>0)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@noa,@datea,@productno,@dime,@width,@gweight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @cweight=0,@rweight=0
+		
+		declare cursor_table2 cursor for
+		
+		select isnull([weight],0),isnull(lengthb,0),bno
+		from view_cuts 
+		where accy=@accy and noa=@noa and isnull([weight],0)!=0
+		
+		open cursor_table2
+		fetch next from cursor_table2
+		into @weight,@length,@uno
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if upper(LEFT(@uno,1)) between 'X' and 'Z'
+			begin
+				set @cweight = @cweight + @weight
+			end
+			else if @length = 0
+			begin
+				set @rweight = @rweight + @weight
+			end
+			else
+			begin
+				set @cweight = @cweight + @weight
+			end
+			fetch next from cursor_table2
+			into @weight,@length,@uno
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		insert into @tmpa(accy,noa,datea,productno,dime,width,gweight,cweight,rweight)
+		select @accy,@noa,@datea,@productno,@dime,@width,@gweight,@cweight,@rweight
+		
+		fetch next from cursor_table
+		into @accy,@noa,@datea,@productno,@dime,@width,@gweight
+	end
+	close cursor_table
+	deallocate cursor_table
+	--=====================================================================================
+	---CUBM
+	declare @tmpb table(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,dime float
+		,width float
+		,gweight float
+		,cweight float
+		,rweight float
+	)
+	
+	declare @size nvarchar(max)
+	declare @ordeno nvarchar(20)
+	declare @ordeno2 nvarchar(20)
+	
+	declare cursor_table cursor for
+		select a.noa,b.datea,a.productno,a.[weight],a.weight3,isnull(a.size,''),a.ordeno,a.no2
+		from cubms a
+		left join cubm b on a.noa=b.noa
+		where ISNULL(b.datea,'') between @t_bdate and @t_edate
+		and ISNULL(a.productno,'') between @t_bproductno and @t_eproductno
+		and (len(@t_mechno)=0 or charindex(','+b.mechno+',',','+@t_mechno+',')>0)
+		and (len(@t_option)=0 or charindex('cubm',@t_option)>0)
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@datea,@productno,@gweight,@cweight,@size,@ordeno,@ordeno2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @dime=0,@width=0
+		if LEN(@size)>0
+		begin
+			begin try
+				set @dime = cast(LEFT(@size,CHARINDEX('T',@size)-1) as float)
+				set @size = SUBSTRING(@size,CHARINDEX('T*',@size)+2,LEN(@size))
+				set @width = CAST( LEFT(@size,CHARINDEX('*',@size)-1) as float)
+				--set @size = SUBSTRING(@size,CHARINDEX('*',@size)+1,LEN(@size))
+				--set @lengthb = @size
+			end try
+			begin catch
+				--
+			end catch
+		end
+		else
+		begin
+			select top 1 @dime=dime,@width=width
+			from view_ordes where noa=@ordeno and no2=@ordeno2
+		end
+		
+		insert into @tmpb(noa,datea,productno,dime,width,gweight,cweight,rweight)
+		select @noa,@datea,@productno,@dime,@width,@gweight,@cweight,0
+		
+		fetch next from cursor_table
+		into @noa,@datea,@productno,@gweight,@cweight,@size,@ordeno,@ordeno2
+	end
+	close cursor_table
+	deallocate cursor_table
+	--=====================================================================================
+	declare @tmpc table(
+		sel int identity(1,1)
+		,recno int
+		,gno nvarchar(20)
+		,pno int
+		,accy nvarchar(10)
+		,noa nvarchar(20) 
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,dime float
+		,width float
+		,gweight float
+		,cweight float
+		,rweight float
+	)
+	insert into @tmpc(gno,pno,accy,noa,datea,productno,dime,width,gweight,cweight,rweight)
+	select '1',1,accy,noa,datea,productno,dime,width,gweight,cweight,rweight from @tmpa
+	
+	insert into @tmpc(gno,pno,accy,noa,datea,productno,dime,width,gweight,cweight,rweight)
+	select '1',1,'',noa,datea,productno,dime,width,sum(isnull(gweight,0)),sum(isnull(cweight,0)),sum(isnull(rweight,0))
+	from @tmpb
+	group by noa,datea,productno,dime,width
+	
+	update @tmpc set recno=b.recno
+	from @tmpc a
+	left join (select sel,ROW_NUMBER()over(order by datea,productno,dime,width) recno from @tmpc) b on a.sel=b.sel
+	
+	insert into @tmpc(gno,pno,gweight,cweight,rweight)
+	select '2',2,SUM(ISNULL(gweight,0)),SUM(ISNULL(cweight,0)),SUM(ISNULL(rweight,0))
+	from @tmpc
+	
+	select gno
+		,recno rr
+		,case when len(accy)>0 then "cut?noa=$a02?"+accy 
+			else "cubm_pk?noa=$a02" end ghref
+		,datea a01
+		,noa a02
+		,productno a03
+		,dime a04
+		,width a05
+		,dbo.getComma(gweight,-1) a06
+		,dbo.getComma(cweight,-1) a07
+		,dbo.getComma(rweight,-1) a08
+	from @tmpc
+	order by pno,datea,productno,dime,width;
+
+z_cutp01:--z_cutp01
 	SET QUOTED_IDENTIFIER OFF	
 	declare @t_noa nvarchar(20) = case when '#non' = [3] then ' ' else [3] end
 	---------------------------------------------------------
