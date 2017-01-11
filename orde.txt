@@ -869,12 +869,14 @@ declare @t_db nvarchar(50) --DB
 declare @t_factno nvarchar(50) --工廠編號
 declare @t_factory nvarchar(50) --工廠名稱
 declare @t_acomp nvarchar(50) --公司名稱
+declare @t_agentno nvarchar(50) --Agent
 
 set @t_ip = isnull((select (select ip from factory where noa=a.gdate) from view_orde a where noa=@t_noa),'')
 set @t_db = isnull((select (select db from factory where noa=a.gdate) from view_orde a where noa=@t_noa),'')
 set @t_factno = isnull((select gdate from view_orde a where noa=@t_noa),'')
 set @t_factory = isnull((select gtime from view_orde a where noa=@t_noa),'')
 set @t_acomp = isnull((select (select case when isnull(nick,'')!='' then nick else acomp end from acomp where noa=a.cno) from view_orde a where noa=@t_noa),'')
+set @t_agentno = isnull((select agentno from view_orde a where noa=@t_noa),'')
 
 declare @cmd nvarchar(max) 
 IF OBJECT_ID('tempdb..#tmp')is not null
@@ -896,7 +898,7 @@ end
 
 create table #tmp(
 	productno nvarchar(50),
-	product nvarchar(100),
+	product nvarchar(MAX),
 	mount float,
 	datea nvarchar(20),
 	tggno nvarchar(50),
@@ -956,11 +958,13 @@ begin
 		EXEC("insert ordcs"+@accy+"(noa,no2,productno,product,spec,unit,mount,omount,stdmount,price
 		,total,c1,notv,cancel,enda,tggno,datea,trandate)
 		select '"+@ordcno+"',right('000'+cast(ROW_NUMBER() over (order by a.productno) as nvarchar(10)),3)
-		,a.productno,a.product,b.spec,b.unit,a.mount,a.mount omount,b.stdmount,b.cost
-		,a.mount*b.cost total,0 c1
+		,a.productno,a.product,b.spec,b.unit,a.mount,a.mount omount,b.stdmount,isnull(c.price,b.cost)
+		,a.mount*isnull(c.price,b.cost) total,0 c1
 		,a.mount notv,0 cancel,0 enda,'"+@tggno+"' tggno
 		,dbo.q_cdn('"+@t_datea+"',20)datea,a.datea trandate
-		from #tmp a left join ucx b on a.productno=b.noa where a.tggno='"+@tggno+"'")
+		from #tmp a left join ucx b on a.productno=b.noa 
+		outer apply (select top 1 xb.* from ucctgg xa left join ucctgg xb on xa.noa=xb.noa where xa.productno=a.productno and xb.tggno='"+@tggno+"' and isnull(xb.mount,0)<=a.mount order by xb.mount) c
+		where a.tggno='"+@tggno+"'")
 		
 		EXEC(" update ordc"+@accy+" 
 		set money=isnull((select sum(total) from view_ordcs where noa='"+@ordcno+"'),0) 
@@ -993,7 +997,8 @@ begin
 end
 
 set @custno=isnull((select custno from acomp where noa=isnull((select cno from view_orde where noa=@t_noa),'')),'')
-
+declare @berrcount table(counts int)
+declare @berr nvarchar(MAX)='' --越南錯誤訊息
 --新的越南訂單單號
 if(len(@custno)>0 and len(@t_factno)>0 and len(@t_ip)>0 and len(@t_db)>0)
 begin
@@ -1047,21 +1052,34 @@ begin
 	select '"+@ordeno+"',a.no2
 	,b.ucano,a.product,a.spec,a.unit
 	,a.ucolor,a.scolor,a.class,a.classa,a.zinc,a.sizea,a.source,a.hard
-	,a.mount,0,isnull(c.price,0),isnull(a.mount*c.price,0),d.payterms
+	,a.mount,0,isnull(e.price,0),isnull(a.mount*e.price,0),d.payterms
 	,a.packwayno,a.packway,a.cuft,0,a.mount,a.memo,a.noa,a.no2,'',0,0
 	from view_ordes a left join ucx b on a.productno=b.noa 
-	outer apply (select top 1 tb.price from ucctgg ta left join ucctggs tb on ta.noa=tb.noa 
-	where ta.tggno=isnull((select tggno from factory where noa='"+@t_factno+"'),'') and tb.productno=a.productno order by ta.pricedate desc ) c
+	--outer apply (select top 1 tb.price from ucctgg ta left join ucctggs tb on ta.noa=tb.noa 
+	--where ta.tggno=isnull((select tggno from factory where noa='"+@t_factno+"'),'') and tb.productno=a.productno order by ta.pricedate desc ) c
 	outer apply (select * from ["+@t_ip+",1799]."+@t_db+".dbo.custm where noa='"+@custno+"')d
-	--outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@custno+"' and productno=a.productno) e
+	outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@custno+"' and productno=a.productno) e
 	where a.noa='"+@t_noa+"' ")
 	
 	EXEC(" update ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" 
 	set money=isnull((select sum(total) from ["+@t_ip+",1799]."+@t_db+".dbo.view_ordes where noa='"+@ordeno+"'),0) 
 	,total=isnull((select sum(total) from ["+@t_ip+",1799]."+@t_db+".dbo.view_ordes where noa='"+@ordeno+"'),0) 
 	where noa='"+@ordeno+"'")
+	
+	insert @berrcount
+	EXEC("select count(*) from (
+	select b.productno,b.price price1,0 price2 from view_ordc a left join view_ordcs b on a.noa=b.noa where quatno='"+@t_noa+"'
+	union all
+	select b.noa,0,isnull(e.price,0) from view_ordes a left join ucx b on a.productno=b.noa 
+	outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@custno+"' and productno=a.productno) e
+	where memo2='"+@t_noa+"'
+	)tmp group by productno having MAX(price1)!=MAX(price2)")
+	
+	if((select count(*) from @berrcount)>0)
+	begin
+		set @berr='轉越南廠產品單價不同!!'
+	end
 end
-
 
 --更新orde的採購單號
 set @accy=isnull((select top 1 accy from view_orde where noa=@t_noa),@t_accy)
@@ -1070,7 +1088,7 @@ EXEC("update orde"+@accy+" set ordcno=isnull(stuff((select ','+noa from view_ord
 where noa='"+@t_noa+"' ")
 
 --回傳採購單號
-select @err err,isnull(stuff((select ','+noa from view_ordc where quatno=@t_noa FOR XML PATH('')),1,1,''),'') ordcno,@ordeno ordeno
+select @err+@berr err,isnull(stuff((select ','+noa from view_ordc where quatno=@t_noa FOR XML PATH('')),1,1,''),'') ordcno,@ordeno ordeno
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
