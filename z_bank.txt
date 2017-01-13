@@ -23,13 +23,14 @@
 		,account nvarchar(50)
 		,datea nvarchar(20)
 		,accc3 nvarchar(20)
-		,dmoney float
-		,cmoney float
-		,result float
+		,[begin] float --昨日餘額
+		,dmoney float --存入金額
+		,cmoney float --提領金額
+		,result float --本日結餘
+		,[end] nvarchar(max) --可用餘額(依銀行電子資料)
 		,memo nvarchar(max)
 	)
-	
-	
+		
 	declare @accy nvarchar(10)
 	declare @acc nvarchar(20)
 	declare @accc nvarchar(20)
@@ -103,6 +104,11 @@
 	close cursor_table
 	deallocate cursor_table
 	---------------------------------------------------------
+	--沒異動明細的,期初也不需顯示
+	delete #z_bank02 
+	from #z_bank02 a
+	where not exists(select * from #z_bank02 where pno='2' and accy=a.accy and acc1=a.acc1) 
+	---------------------------------------------------------
 	update #z_bank02 set recno=b.recno
 	from #z_bank02 a
 	left join (select sel,ROW_NUMBER()over(partition by accy,acc1 order by pno,datea,sel) recno from #z_bank02) b on a.sel=b.sel
@@ -110,15 +116,34 @@
 	update #z_bank02 set result=b.result
 	from #z_bank02 a
 	outer apply(select SUM(dmoney-cmoney) result from #z_bank02 where accy=a.accy and acc1=a.acc1 and recno<=a.recno) b
-		
 	
-	--insert into #z_bank02(gno,pno,accy,acc1,acc2,account,datea,dmoney,cmoney,result,memo)
-	--select '3',3,a.accy,a.acc1,a.acc2,a.account,null,null,null,b.result,'結餘'
-	--from (select accy,acc1,acc2,account from #z_bank02 group by accy,acc1,acc2,account) a
-	--outer apply (select top 1 result from #z_bank02 where pno!=3 and accy=a.accy and acc1=a.acc1 and acc2=a.acc2 and account=a.account order by recno desc) b
+	update #z_bank02 set [begin]=c.result
+	from #z_bank02 a
+	left join (select sel,ROW_NUMBER()over(partition by accy,acc1,datea order by recno) xx from #z_bank02 ) b on a.sel=b.sel
+	outer apply(select top 1 * from #z_bank02 where accy=a.accy and acc1=a.acc1 and recno<a.recno order by recno desc) c
+	where b.xx = 1
+	--
+	update #z_bank02 set [end]= dbo.getComma(cast(ISNULL(c.money4,0) as decimal(16,4)),-1)  
+	from #z_bank02 a
+	left join (select sel,ROW_NUMBER()over(partition by accy,acc1,datea order by recno desc) xx from #z_bank02 ) b on a.sel=b.sel
+	outer apply(select top 1 x.money4
+		from banktmps x
+		left join banktmp y on x.noa=y.noa
+		where y.bankno=replace(a.acc1,'.','') and x.datea=a.datea
+		order by x.noa desc,x.noq desc) c
+	where b.xx = 1
+	
+	---------------------------------------------------------
+	--期初不需顯示
+	delete #z_bank02 where gno='1'
+	---------------------------------------------------------
+	insert into #z_bank02(gno,pno,accy,acc1,dmoney,cmoney,memo)
+	select '3',3,CHAR(255),CHAR(255),SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),'結餘'
+	from #z_bank02
+
 
 	--空白行
-	declare @t_pagecount int = 35
+	/*declare @t_pagecount int = 28
 	declare @n int
 	
 	declare @acc1 nvarchar(20)
@@ -145,7 +170,7 @@
 		into @accy,@acc1,@acc2,@account,@n
 	end
 	close cursor_table
-	deallocate cursor_table
+	deallocate cursor_table*/
 	
 	select gno
 		,recno rr
@@ -153,14 +178,16 @@
 		,account a02
 		,datea b00
 		,accc3 b01
-		,dbo.getComma(dmoney,-1) b02
-		,dbo.getComma(cmoney,-1) b03
-		,dbo.getComma(result,-1) b04
-		,memo b05
+		,dbo.getComma([begin],-1) b02
+		,dbo.getComma(dmoney,-1) b03
+		,dbo.getComma(cmoney,-1) b04
+		,dbo.getComma(result,-1) b05
+		--,dbo.getComma([end],-1) b06
+		,[end] b06
+		,memo b07
 	from #z_bank02	
 	order by accy,acc1,pno,recno
 	drop table #z_bank02;
-		
 
 
 z_bank01:--z_bank01
