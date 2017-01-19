@@ -23,8 +23,9 @@ begin
 	set @vccno=isnull((select vccno from view_orde where noa=@noa),'')
 	set @invono=isnull((select invono from view_vcc where noa=@vccno),'')
 	
-	--12/22 出貨單產生傳票不刪除 (收款也不刪除)
-	if(@project="RB" and len(@vccno)>0 and ((select count(*) from view_vcc where noa=@vccno and accno!='')>0 or (select count(*) from umms where vccno=@vccno )>0 ))
+	--104/12/22 出貨單產生傳票不刪除 (收款也不刪除)//and ((select count(*) from view_vcc where noa=@vccno and accno!='')>0 or (select count(*) from umms where vccno=@vccno )>0 )
+	--106/01/17 出貨單日期不變動
+	if(@project="RB" and len(@vccno)>0)
 	begin
 		set @t_bbmupdate='Y'
 	end
@@ -71,10 +72,8 @@ begin
 			begin
 				set @cmd="update a 
 				set stype=b.stype
-				--,datea='"+@nowdate+"'
-				--,mon=left('"+@nowdate+"',6)
 				,custno=b.custno,comp=b.comp,nick=b.nick,tel=b.tel,fax=b.fax
-				,post=b.post	,addr=b.addr	,post2=b.post2,addr2=b.addr2
+				,post=b.post,addr=b.addr,post2=b.post2,addr2=b.addr2
 				,salesno=b.salesno,sales=b.sales,cno=b.cno,acomp=b.acomp
 				,paytype=b.paytype,trantype=b.trantype
 				,money=b.money,tax=b.tax,taxtype=b.taxtype,total=b.total
@@ -338,7 +337,33 @@ begin
 			end
 			else
 			begin
-				set @invono=(select top 1 vccano from @cvcca order by noa,vccano )
+				--set @invono=(select top 1 vccano from @cvcca order by noa,vccano )
+				
+				if((select count(*) from adpipe where noa=@invono)>0)
+				begin
+					set @invono= isnull((select top 1 vccano from @cvcca a where 
+					not exists (select * from vcca where noa=a.vccano)
+					and not exists (select * from adpipe where noa=a.vccano)
+					order by noa,vccano),'')
+					
+					if(@invono='')
+					begin
+						set @t_err='當期無可用發票，請手動開立'
+					end
+					
+					BEGIN TRY
+						insert adpipe(noa)
+						select @invono
+					END TRY
+					BEGIN CATCH
+						set @t_err='開立發票錯誤，請重新開立'
+					END CATCH
+				end
+				else
+				begin
+					insert adpipe(noa)
+					select @invono
+				end
 			end
 		end
 		
@@ -1054,13 +1079,13 @@ begin
 	select '"+@ordeno+"',a.no2
 	,b.ucano,a.product,a.spec,a.unit
 	,a.ucolor,a.scolor,a.class,a.classa,a.zinc,a.sizea,a.source,a.hard
-	,a.mount,0,isnull(e.price,0),isnull(a.mount*e.price,0),d.payterms
+	,a.mount,isnull(e.cost,0),isnull(e.price2,0),isnull(a.mount*e.price2,0),d.payterms
 	,a.packwayno,a.packway,a.cuft,0,a.mount,a.memo,a.noa,a.no2,a.datea,0,0
 	from view_ordes a left join ucx b on a.productno=b.noa 
 	--outer apply (select top 1 tb.price from ucctgg ta left join ucctggs tb on ta.noa=tb.noa 
 	--where ta.tggno=isnull((select tggno from factory where noa='"+@t_factno+"'),'') and tb.productno=a.productno order by ta.pricedate desc ) c
 	outer apply (select * from ["+@t_ip+",1799]."+@t_db+".dbo.custm where noa='"+@t_custno+"')d
-	outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@t_custno+"' and productno=a.productno) e
+	outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@t_custno+"' and productno=b.ucano) e
 	where a.noa='"+@t_noa+"' ")
 	
 	EXEC(" update ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" 
@@ -1072,9 +1097,9 @@ begin
 	EXEC("select count(*) from (
 	select b.productno,b.price price1,0 price2 from view_ordc a left join view_ordcs b on a.noa=b.noa where quatno='"+@t_noa+"'
 	union all
-	select b.noa,0,isnull(e.price,0) from view_ordes a left join ucx b on a.productno=b.noa 
-	outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@t_custno+"' and productno=a.productno) e
-	where memo2='"+@t_noa+"'
+	select b.noa,0,isnull(e.price2,0) from view_ordes a left join ucx b on a.productno=b.noa 
+	outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@t_custno+"' and productno=b.ucano) e
+	where a.noa='"+@t_noa+"'
 	)tmp group by productno having MAX(price1)!=MAX(price2)")
 	
 	if((select count(*) from @berrcount)>0)
