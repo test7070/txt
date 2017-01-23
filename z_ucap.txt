@@ -19,10 +19,15 @@ set @parent='root'
 ------------報表設定<<Start>>------------
 declare @pageline int = 23 --每頁幾行
 ------------報表設定<<End>>------------
-declare @tmp table(
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
 	productno nvarchar(MAX),
 	product nvarchar(MAX),
-	parent nvarchar(MAX),
+	parent nvarchar(255),
 	mount float,
 	dividea int,
 	mul int,
@@ -69,87 +74,59 @@ declare @result table(
 	tggs nvarchar(max)
 )
 
-insert into @tmp
+insert into #tmp
 select a.productno,a.product,a.noa,(isnull(a.mount,0)*(case when isnull(a.mul,0) =0 then 1 else isnull(a.mul,0) end)),a.dividea,a.mul
-,isnull((select price from view_costs where mon=@t_mon and productno=a.productno),0)
-,isnull(b.wages*b.hours,0),isnull(b.makes*b.hours,0),isnull(b.price,0)
+,isnull(c.price,0)
+,isnull(b.wages*((b.minutes+(b.sec/60))/60),0)
+,isnull(b.makes*((b.minutes+(b.sec/60))/60),0)
+,isnull(b.price,0)
 ,isnull(b.hours,0),isnull(b.minutes,0),isnull(b.hminutes,0),isnull(b.sec,0),isnull(b.hsec,0)
 ,isnull(b.preday,0),isnull(b.pretime,0)
 ,noq
 from ucas a outer apply (select * from uca where noa=a.productno) b
+outer apply (select * from view_costs where mon=@t_mon and productno=a.productno)c
 
---if(PATINDEX('%.%',@productno)>0)
---begin
---	while(PATINDEX('%.%',@productno)>0)
---	begin
---		insert into @tmp
---		select left(@productno,PATINDEX('%.%',@productno)-1)
---		,(select product from uca where noa=left(@productno,PATINDEX('%.%',@productno)-1)),@parent,1,0
---		,isnull((select price from view_costs where mon=@t_mon and productno=left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select wages*hours from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select makes*hours from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select price from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select hours from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select minutes from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select preday from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,isnull((select pretime from uca where noa= left(@productno,PATINDEX('%.%',@productno)-1)),0)
---		,'000'
---
---		set @productno=RIGHT(@productno,LEN(@productno)-PATINDEX('%.%',@productno))
---	end
---end
-
---insert into @tmp
---select @productno,(select product from uca where noa=@productno),@parent,1,0
---,isnull((select price from view_costs where mon=@t_mon and productno=@productno),0)
---,isnull((select wages*hours from uca where noa= @productno),0)
---,isnull((select makes*hours from uca where noa= @productno),0)
---,isnull((select price from uca where noa= @productno),0)
---,isnull((select hours from uca where noa= @productno),0)
---,isnull((select minutes from uca where noa= @productno),0)
---,isnull((select preday from uca where noa= @productno),0)
---,isnull((select pretime from uca where noa= @productno),0)
---,'000'
-
-insert into @tmp
-select a.noa,b.product,@parent,1,0,0
-,isnull((select price from view_costs where mon=@t_mon and productno=a.noa),0)
-,isnull(b.wages*b.hours,0)
-,isnull(b.makes*b.hours,0)
+insert into #tmp
+select a.noa,a.product,@parent,1,0,0
 ,isnull(b.price,0)
-,isnull(b.hours,0)
-,isnull(b.minutes,0)
-,isnull(b.hminutes,0)
-,isnull(b.sec,0)
-,isnull(b.hsec,0)
-,isnull(b.preday,0)
-,isnull(b.pretime,0)
+,isnull(a.wages*((a.minutes+(a.sec/60))/60),0)
+,isnull(a.makes*((a.minutes+(a.sec/60))/60),0)
+,isnull(a.price,0)
+,isnull(a.hours,0)
+,isnull(a.minutes,0)
+,isnull(a.hminutes,0)
+,isnull(a.sec,0)
+,isnull(a.hsec,0)
+,isnull(a.preday,0)
+,isnull(a.pretime,0)
 ,'000' from uca a 
-outer apply (select * from uca where noa=a.noa) b
+outer apply (select * from view_costs where mon=@t_mon and productno=a.noa)b
 where a.noa between @t_bspno and @t_espno 
 and (len(@t_groupano)=0 or a.groupano=@t_groupano)
 and (len(@t_style)=0 or charindex(@t_style,a.style)>0) 
+
+CREATE INDEX tmpindex1 ON #tmp (parent)
 
 BEGIN TRY
 	--遞迴
 	WITH OrdersTable (uno,productno,product,noa,Level,sortCol,mount,dividea,mul,price,costb,costc,costd,hours,minutes,hminutes,sec,hsec,preday,pretime) as (
 		Select
 			productno,productno,product,parent,0, CONVERT(nvarchar(MAX),productno),mount,dividea,mul,price,costb,costc,costd,hours,minutes,hminutes,sec,hsec,preday,pretime
-		from @tmp
+		from #tmp
 		where parent=@parent
 		UNION ALL
 		SELECT
 			OrdersTable.uno,a.productno,a.product,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(MAX)
 			,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)+'**'+a.noq),a.mount,a.dividea,a.mul,a.price,a.costb,a.costc,a.costd,a.hours,a.minutes,a.hminutes,a.sec,a.hsec,a.preday,a.pretime
-		FROM @tmp a, OrdersTable
+		FROM #tmp a, OrdersTable
 		WHERE a.parent=OrdersTable.productno
 	)
 	insert into @result
 		Select
 			case when @t_isprice='1' then '2' else '5' end gno,0 pageno,a.uno,
 			a.productno pno,a.product, a.level, a.sortcol,round(a.mount,4) mount,
-			case when isnull(a.dividea,0)=0 then null else ' / '+CAST(a.dividea as nvarchar(10)) end dividea,
-			case when isnull(a.mul,0)=0 then null else ' * '+CAST(a.mul as nvarchar(10)) end mul,
+			case when isnull(a.dividea,0)=0 or isnull(a.dividea,0)=1 then null else ' / '+CAST(a.dividea as nvarchar(10)) end dividea,
+			case when isnull(a.mul,0)=0 or isnull(a.mul,0)=0 then null else ' * '+CAST(a.mul as nvarchar(10)) end mul,
 			case when @t_isprice='1' then isnull(a.price*a.mount,0) else null end costa,a.costb,a.costc,a.costd,a.hours,a.minutes,a.hminutes,a.sec,a.hsec,a.preday,a.pretime,
 			case when @t_isprice='1' then
 				(select SUM(price*mount+costb+costc+costd) from OrdersTable where left(sortcol,len(a.sortcol))=a.sortcol)
@@ -238,7 +215,13 @@ select uno,
 	,case when (select COUNT(*) from ucc where noa= replace(a.pno,'　　',''))>0 then 'v' else '' end isucc
 	,'uca?left(noa,'+cast(len(a.pno) as nvarchar)+')=$pno?' ghref
 from @result a
-order by a.pageno,xgno,a.sortCol;
+order by a.pageno,xgno,a.sortCol
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
 ------------------------------------------------------------------------------------------------------------
 z_ucap2:--z_ucap2
 declare @t_bspno nvarchar(50)
@@ -329,11 +312,16 @@ set @t_style = case when '#non' = [12] then '' else [12] end
 declare @parent nvarchar(20)
 set @parent='root'
 
-declare @tmp table(
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
 	xnoa nvarchar(MAX),
 	productno nvarchar(MAX),
 	product nvarchar(MAX),
-	parent nvarchar(MAX),
+	parent nvarchar(255),
 	unit nvarchar(MAX),
 	mount float,
 	price float,
@@ -360,35 +348,41 @@ declare @tmpa table(
 	total float---總成本(子)
 )
 
-insert into @tmp
-select '',productno,product,noa,unit,(isnull(mount,0)*(case when isnull(mul,0) =0 then 1 else isnull(mul,0) end)),isnull((select price from view_costs where mon=@t_mon and productno=a.productno),0)
-,isnull((select wages*hours from uca where noa= a.productno),0)
-,isnull((select makes*hours from uca where noa= a.productno),0)
-,isnull((select price from uca where noa= a.productno),0)
-from ucas a
+insert into #tmp
+select '',a.productno,a.product,a.noa,a.unit
+,(isnull(a.mount,0)*(case when isnull(a.mul,0) =0 then 1 else isnull(a.mul,0) end))
+,isnull(c.price,0)
+,isnull(b.wages*((b.minutes+(b.sec/60))/60),0)
+,isnull(b.makes*((b.minutes+(b.sec/60))/60),0)
+,isnull(b.price,0)
+from ucas a outer apply (select * from uca where noa=a.productno)b
+outer apply (select price from view_costs where mon=@t_mon and productno=a.productno) c
 
-insert into @tmp
-select a.noa,a.noa,(select product from uca where noa=a.noa),@parent
-,isnull((select unit from uca where noa=a.noa),''),1
-,isnull((select price from view_costs where mon=@t_mon and productno=a.noa),0)
-,isnull((select wages*hours from uca where noa= a.noa),0)
-,isnull((select makes*hours from uca where noa= a.noa),0)
-,isnull((select price from uca where noa= a.noa),0)
-from uca a where noa between @t_bspno and @t_espno
+insert into #tmp
+select a.noa,a.noa,a.product,@parent
+,isnull(a.unit,''),1
+,isnull(b.price,0)
+,isnull(a.wages*((a.minutes+(a.sec/60))/60),0)
+,isnull(a.makes*((a.minutes+(a.sec/60))/60),0)
+,isnull(a.price,0)
+from uca a outer apply (select price from view_costs where mon=@t_mon and productno=a.noa)b
+where a.noa between @t_bspno and @t_espno
 and (len(@t_typea)=0 or a.typea=@t_typea)
 and (len(@t_groupano)=0 or a.groupano=@t_groupano)
 and (len(@t_style)=0 or charindex(@t_style,a.style)>0) 
+
+CREATE INDEX tmpindex1 ON #tmp (parent)
 
 BEGIN TRY
 --遞迴
 	WITH OrdersTable (xnoa,productno,product,unit,noa,Level,sortCol,mount,price,costb,costc,costd) as (
 		Select xnoa,productno,product,unit,parent,0, CONVERT(nvarchar(128),productno),mount,price,costb,costc,costd
-		from @tmp
+		from #tmp
 		where parent=@parent
 		UNION ALL
 		SELECT OrdersTable.xnoa,a.productno,a.product,a.unit,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128)
 		,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount,a.price,a.costb,a.costc,a.costd
-		FROM @tmp a, OrdersTable
+		FROM #tmp a, OrdersTable
 		WHERE a.parent=OrdersTable.productno
 	)
 
@@ -429,7 +423,13 @@ select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp',(levels-1))+cast
 ,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,total),1)),0,30)) total
 ,(case when @t_typea='2' then '製成品' when @t_typea='3' then '半成品' else '製成品、半成品' end) typea
 ,(case when len(@t_groupano)=0 then '全部' else (select namea from uccga where noa=@t_groupano) end) groupa
-from @tmpa order by xnoa,sortcol,levels;
+from @tmpa order by xnoa,sortcol,levels
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
 ---**********************************************************************************************
 z_ucap3:--z_ucap3
 declare @productno nvarchar(50)
@@ -469,6 +469,7 @@ declare @tmp table(
 	style nvarchar(90),
 	hours float,
 	minutes float,
+	sec float,
 	stationno nvarchar(max),
 	stations nvarchar(max),
 	tggno nvarchar(max),
@@ -479,7 +480,7 @@ declare @tmp table(
 )
 insert into @tmp
 	select
-		'0' gno,noa,product,style,isnull(hours,0) hours,isnull(minutes,0) minutes,
+		'0' gno,noa,product,style,isnull(hours,0) hours,isnull(minutes,0) minutes,isnull(sec,0),
 		isnull(stationno,'')stationno,isnull(station,'')station,isnull(tggno,'')tggno,isnull(comp,'')comp,
 		(select count(*) from ucas where ucas.noa=uca.noa) BBsCount,'' memo
 	from uca where (noa between @t_bpno and @t_epno) and (isnull(stationgno,'') between @t_bsgno and @t_esgno) 
@@ -489,16 +490,17 @@ declare @productno nvarchar(max)
 declare @products nvarchar(max)
 declare @hours float
 declare @minutes float
+declare @sec float
 declare @stationno nvarchar(max)
 declare @stations nvarchar(max)
 declare @tggno nvarchar(max)
 declare @comp nvarchar(max)
 declare @BBsCount float
 declare cursor_table cursor for
-	select productno,products,hours,minutes,stationno,stations,tggno,comp,BBsCount from @tmp
+	select productno,products,hours,minutes,sec,stationno,stations,tggno,comp,BBsCount from @tmp
 open cursor_table
 fetch next from cursor_table
-into @productno,@products,@hours,@minutes,@stationno,@stations,@tggno,@comp,@BBsCount
+into @productno,@products,@hours,@minutes,@sec,@stationno,@stations,@tggno,@comp,@BBsCount
 while(@@FETCH_STATUS <> -1)
 begin
 	declare @status nvarchar(max) = ''
@@ -510,14 +512,14 @@ begin
 		set @status = '沒有工作中心也無委外廠商'+char(59)+@status
 	update @tmp set memo = @status where productno = @productno
 	fetch next from cursor_table
-	into @productno,@products,@hours,@minutes,@stationno,@stations,@tggno,@comp,@BBsCount
+	into @productno,@products,@hours,@minutes,@sec,@stationno,@stations,@tggno,@comp,@BBsCount
 end
 close cursor_table
 deallocate cursor_table
 
 select
 	ROW_NUMBER()over(order by a.productno asc)recno,
-	a.gno,a.productno,a.products,a.style,a.hours,a.minutes,a.stationno,a.stations,a.tggno,a.comp,a.BBsCount,a.memo,
+	a.gno,a.productno,a.products,a.style,a.hours,a.minutes,a.sec,a.stationno,a.stations,a.tggno,a.comp,a.BBsCount,a.memo,
 	'uca?left(noa,'+cast(len(a.productno) as nvarchar)+')=$productno?' qhref
 from @tmp a
 where (len(isnull(a.memo,0)) > 0)
@@ -543,6 +545,7 @@ select '0' gno
 ,dbo.getComma(price,2)  price
 ,dbo.getComma(isnull(hours,0),3)  hours
 ,dbo.getComma(isnull(minutes,0),3)  minutes
+,dbo.getComma(isnull(sec,0),3)  sec
 ,dbo.getComma(pretime,2)  pretime
 ,dbo.getComma(badperc,2)  badperc
 ,dbo.getComma(uweight,2)  uweight
