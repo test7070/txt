@@ -500,9 +500,9 @@ declare @tmpc table(
 	workno nvarchar(MAX)
 )
 
---刪除已完工流程
+--刪除已完工流程 與被凍結流程
 delete a from @tmpb a
-outer apply (select count(*) counts from view_work where a.workno like '%'+noa+'%' and isnull(mount,0)-isnull(inmount,0)>0) b
+outer apply (select count(*) counts from view_work where a.workno like '%'+noa+'%' and isnull(mount,0)-isnull(inmount,0)>0 and isfreeze=0) b
 where b.counts<=0
 
 --排除流程相同的資料
@@ -655,7 +655,7 @@ end
 -----------------------------------------------------
 select '' procs
 --case when @t_rank>='8' then '' else isnull((select process from process where noa=@s_process),'') end procs
-,replace(replace(replace((select "〈button id='"+noa+"' style='font-size: medium"+char(59)+"width: 190px"+char(59)+"white-space:pre-wrap"+char(59)+"' onclick='workin(this)' 〉"+case when len(stationno)=0 then processno+'◎@'+left(process,11) else stationno+'◎@'+left(station,12) end+"◎@"+noa+"〈/button〉 " from view_work where a.workno like '%'+noa+'%' and (stationno between @t_bstation and @t_estation) and isnull(mount,0)-isnull(inmount,0)>0 order by noa desc for xml path('')),'〈','<'),'〉','>'),'◎@','&#010')btnlist
+,replace(replace(replace((select "〈button id='"+noa+"' style='font-size: medium"+char(59)+"width: 190px"+char(59)+"white-space:pre-wrap"+char(59)+"' onclick='workin(this)' "+(case when isfreeze=1 then "disabled=disabled" else '' end)+" 〉"+case when len(stationno)=0 then processno+(case when isfreeze=1 then '(已凍結)' else '' end)+'◎@'+left(process,11) else stationno+(case when isfreeze=1 then '(已凍結)' else '' end)+'◎@'+left(station,12) end+"◎@"+noa+"〈/button〉 " from view_work where a.workno like '%'+noa+'%' and (stationno between @t_bstation and @t_estation) and isnull(mount,0)-isnull(inmount,0)>0 order by noa desc for xml path('')),'〈','<'),'〉','>'),'◎@','&#010')btnlist
 ,case when title='' then titleno else title end title
 ,replace(convert(varchar, getdate(), 20),'-','/')q_datetime
 ,ROW_NUMBER() over (order by cuano,cuanoq,idno) q_page
@@ -673,6 +673,7 @@ declare @timea nvarchar(50)=[4]
 declare @t_year nvarchar(50)=[5]
 declare @t_userno nvarchar(50) = [6]
 declare @t_namea nvarchar(50) = [7]
+declare @t_team nvarchar(50) = [8]
 declare @t_err nvarchar(max)=''
 
 declare @mount float = cast(@t_mount as float)
@@ -681,6 +682,8 @@ declare @workano nvarchar(50)=isnull((select MAX(noa) from view_worka where noa 
 declare @workbno nvarchar(50)=isnull((select MAX(noa) from view_workb where noa like 'WB'+replace(@datea,'/','')+'%'),'000')
 set @workano='WA'+replace(@datea,'/','')+right('000'+cast(cast(right(@workano,3) as int)+1 as nvarchar(50)),3)
 set @workbno='WB'+replace(@datea,'/','')+right('000'+cast(cast(right(@workbno,3) as int)+1 as nvarchar(50)),3)
+
+set @t_team = case when '#non' = @t_team then '' else  @t_team end
 
 BEGIN TRY
 	Begin Transaction
@@ -701,13 +704,74 @@ BEGIN TRY
 		--入庫
 		EXEC("
 		insert workb"+@accy+"(noa,datea,worktime,stationno,station,workno,workano,worker,memo
-		,storeno,store,mechno,mech,bdate,edate)
+		,storeno,store,mechno,mech,bdate,edate,team)
 		select '"+@workbno+"','"+@datea+"','"+@timea+"',stationno,station,'"+@t_workno+"','"+@workano+"','"+@t_namea+"','由流程卡入庫產生'
-		,'','','','','','' from view_work where noa='"+@t_workno+"' ")
+		,'','','','','','','"+@t_team+"' from view_work where noa='"+@t_workno+"' ")
 
 		EXEC("
 		insert workbs"+@accy+"(noa,noq,datea,productno,product,spec,style,unit,mount,workno,storeno,store,memo)
-		select  '"+@workbno+"','001','"+@datea+"',a.productno,a.product,a.spec,a.style,a.unit,'"+@t_mount+"','"+@t_workno+"','','',''
+		select  '"+@workbno+"','001','"+@datea+"',a.productno,a.product,a.spec,a.style,a.unit,"+@t_mount+",'"+@t_workno+"','','',''
+		from view_work a where a.noa='"+@t_workno+"'")
+		
+		Commit Transaction
+		
+	END TRY
+	BEGIN CATCH
+		ROLLBACK
+		set @t_err='入庫失敗，請聯絡工程師!!'
+	END CATCH
+
+select @workano workano,@workbno workbno,@t_err err
+
+;
+--*************************************************************************************************
+workg_jo_pul:--workg_jo_pul 流程卡退件
+SET QUOTED_IDENTIFIER OFF 
+declare @t_workno nvarchar(50)=[1]
+declare @t_mount nvarchar(50) = [2]
+declare @datea nvarchar(50)=[3]
+declare @timea nvarchar(50)=[4]
+declare @t_year nvarchar(50)=[5]
+declare @t_userno nvarchar(50) = [6]
+declare @t_namea nvarchar(50) = [7]
+declare @t_team nvarchar(50) = [8]
+declare @t_err nvarchar(max)=''
+
+declare @mount float = cast(@t_mount as float)
+declare @accy nvarchar(50)=isnull((select accy from view_work where noa=@t_workno),@t_year)
+declare @workano nvarchar(50)=isnull((select MAX(noa) from view_worka where noa like 'WA'+replace(@datea,'/','')+'%'),'000')
+declare @workbno nvarchar(50)=isnull((select MAX(noa) from view_workb where noa like 'WB'+replace(@datea,'/','')+'%'),'000')
+set @workano='WA'+replace(@datea,'/','')+right('000'+cast(cast(right(@workano,3) as int)+1 as nvarchar(50)),3)
+set @workbno='WB'+replace(@datea,'/','')+right('000'+cast(cast(right(@workbno,3) as int)+1 as nvarchar(50)),3)
+
+set @t_team = case when '#non' = @t_team then '' else  @t_team end
+
+BEGIN TRY
+	Begin Transaction
+
+		--領料
+		EXEC("
+		insert worka"+@accy+"(noa,typea,datea,timea,stationno,station,processno,process,workno,worker,memo
+		,storeno,store,modelno,model,mechno,mech,bdate,edate)
+		select '"+@workano+"','1','"+@datea+"','"+@timea+"',stationno,station,processno,process,'"+@t_workno+"','"+@t_namea+"','由流程卡退件產生'
+		,'','','','','','','','' from view_work where noa='"+@t_workno+"'")
+
+		EXEC("
+		insert workas"+@accy+"(noa,noq,datea,productno,product,spec,style,unit,mount,workno,storeno,store,memo)
+		select  '"+@workano+"',b.noq,'"+@datea+"',b.productno,b.product,b.spec,b.style,b.unit
+		,case when a.mount=0 then 0 else round((b.mount/a.mount)*-1*"+@t_mount+",2) end ,'"+@t_workno+"','','',''
+		from view_work a left join view_works b on a.noa=b.noa where a.noa='"+@t_workno+"'")
+
+		--入庫
+		EXEC("
+		insert workb"+@accy+"(noa,datea,worktime,stationno,station,workno,workano,worker,memo
+		,storeno,store,mechno,mech,bdate,edate,team)
+		select '"+@workbno+"','"+@datea+"','"+@timea+"',stationno,station,'"+@t_workno+"','"+@workano+"','"+@t_namea+"','由流程卡退件產生'
+		,'','','','','','','"+@t_team+"' from view_work where noa='"+@t_workno+"' ")
+
+		EXEC("
+		insert workbs"+@accy+"(noa,noq,datea,productno,product,spec,style,unit,mount,workno,storeno,store,memo)
+		select  '"+@workbno+"','001','"+@datea+"',a.productno,a.product,a.spec,a.style,a.unit,-1*"+@t_mount+",'"+@t_workno+"','','',''
 		from view_work a where a.noa='"+@t_workno+"'")
 		
 		Commit Transaction
