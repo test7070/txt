@@ -3141,3 +3141,122 @@ z_pay03_xy:--z_pay03_xy ref. z_pay03
 	from @result a
 	left join tgg b on a.tggno=b.noa
 	order by a.tggno,a.coin,case when len(isnull(a.rc2no,''))=0 then 2 else 1 end,isnull(a.rc2no,''),a.pno;
+-------------------------------------------------------------------------------------------------------
+z_pay5_dc:--z_pay5_dc
+SET QUOTED_IDENTIFIER OFF
+declare @t_accy nvarchar(20)
+declare @r_accy nvarchar(20)  
+declare @t_bxdate nvarchar(20) 
+declare @t_exdate nvarchar(20) 
+declare @t_partno nvarchar(20) 
+set @t_accy = '[1]'
+set @r_accy = LEFT(@t_accy,3)
+set @t_bxdate = case when '#non' = [8] then '' else [8] end
+set @t_exdate = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_partno = case when '#non' =[3] then '' else [3] end
+
+declare @tmp table( 
+	gno nvarchar(1),
+	rr int,
+	accc3 nvarchar(20), 
+	accc2 nvarchar(20),
+	indate nvarchar(20),--應付票據到期日
+	accc6 nvarchar(40),
+	partno nvarchar(50),
+	part1 nvarchar(50),
+	part nvarchar(20), 
+	memo nvarchar(max), 
+	dmoney float, 
+	amoney float, 
+	bmoney float, 
+	cmoney float, 
+	atotal float, 
+	btotal float, 
+	ctotal float, 
+	title nvarchar(20),
+	ghref nvarchar(MAX),
+	noa nvarchar(100)
+) 
+
+insert into @tmp 
+EXEC("select '1' gno,'',b.accc3,isnull(a.accc2,''), 
+'',b.accc6,isnull(c.noa,char(255)),isnull(c.part,''),isnull(c.part,'') +'－'+ isnull(a.worker,''), 
+b.accc7,b.cmoney, 
+case when left(b.accc5,4) = '1111' then b.cmoney else 0 end, 
+case when left(b.accc5,4) = '1112' then b.cmoney else 0 end, 
+case when left(b.accc5,4) = '2121' then b.cmoney else 0 end,0,0,0,(case when '"+@t_bxdate+"' = '"+@t_exdate+"' then '日' else '月' end)
+,'paytran?accno=$accc3?'+'"+@r_accy+"',''
+from acccs"+@t_accy+" b 
+left join accc"+@t_accy+" a on a.accc3 = b.accc3
+left join acpart"+@t_accy+" c on b.part = c.noa
+where 
+(left(b.accc5,4) = '1111' or left(b.accc5,4) = '1112' or left(b.accc5,4) = '2121' ) 
+and (a.accc2 between '"+@t_bxdate+"' and '"+@t_exdate+"') and not(b.cmoney = 0)
+and(len('"+@t_partno+"') = 0 or '"+@t_partno+"' = c.part)
+")
+
+update @tmp
+set indate=d.indate
+from  @tmp a
+left join pay b on b.accno=a.accc3 
+left join pays c on b.noa=c.noa
+left join gqb d on c.checkno=d.gqbno
+where a.accc6='應付票據' and a.memo like '%'+c.checkno+'%'
+
+declare @title nvarchar(10)=(select title from @tmp group by title)
+
+if(@title='日')
+begin
+	--小計
+	insert into @tmp(gno,accc2,accc3,partno,part1,atotal,btotal,ctotal,title)
+	select  '2',accc2,CHAR(255),partno,part1,SUM(amoney),SUM(bmoney),SUM(cmoney),(case when @t_bxdate = @t_exdate then '日' else '月' end)  
+	from @tmp
+	group by gno,accc2,partno,part1,title
+	
+	update a
+	set rr=rx
+	from(select ROW_NUMBER()over(partition by accc2 order by partno,accc3)rx,rr from @tmp)a 
+end
+else
+begin
+	
+	update a
+	set rr=rx
+	from(select case when part1!='' then ROW_NUMBER()over(partition by gno order by accc2,accc3) else 99997 end rx,rr from @tmp)a 
+	
+	--小計
+	insert into @tmp(gno,rr,accc2,accc3,partno,part1,atotal,btotal,ctotal,title)
+	select  '2',99998,CHAR(255),CHAR(255),partno,part1,SUM(amoney),SUM(bmoney),SUM(cmoney),(case when @t_bxdate = @t_exdate then '日' else '月' end)  
+	from @tmp
+	group by partno,part1,title
+end
+
+
+--總計(沒有加總兌現)
+insert into @tmp(gno,rr,accc2,accc3,partno,part,atotal,btotal,ctotal,title)
+select'3' gno,99999,CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(amoney),SUM(bmoney),SUM(cmoney),(case when @t_bxdate = @t_exdate then '日' else '月' end)  
+from @tmp
+where part1!=''
+
+if(@title='日')
+begin
+	select gno,rr,accc3,accc2,indate,accc6,memo,partno,part1,part 
+	,dbo.getComma(dmoney,0) dmoney 
+	,dbo.getComma(atotal,0) atotal 
+	,dbo.getComma(btotal,0) btotal 
+	,dbo.getComma(ctotal,0) ctotal
+	,title,case when LEN(@t_partno) > 0 then '部門：'+part else '' end tpart,ghref
+	from @tmp 
+	order by accc2,rr,partno,accc3
+end
+else 
+begin
+	select gno,rr,accc3,accc2,indate,accc6,memo,partno,part1,part
+	,dbo.getComma(dmoney,0) dmoney 
+	,dbo.getComma(atotal,0) atotal 
+	,dbo.getComma(btotal,0) btotal 
+	,dbo.getComma(ctotal,0) ctotal
+	,title,case when LEN(@t_partno) > 0 then '部門：'+part else '' end tpart,ghref
+	from @tmp
+	order by rr,accc2,accc3
+end;
