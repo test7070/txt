@@ -20,6 +20,7 @@
 	declare @rc2no nvarchar(max)
 	declare @paysale float 
 	declare @opay float
+	declare @coin nvarchar(10)
 	
 	declare @tmp table(
 		gno nvarchar(10),
@@ -36,6 +37,7 @@
 		bankno nvarchar(20),
 		bank nvarchar(max),
 		indate nvarchar(10),
+		coin nvarchar(10),
 		
 		rc2no nvarchar(20),
 		paysale float,
@@ -48,10 +50,10 @@
 	--select * from pay
 	
 	--付款金額
-	insert into @tmp(recno,tggno,datea,noa,noq,acc1,acc2,[money],checkno,bankno,bank,indate)
+	insert into @tmp(recno,tggno,datea,noa,noq,acc1,acc2,[money],checkno,bankno,bank,indate,coin)
 	select ROW_NUMBER()over(partition by a.tggno,a.datea order by a.noa,a.noq),a.*
 	from(
-		select b.tggno,b.datea,a.noa,a.noq,a.acc1,a.acc2,a.[money],a.checkno,a.bankno,a.bank,a.indate
+		select b.tggno,b.datea,a.noa,a.noq,a.acc1,a.acc2,a.[money],a.checkno,a.bankno,a.bank,a.indate,b.coin
 		from pays a
 		left join pay b on a.noa=b.noa
 		where b.noa is not null
@@ -59,7 +61,7 @@
 		and b.tggno between @t_btggno and @t_etggno
 		and isnull(a.[money],0)!=0
 		union all
-		select tggno,datea,noa,'','','預付沖帳',unopay,'','','','' from pay 
+		select tggno,datea,noa,'','','預付沖帳',unopay,'','','','',coin from pay 
 		where isnull(unopay,0)!=0
 		and datea between @t_bdate and @t_edate
 		and tggno between @t_btggno and @t_etggno
@@ -68,7 +70,7 @@
 	
 	--沖帳
 	declare cursor_table cursor for
-	select b.tggno,b.datea,a.rc2no,a.paysale
+	select b.tggno,b.datea,a.rc2no,a.paysale,b.coin
 	from pays a
 	left join pay b on a.noa=b.noa
 	where b.noa is not null
@@ -78,7 +80,7 @@
 	order by b.tggno,b.datea,a.noa,a.noq
 	open cursor_table
 	fetch next from cursor_table
-	into @tggno,@datea,@rc2no,@paysale
+	into @tggno,@datea,@rc2no,@paysale,@coin
 	while(@@FETCH_STATUS <> -1)
 	begin
 		set @recno = 0
@@ -87,42 +89,43 @@
 
 		if @recno>0
 		begin
-			update @tmp set rc2no=@rc2no,paysale=@paysale where tggno=@tggno and datea=@datea and recno=@recno
+			update @tmp set rc2no=@rc2no,paysale=@paysale where tggno=@tggno and datea=@datea and recno=@recno and coin=@coin
 		end
 		else
 		begin
 			select @recno = max(recno)
 			from @tmp where tggno=@tggno and datea=@datea
 			set @recno = ISNULL(@recno,0)+1
-			insert into @tmp(recno,tggno,datea,rc2no,paysale)
-			select @recno,@tggno,@datea,@rc2no,@paysale
+			insert into @tmp(recno,tggno,datea,rc2no,paysale,coin)
+			select @recno,@tggno,@datea,@rc2no,@paysale,@coin
 		end
 	
 		fetch next from cursor_table
-		into @tggno,@datea,@rc2no,@paysale
+		into @tggno,@datea,@rc2no,@paysale,@coin
 	end
 	close cursor_table
 	deallocate cursor_table
 	----------------------------------------------------------------------------------------
-	insert into @tmp(gno,tggno,datea,mm1,mm2,mm3)
+	insert into @tmp(gno,tggno,datea,mm1,mm2,mm3,coin)
 	select '1',tggno,''
 	,SUM(case when len(isnull(noq,''))=0 then ISNULL([money],0) else 0 end) --預付沖帳
 	,SUM(case when len(isnull(noq,''))>0 then ISNULL([money],0) else 0 end) --付款金額	
 	,SUM(ISNULL(paysale,0))--沖帳金額
+	,coin
 	from @tmp
-	group by tggno
-
+	group by tggno,coin
+	
 	declare cursor_table cursor for
-	select b.tggno,SUM(ISNULL(a.[money],0)-ISNULL(a.paysale,0))
+	select b.tggno,SUM(ISNULL(a.[money],0)-ISNULL(a.paysale,0)),b.coin
 	from pays a
 	left join pay b on a.noa=b.noa
 	where b.noa is not null
 	and b.tggno between @t_btggno and @t_etggno
 	and b.datea <= @t_edate
-	group by b.tggno
+	group by b.tggno,b.coin
 	open cursor_table
 	fetch next from cursor_table
-	into @tggno,@opay
+	into @tggno,@opay,@coin
 	while(@@FETCH_STATUS <> -1)
 	begin
 		if exists(select * from @tmp where tggno=@tggno and gno='1')
@@ -131,12 +134,12 @@
 		end
 		else
 		begin
-			insert into @tmp(gno,tggno,datea,opay)
-			select '1',@tggno,'',@opay
+			insert into @tmp(gno,tggno,datea,opay,coin)
+			select '1',@tggno,'',@opay,@coin
 		end
 	
 		fetch next from cursor_table
-		into @tggno,@opay
+		into @tggno,@opay,@coin
 	end
 	close cursor_table
 	deallocate cursor_table
@@ -150,6 +153,7 @@
 		delete @tmp where gno is null
 		update @tmp set gno='3' where gno='1'
 	end
+	
 	select a.* 
 	,b.comp tcomp
 	,b.nick tnick
@@ -259,7 +263,7 @@ z_pay02:--z_pay02
 	
 	insert into @tmp1(cno,coin,tggno,mon,[money],tax,total)
 	select a.cno,@t_xcoin,tggno,mon
-	,SUM(ISNULL(a.[money],0) -ISNULL(a.[discount],0)*coin.floata)
+	,SUM((ISNULL(a.[money],0) -ISNULL(a.[discount],0))*coin.floata)
 	,SUM(ISNULL(a.[tax],0)*coin.floata)
 	,SUM(ISNULL(a.[total],0)*coin.floata)
 	from payb a
@@ -277,8 +281,9 @@ z_pay02:--z_pay02
 	group by a.cno,tggno,mon
 	
 	insert into @tmp3(cno,coin,tggno,mon,paysale)
-	select a.cno,@t_xcoin,a.tggno,paymon,SUM(ISNULL(a.paysale,0)*coin.floata)
+	select a.cno,@t_xcoin,a.tggno,paymon,SUM(ISNULL(a.paysale,0)/c.floata*coin.floata)
 	from pays a left join pay b on a.noa=b.noa
+	outer apply (select isnull((select top 1 floata from flors where coin=b.coin and isnull(b.datea,'') <=edate order by edate desc,noa desc),1) floata) c
 	outer apply (select isnull((select top 1 floata from flors where coin=@t_xcoin and isnull(b.datea,'') <=edate order by edate desc,noa desc),1) floata) coin
 	where (len(@t_cno)=0 or a.cno=@t_cno) and (a.tggno between @t_btggno and @t_etggno)
 	and ISNULL(a.paysale,0)!=0
@@ -333,7 +338,7 @@ z_pay02:--z_pay02
 			
 			insert into @tmp1(cno,coin,tggno,mon,[money],tax,total)
 			select a.cno,@coin,tggno,mon
-			,SUM(ISNULL(a.[money],0) -ISNULL(a.[discount],0)*coin.floata)
+			,SUM((ISNULL(a.[money],0) -ISNULL(a.[discount],0))*coin.floata)
 			,SUM(ISNULL(a.[tax],0)*coin.floata)
 			,SUM(ISNULL(a.[total],0)*coin.floata)
 			from payb a
@@ -351,8 +356,9 @@ z_pay02:--z_pay02
 			group by a.cno,a.tggno,a.mon
 			
 			insert into @tmp3(cno,coin,tggno,mon,paysale)
-			select a.cno,@coin,a.tggno,a.paymon,SUM(ISNULL(a.paysale,0)*coin.floata)
+			select a.cno,@coin,a.tggno,a.paymon,SUM(ISNULL(a.paysale,0)/c.floata*coin.floata)
 			from pays a left join pay b on a.noa=b.noa
+			outer apply (select isnull((select top 1 floata from flors where coin=b.coin and isnull(b.datea,'') <=edate order by edate desc,noa desc),1) floata) c
 			outer apply (select isnull((select top 1 floata from flors where coin=@coin and isnull(b.datea,'') <=edate order by edate desc,noa desc),1) floata) coin
 			where (len(@t_cno)=0 or a.cno=@t_cno)
 			and ISNULL(a.paysale,0)!=0 and a.paymon <= @t_emon 
