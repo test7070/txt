@@ -467,13 +467,10 @@ BEGIN
 END
 
 declare @t_accy nvarchar(20)='[1]'
-if(@t_accy='')
-	set @t_accy='106'
-else 
-begin
-	if(len(@t_accy)=4)
-	set @t_accy=right('000'+cast(CAST(@t_accy as int)-1911 as nvarchar(50)),3)
-end
+declare @t_stbaccy nvarchar(20)=@t_accy
+declare @t_steaccy nvarchar(20)=@t_accy
+declare @t_stbdate nvarchar(20)='[44]'
+declare @t_stedate nvarchar(20)='[45]'
 
 create table #tmpacc(
 	datea nvarchar(50),
@@ -483,10 +480,35 @@ create table #tmpacc(
 	money float
 )
 
+if(@t_stbdate!='')
+begin
+	if(len(@t_stbdate)=10)
+		set @t_stbaccy=right('000'+cast(CAST(left(@t_stbdate,4) as int)-1911 as nvarchar(50)),3)
+	else
+		set @t_stbaccy=left(@t_stbdate,3)
+end
 EXEC("
-insert #tmpacc select accc2,accc5,accc6,part,dmoney from acccs"+@t_accy+"_1 
-where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
+	insert #tmpacc select accc2,accc5,accc6,part,dmoney from acccs"+@t_stbaccy+"_1 
+	where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
+	and accc2>=right('"+@t_stbdate+"',5)
 ")
+
+if(@t_stedate!='')
+begin
+	if(len(@t_stedate)=10)
+		set @t_steaccy=right('000'+cast(CAST(left(@t_stedate,4) as int)-1911 as nvarchar(50)),3)
+	else
+		set @t_steaccy=left(@t_stedate,3)
+end
+--同年度不重複插入
+if(@t_stbaccy!=@t_steaccy)
+begin
+	EXEC("
+		insert #tmpacc select accc2,accc5,accc6,part,dmoney from acccs"+@t_steaccy+"_1 
+		where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
+		and accc2 <=right('"+@t_steaccy+"',5)
+	")
+end
 
 create table #tmpworkb(
 	productno nvarchar(50),
@@ -502,8 +524,7 @@ create table #tmpworkb(
 insert #tmpworkb(productno,mount,stationno)
 select b.productno,SUM(isnull(mount,0)+isnull(wmount,0)),a.stationno
 from view_workb a left join view_workbs b on a.noa=b.noa
-outer apply (select MAX(datea)cdate from view_workb)c
-where left(a.datea,len(c.cdate)-6)=left(c.cdate,len(c.cdate)-6)
+where a.datea between @t_stbdate and @t_stedate
 group by b.productno,a.stationno
 
 update a 
@@ -535,8 +556,7 @@ create table #tmpvcc(
 insert #tmpvcc(productno,total)
 select b.productno,SUM(b.total)
 from view_vcc a left join view_vccs b on a.noa=b.noa
-outer apply (select MAX(datea)cdate from view_vcc)c
-where left(a.datea,len(c.cdate)-6)=left(c.cdate,len(c.cdate)-6)
+where a.datea between @t_stbdate and @t_stedate
 group by b.productno
 
 delete #tmpvcc where total=0
