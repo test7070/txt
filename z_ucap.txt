@@ -237,7 +237,6 @@ declare @t_brate nvarchar(50)
 declare @t_erate nvarchar(50)
 declare @t_showgno0 nvarchar(50)
 
-
 set @t_bspno = case when '#non' = [3] then '' else [3] end
 set @t_espno = case when '#non' = [4] then CHAR(255) else [4] end
 set @t_mon = case when '#non' = [5] then '' else [5] end
@@ -468,13 +467,10 @@ BEGIN
 END
 
 declare @t_accy nvarchar(20)='[1]'
-if(@t_accy='')
-	set @t_accy='106'
-else 
-begin
-	if(len(@t_accy)=4)
-	set @t_accy=right('000'+cast(CAST(@t_accy as int)-1911 as nvarchar(50)),3)
-end
+declare @t_stbaccy nvarchar(20)=@t_accy
+declare @t_steaccy nvarchar(20)=@t_accy
+declare @t_stbdate nvarchar(20)='[44]'
+declare @t_stedate nvarchar(20)='[45]'
 
 create table #tmpacc(
 	datea nvarchar(50),
@@ -484,10 +480,35 @@ create table #tmpacc(
 	money float
 )
 
+if(@t_stbdate!='')
+begin
+	if(len(@t_stbdate)=10)
+		set @t_stbaccy=right('000'+cast(CAST(left(@t_stbdate,4) as int)-1911 as nvarchar(50)),3)
+	else
+		set @t_stbaccy=left(@t_stbdate,3)
+end
 EXEC("
-insert #tmpacc select accc2,accc5,accc6,part,dmoney from acccs"+@t_accy+"_1 
-where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
+	insert #tmpacc select accc2,accc5,accc6,part,dmoney from acccs"+@t_stbaccy+"_1 
+	where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
+	and accc2>=right('"+@t_stbdate+"',5)
 ")
+
+if(@t_stedate!='')
+begin
+	if(len(@t_stedate)=10)
+		set @t_steaccy=right('000'+cast(CAST(left(@t_stedate,4) as int)-1911 as nvarchar(50)),3)
+	else
+		set @t_steaccy=left(@t_stedate,3)
+end
+--同年度不重複插入
+if(@t_stbaccy!=@t_steaccy)
+begin
+	EXEC("
+		insert #tmpacc select accc2,accc5,accc6,part,dmoney from acccs"+@t_steaccy+"_1 
+		where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
+		and accc2 <=right('"+@t_steaccy+"',5)
+	")
+end
 
 create table #tmpworkb(
 	productno nvarchar(50),
@@ -503,8 +524,7 @@ create table #tmpworkb(
 insert #tmpworkb(productno,mount,stationno)
 select b.productno,SUM(isnull(mount,0)+isnull(wmount,0)),a.stationno
 from view_workb a left join view_workbs b on a.noa=b.noa
-outer apply (select MAX(datea)cdate from view_workb)c
-where left(a.datea,len(c.cdate)-6)=left(c.cdate,len(c.cdate)-6)
+where a.datea between @t_stbdate and @t_stedate
 group by b.productno,a.stationno
 
 update a 
@@ -536,8 +556,7 @@ create table #tmpvcc(
 insert #tmpvcc(productno,total)
 select b.productno,SUM(b.total)
 from view_vcc a left join view_vccs b on a.noa=b.noa
-outer apply (select MAX(datea)cdate from view_vcc)c
-where left(a.datea,len(c.cdate)-6)=left(c.cdate,len(c.cdate)-6)
+where a.datea between @t_stbdate and @t_stedate
 group by b.productno
 
 delete #tmpvcc where total=0
@@ -576,8 +595,22 @@ if(@t_sbcost='1')
 	
 delete @tmpa where gno='0' and rate not between cast(@t_brate as float) and cast(@t_erate as float)
 
-delete @tmpa where gno='0' and badperc=0 and stpr=0 and stmo=0 and famo=0 and price=0 and mamo=0 and total=0
-and stcost=0 and accost=0 and diff=0 and ac689=0 and vprice=0 and rate=0 
+update @tmpa 
+set badperc=case when badperc=0 then null else badperc end
+,stpr=case when stpr=0 then null else stpr end
+,stmo=case when stmo=0 then null else stmo end
+,famo=case when famo=0 then null else famo end
+,price=case when price=0 then null else price end
+,adpr=case when adpr=0 then null else adpr end
+,mamo=case when mamo=0 then null else mamo end
+,total=case when total=0 then null else total end
+,stcost=case when stcost=0 then null else stcost end
+,accost=case when accost=0 then null else accost end
+,diff=case when diff=0 then null else diff end
+,ac689=case when ac689=0 then null else ac689 end
+,vprice=case when vprice=0 then null else vprice end
+,rate=case when rate=0 then null else rate end
+where gno='0'
 
 select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))+cast(levels as nvarchar(20)) levels,unit
 ,dbo.getComma(mount,5) mount
