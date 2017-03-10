@@ -760,6 +760,7 @@ declare @t_xcuano nvarchar(20)
 declare @t_xworkno nvarchar(20)
 declare @t_xorder nvarchar(20)
 declare @t_xgroupano nvarchar(90)
+declare @t_project nvarchar(MAX)='[32]'
 set @t_xgroupano = case when '#non' = [19] then '' else [19] end
 set @t_bproductno = case when '#non' = [11] then '' else [11] end
 set @t_eproductno = case when '#non' = [12] then CHAR(255) else [12] end
@@ -795,13 +796,16 @@ declare @tmp table(
 	cuadate nvarchar(20),
 	odate nvarchar(20),
 	ordbno nvarchar(MAX),
-	ordcno nvarchar(MAX)
+	ordcno nvarchar(MAX),
+	bsmount float,
+	msmount float,
+	tsmount float
 )
 
-insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,ordeno)
+insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,ordeno,cuadate)
 	select
 		'9' gno,1,b.productno+'__'+a.noa,a.noa,a.rank+1,a.cuano,a.cuanoq,b.productno,
-		b.product,b.unit,b.mount,b.gmount,a.ordeno
+		b.product,b.unit,b.mount,b.gmount,a.ordeno,a.cuadate
 	from view_work a
 	left join view_works b on a.noa=b.noa
 	left join view_ucaucc c on b.productno=c.noa
@@ -809,16 +813,18 @@ insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,bpno,bps,bunit,bmount,bgmo
 	and (len(@t_xcuano)=0 or  a.cuano=@t_xcuano) and (len(@t_xworkno)=0 or  a.noa=@t_xworkno)
 	and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
 
-insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,mpno,mps,munit,mmount,mimount,ordeno)
+insert @tmp(gno,recno,xnoa,workno,levels,cuano,cuanoq,mpno,mps,munit,mmount,mimount,ordeno,cuadate)
 	select
 		'9' gno,2,b.productno+'__'+a.noa,a.noa,a.rank,a.cuano,a.cuanoq,a.productno,
-		a.product,a.unit,a.mount,a.inmount,a.ordeno
+		a.product,a.unit,a.mount,a.inmount,a.ordeno,a.cuadate
 	from view_work a
 	left join view_works b on a.noa=b.noa
 	left join view_ucaucc c on b.productno=c.noa
 	where a.enda!='1' and (b.productno between @t_bproductno and @t_eproductno)
 	and (len(@t_xcuano)=0 or  a.cuano=@t_xcuano) and (len(@t_xworkno)=0 or  a.noa=@t_xworkno)
 	and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+	
+	
 declare @t_xnoa nvarchar(90)
 declare @t_cuano nvarchar(90)
 declare @t_cuanoq nvarchar(10)
@@ -854,13 +860,30 @@ end
 close cursor_table
 deallocate cursor_table
 
-insert @tmp(gno,recno,xnoa,workno,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,mpno,mps,munit,mmount,mimount,tpno,tps,tunit,tmount,timount,ordeno,tworkno,cuadate,odate,ordbno,ordcno)
+--庫存量
+declare @t_sdatea nvarchar(10)=(select cuadate from @tmp where recno='1' group by cuadate)
+declare @t_mdatea nvarchar(10)=(select cuadate from @tmp where recno='2' group by cuadate)
+declare @t_tdatea nvarchar(10)=(select cuadate from @tmp where recno='3' group by cuadate)
+update @tmp
+set bsmount=b.mount
+from @tmp a outer apply (select mount from stkucc(@t_sdatea,'','') where a.bpno=productno)b
+where recno='1'
+update @tmp
+set msmount=b.mount
+from @tmp a outer apply (select mount from stkucc(@t_mdatea,'','') where a.mpno=productno)b 
+where recno='2'
+update @tmp
+set tsmount=b.mount
+from @tmp a outer apply (select mount from stkucc(@t_tdatea,'','') where a.tpno=productno)b
+where recno='3'  
+
+insert @tmp(gno,recno,xnoa,workno,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,mpno,mps,munit,mmount,mimount,tpno,tps,tunit,tmount,timount,ordeno,tworkno,cuadate,odate,ordbno,ordcno,bsmount,msmount,tsmount)
 	select '0' gno,0 recno,a.xnoa,a.workno,a.cuano,a.cuanoq,a.bpno,a.bps,a.bunit,a.bmount,a.bgmount
-	,b.mpno,b.mps,b.munit,b.mmount,b.mimount,c.tpno,c.tps,c.tunit,c.tmount,c.timount,c.ordeno,c.workno
-	,c.cuadate,c.odate,c.ordbno,c.ordcno
-	from(select xnoa,workno,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,ordeno from @tmp where recno='1') a
-	left join (select xnoa,workno,cuano,cuanoq,mpno,mps,munit,mmount,mimount,ordeno from @tmp where recno='2') b on a.xnoa=b.xnoa
-	left join (select xnoa,workno,cuano,cuanoq,tpno,tps,tunit,tmount,timount,ordeno,cuadate,odate,ordbno,ordcno from @tmp where recno='3')c on a.xnoa=c.xnoa
+	,b.mpno,b.mps,b.munit,b.mmount,b.mimount,case when @t_project like '%AD%' then '' else c.tpno end,case when @t_project like '%AD%' then '' else c.tps end,c.tunit,c.tmount,c.timount,c.ordeno,c.workno
+	,c.cuadate,c.odate,c.ordbno,c.ordcno,bsmount,msmount,tsmount
+	from(select xnoa,workno,cuano,cuanoq,bpno,bps,bunit,bmount,bgmount,ordeno,bsmount from @tmp where recno='1') a
+	left join (select xnoa,workno,cuano,cuanoq,mpno,mps,munit,mmount,mimount,ordeno,msmount from @tmp where recno='2') b on a.xnoa=b.xnoa
+	left join (select xnoa,workno,cuano,cuanoq,tpno,tps,tunit,tmount,timount,ordeno,cuadate,odate,ordbno,ordcno,tsmount from @tmp where recno='3')c on a.xnoa=c.xnoa
 
 if(@t_xorder='1')
 begin
@@ -876,6 +899,9 @@ begin
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mimount),1)),0,12)) mimount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmount),1)),0,12)) tmount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,timount),1)),0,12)) timount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bsmount),1)),0,12)) bsmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,msmount),1)),0,12)) msmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tsmount),1)),0,12)) tsmount
 	from @tmp where gno!='9' order by xnoa,cuano,cuanoq,recno
 end
 
@@ -893,6 +919,9 @@ begin
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mimount),1)),0,12)) mimount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmount),1)),0,12)) tmount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,timount),1)),0,12)) timount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bsmount),1)),0,12)) bsmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,msmount),1)),0,12)) msmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tsmount),1)),0,12)) tsmount
 	from @tmp where gno!='9' order by mpno,recno
 end
 
@@ -910,8 +939,12 @@ begin
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mimount),1)),0,12)) mimount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tmount),1)),0,12)) tmount
 	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,timount),1)),0,12)) timount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bsmount),1)),0,12)) bsmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,msmount),1)),0,12)) msmount
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tsmount),1)),0,12)) tsmount
 	from @tmp where gno!='9' order by tpno,recno
-end;
+end
+;
 -------------------------------------------------------------------------------------------------------
 z_work15:--z_work15
 declare @t_bdate nvarchar(20)
