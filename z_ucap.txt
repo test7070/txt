@@ -328,6 +328,11 @@ BEGIN
 	drop table #tmp
 END
 
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+
 create table #tmp(
 	xnoa nvarchar(MAX),
 	productno nvarchar(MAX),
@@ -342,7 +347,7 @@ create table #tmp(
 	costd float
 )
 
-declare @tmpa table(
+create table #tmpa(
 	gno nvarchar(1),
 	xnoa nvarchar(MAX),
 	sortcol nvarchar(MAX),
@@ -412,10 +417,10 @@ BEGIN TRY
 		SELECT OrdersTable.xnoa,a.productno,a.product,a.unit,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128)
 		,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount,a.badperc,a.price,a.costb,a.costc,a.costd
 		FROM #tmp a, OrdersTable
-		WHERE a.parent=OrdersTable.productno
+		WHERE a.parent=OrdersTable.productno and a.parent!=@parent
 	)
 	
-	insert @tmpa(gno,xnoa,productno,product,unit,levels,sortcol,mount,badperc,stpr,stmo,famo,mamo,price,adpr)
+	insert #tmpa(gno,xnoa,productno,product,unit,levels,sortcol,mount,badperc,stpr,stmo,famo,mamo,price,adpr)
 	select '0' gno,xnoa,productno,product,unit, level, sortcol
 	,mount,badperc,price,isnull(price*mount,0) costa,costb,costc,costd
 	--,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.productno and left(datea,6)=@t_mon),0) plus
@@ -430,25 +435,25 @@ BEGIN CATCH
 select @@ERROR productno
 END CATCH
 ------------------------------------------------------------------------------------------------------------
-update @tmpa
+update #tmpa
 set total=stmo+famo+mamo+price+adpr
 
-insert @tmpa (gno,xnoa,sortcol,productno,levels,stmo,famo,price,adpr,mamo,total)
+insert #tmpa (gno,xnoa,sortcol,productno,levels,stmo,famo,price,adpr,mamo,total)
 select '2',xnoa,productno+'ZZZZZZZ',productno,99
-,(select sum(stmo) from @tmpa x where xnoa=a.productno and exists (select noa from ucc where noa=x.productno))
-,(select sum(famo) from @tmpa x where xnoa=a.productno)
-,(select sum(price) from @tmpa x where xnoa=a.productno)
-,(select sum(adpr) from @tmpa x where xnoa=a.productno)
-,(select sum(mamo) from @tmpa x where xnoa=a.productno)
+,(select sum(stmo) from #tmpa x where xnoa=a.productno and exists (select noa from ucc where noa=x.productno))
+,(select sum(famo) from #tmpa x where xnoa=a.productno)
+,(select sum(price) from #tmpa x where xnoa=a.productno)
+,(select sum(adpr) from #tmpa x where xnoa=a.productno)
+,(select sum(mamo) from #tmpa x where xnoa=a.productno)
 ,0
-from @tmpa a where levels=0
+from #tmpa a where levels=0
 
 update a
 set total=ISNULL(stmo,0)+ISNULL(famo,0)+ISNULL(price,0)+ISNULL(adpr,0)+ISNULL(mamo,0) 
-from @tmpa a
+from #tmpa a
 where gno='2'
 
-update @tmpa set gno='1' where levels=0
+update #tmpa set gno='1' where levels=0
 
 -------------------------------------------------------------
 IF OBJECT_ID('tempdb..#tmpacc')is not null
@@ -511,8 +516,8 @@ begin
 end
 
 create table #tmpworkb(
-	productno nvarchar(50),
-	mount nvarchar(50),
+	productno nvarchar(255),
+	mount float,
 	xmin float,
 	xsec float,	
 	totalsec float,
@@ -548,7 +553,7 @@ set stcost=isnull((select SUM(money) from #tmpacc where acc2 like '製造費用-
 from #tmpworkb a
 
 create table #tmpvcc(
-	productno nvarchar(50),
+	productno nvarchar(255),
 	total float,
 	ac689 float
 )
@@ -574,28 +579,28 @@ set stcost=isnull(b.stcost,0)
 ,vprice=ISNULL(d.vprice,0)
 -- 無實際成本時，以 標準成本 算 
 ,rate=case when ISNULL(d.vprice,0)=0 then 0 else (ISNULL(d.vprice,0)-isnull(b.stcost,0))/ISNULL(d.vprice,0) end *100
-from @tmpa a
+from #tmpa a
 outer apply (select stcost from #tmpworkb where productno=a.productno) b
 outer apply (select ac689 from #tmpvcc where productno=a.productno) c
 outer apply (select top 1 price vprice from view_vccs where productno=a.productno and price!=0 order by datea desc)d
 
 update a
-set stcost=(select SUM(stcost) from @tmpa where xnoa=a.xnoa and gno='0')
-,accost=(select SUM(accost) from @tmpa where xnoa=a.xnoa and gno='0')
-,diff=(select SUM(diff) from @tmpa where xnoa=a.xnoa and gno='0')
-,ac689=(select SUM(ac689) from @tmpa where xnoa=a.xnoa and gno='0')
-from @tmpa a where gno='2'
+set stcost=(select SUM(stcost) from #tmpa where xnoa=a.xnoa and gno='0')
+,accost=(select SUM(accost) from #tmpa where xnoa=a.xnoa and gno='0')
+,diff=(select SUM(diff) from #tmpa where xnoa=a.xnoa and gno='0')
+,ac689=(select SUM(ac689) from #tmpa where xnoa=a.xnoa and gno='0')
+from #tmpa a where gno='2'
 
 update a
 set rate=case when ISNULL(vprice,0)=0 then 0 else (ISNULL(vprice,0)-isnull(stcost,0))/ISNULL(vprice,0) end *100
-from @tmpa a where gno='2'
+from #tmpa a where gno='2'
 
 if(@t_sbcost='1')
-	delete @tmpa where accost<stcost and gno='0'
+	delete #tmpa where accost<stcost and gno='0'
 	
-delete @tmpa where gno='0' and rate not between cast(@t_brate as float) and cast(@t_erate as float)
+delete #tmpa where gno='0' and rate not between cast(@t_brate as float) and cast(@t_erate as float)
 
-update @tmpa 
+update #tmpa 
 set badperc=case when badperc=0 then null else badperc end
 ,stpr=case when stpr=0 then null else stpr end
 ,stmo=case when stmo=0 then null else stmo end
@@ -631,7 +636,7 @@ select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))
 ,dbo.getComma(ac689,2) ac689
 ,dbo.getComma(vprice,2) vprice
 ,dbo.getComma(rate,2) rate
-from @tmpa
+from #tmpa
 where gno!=case when len(@t_showgno0)=0 then '9' else '0' end
 order by xnoa
 ,case when @t_order='rate' then case when gno='1' then '0' when gno='0' then '1' else gno end else 0 end
@@ -651,6 +656,11 @@ END
 IF OBJECT_ID('tempdb..#tmpvcc')is not null
 BEGIN
 	drop table #tmpvcc
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
 END
 
 IF OBJECT_ID('tempdb..#tmp')is not null
