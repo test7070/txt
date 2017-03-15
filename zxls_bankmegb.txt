@@ -1,0 +1,153 @@
+zxls_bankmegb:--zxls_bankmegb 兆豐-萬龍
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @workerno nvarchar(20) = [1]
+	declare @worker nvarchar(20) = [2]
+	-------------------------------------------------------------
+	declare @tmp table(
+		noa nvarchar(20),
+		noq nvarchar(100),
+		account nvarchar(20),
+		datea nvarchar(10),
+		memo nvarchar(max),
+		money1 float,
+		money2 float,
+		money3 float,
+		money4 float,
+		transbank nvarchar(50),
+		memo2 nvarchar(max),
+		checkno nvarchar(max),
+		timea nvarchar(20)
+	)
+	declare @a nvarchar(max)
+	declare @b nvarchar(max)
+	declare @c nvarchar(max)
+	declare @d nvarchar(max)
+	declare @e nvarchar(max)
+	declare @f nvarchar(max)
+	declare @g nvarchar(max)
+	declare @h nvarchar(max)
+	declare @i nvarchar(max)
+	declare @j nvarchar(max)
+	
+	declare @account nvarchar(30)
+	declare @bankno nvarchar(30)
+	declare @bank nvarchar(30)
+	declare @datea nvarchar(10)
+	declare @n int = 0
+	
+	declare @noa nvarchar(20)=''
+	declare @t_date nvarchar(10) = right('000'+cast(Year(getdate())-1911 as nvarchar),3)
+		+'/'+right('00'+cast(Month(getdate()) as nvarchar),2)
+		+'/'+right('00'+cast(Day(getdate()) as nvarchar),2)
+
+	select top 1 @noa = noa from banktmp where left(noa,7)=REPLACE(@t_date,'/','') order by noa desc
+	if LEN(@noa)=0
+	begin
+		set @noa = REPLACE(@t_date,'/','')+'001'
+	end
+	else
+	begin
+		set @noa = LEFT(@noa,7)+right('000'+cast(cast(RIGHT(@noa,3) as int)+1 as nvarchar),3)
+	end
+
+	declare cursor_table cursor for
+	select a,b,c,d,e,f,g,h,i,j from ztmpxls where CAST(noa as int)>1 order by CAST(noa as int) --忽略第一筆表頭
+	open cursor_table
+	fetch next from cursor_table
+	into @a,@b,@c,@d,@e,@f,@g,@h,@i,@j
+	while(@@FETCH_STATUS <> -1)
+	begin
+		begin try
+			set @b= REPLACE(ltrim(rtrim(@b)),'-','')
+			if LEN(@b)>0
+			begin
+				set @account = @b
+				select top 1 @account=account,@bankno=noa,@bank=bank from bank where REPLACE(account,'-','')=@account
+				set @datea = LTRIM(rtrim(@c))
+				if ISDATE(cast(@datea as nvarchar))>0
+				begin
+					set @n = @n+1
+					insert into @tmp(noa,noq,account,datea,memo,memo2
+					,money1,money2,money3,money4
+					,transbank,timea)
+					select @noa,RIGHT('000'+CAST(@n as nvarchar),3),@account
+						,dbo.AD2ChineseEraName(cast(@datea as datetime))
+						,ltrim(rtrim(@d)) memo
+						,ltrim(rtrim(@h)) memo2
+						,cast(replace(@e,',','') as float)
+						,cast(replace(@f,',','') as float)
+						,cast(replace(@g,',','') as float)
+						,cast(replace(@g,',','') as float)
+						,'',@j
+				end
+			end
+		end try
+		begin catch
+			----
+		end catch
+			
+		fetch next from cursor_table
+		into @a,@b,@c,@d,@e,@f,@g,@h,@i,@j
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	
+	begin try
+		--insert banktmp
+		insert into banktmp(noa,datea,bankno,bank,account,worker)
+		select @noa,@t_date,@bankno,@bank,@account,@worker
+		IF @@Error <> 0 BEGIN SET @chk = 1 END	
+		
+		--insert banktmps
+		insert into banktmps(noa,noq,account,datea,memo,money1,money2,money3,money4,transbank,memo2,checkno,timea)
+		select noa,noq,account,datea,memo,money1,money2,money3,money4,transbank,memo2,checkno,timea 
+		from @tmp 
+		IF @@Error <> 0 BEGIN SET @chk = 1 END	
+		
+		--insert into drun
+		insert into drun(datea,timea,usera,[action],noa,tablea,title,memo)
+		select dbo.AD2ChineseEraName( CONVERT(nvarchar,getdate(),111))
+			,LEFT(CONVERT(nvarchar,getdate(),108),5)
+			,@workerno
+			,'Insert'
+			,@noa
+			,'banktmp'
+			,''
+			,'銀行電子資料'
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		
+		IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			--有錯誤就都不執行
+			insert into drun(datea,timea,usera,[action],noa,tablea,title,memo)
+			select dbo.AD2ChineseEraName( CONVERT(nvarchar,getdate(),111))
+				,LEFT(CONVERT(nvarchar,getdate(),108),5)
+				,@workerno
+				,'zxls_bankmegb錯誤'
+				,''
+				,'banktmp'
+				,''
+				,ERROR_MESSAGE()
+		END
+		ELSE BEGIN
+			Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		END
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		--有錯誤就都不執行
+		insert into drun(datea,timea,usera,[action],noa,tablea,title,memo)
+		select dbo.AD2ChineseEraName( CONVERT(nvarchar,getdate(),111))
+			,LEFT(CONVERT(nvarchar,getdate(),108),5)
+			,@workerno
+			,'zxls_bankmegb錯誤'
+			,''
+			,'banktmp'
+			,''
+			,ERROR_MESSAGE()
+	end catch;
