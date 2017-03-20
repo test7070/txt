@@ -381,86 +381,109 @@ create table #tmpa(
 	rate float
 )
 
---106/20/20 costb-d 抓wcost
-insert into #tmp
-select '',a.productno,a.product,a.noa,a.unit
-,(isnull(a.mount,0)*(case when isnull(a.mul,0) =0 then 1 else isnull(a.mul,0) end))
-/(case when isnull(a.dividea,0) =0 then 1 else isnull(a.dividea,0) end),a.loss
-,isnull(c.price,0)
---,isnull(b.wages*((b.minutes+(b.hsec/60))/60),0)
---,isnull(b.makes*((b.minutes+(b.sec/60))/60),0)
---,isnull(b.price,0)
-,isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
-from ucas a outer apply (select * from uca where noa=a.productno)b
-outer apply (select top 1 price from view_costs where productno=a.productno order by mon desc) c --mon=@t_mon and
-outer apply (select MAX(mon) mon from view_wcost where productno=a.productno)e
-outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd from view_wcost where mon=e.mon and productno=a.productno having SUM(mount)>0)d --@t_mon
-where isnull(mount,0)!=0
-
-insert into #tmp
-select a.noa,a.noa,a.product,@parent
-,isnull(a.unit,''),1,a.badperc
-,isnull(b.price,0)
---,isnull(a.wages*((isnull(a.minutes,0)+(isnull(a.hsec,0)/60))/60),10)
---,isnull(a.makes*((isnull(a.minutes,0)+(isnull(a.sec,0)/60))/60),10)
---,isnull(a.price,0)
-,isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
-from uca a outer apply (select top 1 price from view_costs where productno=a.noa order by mon desc)b --mon=@t_mon and
-outer apply (select MAX(mon) mon from view_wcost where productno=a.noa)e
-outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd from view_wcost where mon=e.mon and productno=a.noa having SUM(mount)>0)d --@t_mon
-where a.noa between @t_bspno and @t_espno
-and (len(@t_typea)=0 or a.typea=@t_typea)
-and (len(@t_groupano)=0 or a.groupano=@t_groupano)
-and (len(@t_groupbno)=0 or groupbno=@t_groupbno)
-and (len(@t_style)=0 or charindex(@t_style,a.style)>0) 
-
-CREATE INDEX tmpindex1 ON #tmp (parent)
-
-BEGIN TRY
---遞迴
-	WITH OrdersTable (xnoa,productno,product,unit,noa,Level,sortCol,mount,badperc,price,costb,costc,costd) as (
-		Select xnoa,productno,product,unit,parent,0, CONVERT(nvarchar(128),productno),mount,badperc,price,costb,costc,costd
-		from #tmp
-		where parent=@parent
-		UNION ALL
-		SELECT OrdersTable.xnoa,a.productno,a.product,a.unit,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128)
-		,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount,a.badperc,a.price,a.costb,a.costc,a.costd
-		FROM #tmp a, OrdersTable
-		WHERE a.parent=OrdersTable.productno and a.parent!=@parent
-	)
-	
+if(@t_showgno0!='1')
+begin
+	--106/03/20 只顯示表頭
 	insert #tmpa(gno,xnoa,productno,product,unit,levels,sortcol,mount,badperc,stpr,stmo,famo,mamo,price,adpr)
-	select '0' gno,xnoa,productno,product,unit, level, sortcol
-	,mount,badperc,price,isnull(price*mount,0) costa,costb,costc,costd
-	--,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.productno and left(datea,6)=@t_mon),0) plus
-	,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.productno and left(datea,len(bmon)-3)=left(bmon,len(bmon)-3)),0) plus
-	From OrdersTable a 
-	outer apply (select MAX(datea) bmon from ucap where noa=a.productno)b
-	order by sortCol
+	select '0' gno,a.noa,a.noa,a.product,a.unit,0,a.noa,1,a.badperc,b.price
+	,isnull(d.costa,0),isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
+	,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.noa and left(datea,len(bmon)-3)=left(bmon,len(bmon)-3)),0) plus
+	From uca a 
+	outer apply (select top 1 price from view_costs where productno=a.noa order by mon desc)b --mon=@t_mon and
+	outer apply (select MAX(mon) mon from view_wcost where productno=a.noa)e
+	outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd from view_wcost where mon=e.mon and productno=a.noa having SUM(mount)>0)d --@t_mon
+	outer apply (select MAX(datea) bmon from ucap where noa=a.noa)f
+	where a.noa between @t_bspno and @t_espno
+	and (len(@t_typea)=0 or a.typea=@t_typea)
+	and (len(@t_groupano)=0 or a.groupano=@t_groupano)
+	and (len(@t_groupbno)=0 or a.groupbno=@t_groupbno)
+	and (len(@t_style)=0 or charindex(@t_style,a.style)>0) 
+end
+else
+begin
+	--106/20/20 costb-d 抓wcost
+	insert into #tmp
+	select '',a.productno,a.product,a.noa,a.unit
+	,(isnull(a.mount,0)*(case when isnull(a.mul,0) =0 then 1 else isnull(a.mul,0) end))
+	/(case when isnull(a.dividea,0) =0 then 1 else isnull(a.dividea,0) end),a.loss
+	,isnull(c.price,0)
+	--,isnull(b.wages*((b.minutes+(b.hsec/60))/60),0)
+	--,isnull(b.makes*((b.minutes+(b.sec/60))/60),0)
+	--,isnull(b.price,0)
+	,isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
+	from ucas a outer apply (select * from uca where noa=a.productno)b
+	outer apply (select top 1 price from view_costs where productno=a.productno order by mon desc) c --mon=@t_mon and
+	outer apply (select MAX(mon) mon from view_wcost where productno=a.productno)e
+	outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd from view_wcost where mon=e.mon and productno=a.productno having SUM(mount)>0)d --@t_mon
+	where isnull(mount,0)!=0
 	
-
-END TRY
-BEGIN CATCH
-select @@ERROR productno
-END CATCH
+	insert into #tmp
+	select a.noa,a.noa,a.product,@parent
+	,isnull(a.unit,''),1,a.badperc
+	,isnull(b.price,0)
+	--,isnull(a.wages*((isnull(a.minutes,0)+(isnull(a.hsec,0)/60))/60),10)
+	--,isnull(a.makes*((isnull(a.minutes,0)+(isnull(a.sec,0)/60))/60),10)
+	--,isnull(a.price,0)
+	,isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
+	from uca a outer apply (select top 1 price from view_costs where productno=a.noa order by mon desc)b --mon=@t_mon and
+	outer apply (select MAX(mon) mon from view_wcost where productno=a.noa)e
+	outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd from view_wcost where mon=e.mon and productno=a.noa having SUM(mount)>0)d --@t_mon
+	where a.noa between @t_bspno and @t_espno
+	and (len(@t_typea)=0 or a.typea=@t_typea)
+	and (len(@t_groupano)=0 or a.groupano=@t_groupano)
+	and (len(@t_groupbno)=0 or groupbno=@t_groupbno)
+	and (len(@t_style)=0 or charindex(@t_style,a.style)>0) 
+	
+	CREATE INDEX tmpindex1 ON #tmp (parent)
+	
+	BEGIN TRY
+	--遞迴
+		WITH OrdersTable (xnoa,productno,product,unit,noa,Level,sortCol,mount,badperc,price,costb,costc,costd) as (
+			Select xnoa,productno,product,unit,parent,0, CONVERT(nvarchar(128),productno),mount,badperc,price,costb,costc,costd
+			from #tmp
+			where parent=@parent
+			UNION ALL
+			SELECT OrdersTable.xnoa,a.productno,a.product,a.unit,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(128)
+			,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)),a.mount,a.badperc,a.price,a.costb,a.costc,a.costd
+			FROM #tmp a, OrdersTable
+			WHERE a.parent=OrdersTable.productno and a.parent!=@parent
+		)
+		
+		insert #tmpa(gno,xnoa,productno,product,unit,levels,sortcol,mount,badperc,stpr,stmo,famo,mamo,price,adpr)
+		select '0' gno,xnoa,productno,product,unit, level, sortcol
+		,mount,badperc,price,isnull(price*mount,0) costa,costb,costc,costd
+		--,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.productno and left(datea,6)=@t_mon),0) plus
+		,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.productno and left(datea,len(bmon)-3)=left(bmon,len(bmon)-3)),0) plus
+		From OrdersTable a 
+		outer apply (select MAX(datea) bmon from ucap where noa=a.productno)b
+		order by sortCol
+		
+	END TRY
+	BEGIN CATCH
+	select @@ERROR productno
+	END CATCH
+end
 ------------------------------------------------------------------------------------------------------------
 update #tmpa
 set total=stmo+famo+mamo+price+adpr
 
-insert #tmpa (gno,xnoa,sortcol,productno,levels,stmo,famo,price,adpr,mamo,total)
-select '2',xnoa,productno+'ZZZZZZZ',productno,99
-,(select sum(stmo) from #tmpa x where xnoa=a.productno and exists (select noa from ucc where noa=x.productno))
-,(select sum(famo) from #tmpa x where xnoa=a.productno)
-,(select sum(price) from #tmpa x where xnoa=a.productno)
-,(select sum(adpr) from #tmpa x where xnoa=a.productno)
-,(select sum(mamo) from #tmpa x where xnoa=a.productno)
-,0
-from #tmpa a where levels=0
-
-update a
-set total=ISNULL(stmo,0)+ISNULL(famo,0)+ISNULL(price,0)+ISNULL(adpr,0)+ISNULL(mamo,0) 
-from #tmpa a
-where gno='2'
+if(@t_showgno0='1')----106/03/20 只顯示表頭
+begin
+	insert #tmpa (gno,xnoa,sortcol,productno,levels,stmo,famo,price,adpr,mamo,total)
+	select '2',xnoa,productno+'ZZZZZZZ',productno,99
+	,(select sum(stmo) from #tmpa x where xnoa=a.productno and exists (select noa from ucc where noa=x.productno))
+	,(select sum(famo) from #tmpa x where xnoa=a.productno)
+	,(select sum(price) from #tmpa x where xnoa=a.productno)
+	,(select sum(adpr) from #tmpa x where xnoa=a.productno)
+	,(select sum(mamo) from #tmpa x where xnoa=a.productno)
+	,0
+	from #tmpa a where levels=0
+	
+	update a
+	set total=ISNULL(stmo,0)+ISNULL(famo,0)+ISNULL(price,0)+ISNULL(adpr,0)+ISNULL(mamo,0) 
+	from #tmpa a
+	where gno='2'
+end
 
 update #tmpa set gno='1' where levels=0
 
@@ -567,18 +590,19 @@ create table #tmpvcc(
 	ac689 float
 )
 
-insert #tmpvcc(productno,total)
-select b.productno,SUM(b.total)
-from view_vcc a left join view_vccs b on a.noa=b.noa
-where a.datea between @t_stbdate and @t_stedate
-group by b.productno
+--106/03/20 暫時不抓管銷
+--insert #tmpvcc(productno,total)
+--select b.productno,SUM(b.total)
+--from view_vcc a left join view_vccs b on a.noa=b.noa
+--where a.datea between @t_stbdate and @t_stedate
+--group by b.productno
 
-delete #tmpvcc where total=0
+--delete #tmpvcc where total=0
 
-update a
-set ac689=isnull((select SUM(money) from #tmpacc where acc2 not like '製造費用-%'),0)
-*a.total/isnull((select SUM(total) from #tmpvcc),0)
-from #tmpvcc a
+--update a
+--set ac689=isnull((select SUM(money) from #tmpacc where acc2 not like '製造費用-%'),0)
+--*a.total/isnull((select SUM(total) from #tmpvcc),0)
+--from #tmpvcc a
 
 update a
 set stcost=isnull(b.stcost,0)
@@ -626,6 +650,12 @@ set badperc=case when badperc=0 then null else badperc end
 ,rate=case when rate=0 then null else rate end
 where gno='0'
 
+if(@t_showgno0='1')
+begin
+	update #tmpa set stcost=null,accost=null,diff=null,ac689=null,vprice=null,rate=null
+	where gno='1'
+end
+
 select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))+cast(levels as nvarchar(20)) levels,unit
 ,dbo.getComma(mount,5) mount
 ,dbo.getComma(badperc,-1) badperc
@@ -646,7 +676,7 @@ select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))
 ,dbo.getComma(vprice,2) vprice
 ,dbo.getComma(rate,2) rate
 from #tmpa
-where gno!=case when len(@t_showgno0)=0 then '9' else '0' end
+where gno!=case when len(@t_showgno0)!=0 then '9' else '0' end
 order by xnoa
 ,case when @t_order='rate' then case when gno='1' then '0' when gno='0' then '1' else gno end else 0 end
 ,case when @t_order='rate' then rate else 0 end desc
