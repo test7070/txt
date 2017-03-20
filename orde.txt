@@ -1041,6 +1041,31 @@ end
 set @custno=isnull((select custno from acomp where noa=isnull((select cno from view_orde where noa=@t_noa),'')),'')
 declare @berrcount table(counts int)
 declare @berr nvarchar(MAX)='' --越南錯誤訊息
+--------------------------------------------------------
+--1060317 sign
+declare @signo nvarchar(MAX)
+declare @signum nvarchar(MAX)
+declare @sigmemo nvarchar(MAX)
+declare @signordememo nvarchar(MAX)
+declare @COLUMN nvarchar(MAX)
+set @sigmemo=isnull((select memo from signform a where form='orde'),'')
+declare cursor_table cursor for 
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS where TABLE_NAME='view_orde'
+open cursor_table 
+fetch next from cursor_table 
+into @COLUMN
+while(@@FETCH_STATUS <> -1) 
+begin
+	if(@sigmemo like '%'+@COLUMN+'%')
+		set @sigmemo=REPLACE(@sigmemo,@COLUMN,"'+cast("+@COLUMN+" as nvarchar)+'")
+	fetch next from cursor_table 
+	into @COLUMN
+end 
+close cursor_table 
+deallocate cursor_table
+
+set @sigmemo="'"+@sigmemo+"'"
+-----------------------------------------------------------
 
 set @cmd ="select @t_custno=MAX(noa) from ["+@t_ip+",1799]."+@t_db+".dbo.cust where noa='"+@t_custno+"' "
 execute sp_executesql @cmd,N'@t_custno nvarchar(90) output',@t_custno=@t_custno output
@@ -1121,9 +1146,25 @@ begin
 		,'"+@t_db+"'+replace(replace(replace(replace(CONVERT(nvarchar,SYSDATETIME()),'-',''),':',''),'.',''),' ','')
 		,'orde_post.post','"+@accy+@chr59+@ordeno+@chr59+"1','erp',7
 	")
+	
 	--106/03/17 增加sign
-	--insert into sign (noa,datea,timea,enda,memo,form,partno,part,sender,zno,zno2,memochecker ,memoapprovema,memoapprovefi,memoapprovegm,memoapprovebs)
-	--待補
+	set @signo=replace(CONVERT (nvarchar(10) ,getdate(),20),'-','')
+	set @signum=isnull((select top 1 noa from sign where noa like @signo+'%' order by noa desc),'00000')
+	
+	set @signum=right('00000'+CAST(CAST(@signum as int)+1 as nvarchar(50)),5)
+	set @signo=@signo+@signum
+	
+	set @cmd ="select @signordememo="+@sigmemo+" from view_orde where noa='"+@ordeno+"'"
+	execute sp_executesql @cmd,N'@signordememo nvarchar(MAX) output',@signordememo=@signordememo output
+	
+	EXEC("insert ["+@t_ip+",1799]."+@t_db+".dbo.sign (noa,datea,timea,enda,memo,form,partno,part,sender,zno,zno2
+	,checker,memochecker,worker,fromdb)
+	select '"+@signo+"','"+@t_datea+"',left(right(replace(CONVERT (nvarchar(20) ,getdate(),20),'-',''),8),5)
+	,'N','"+@signordememo+"',formname,partno,part,'"+@t_worker+"','"+@ordeno+"','orde_r'+CHAR(59)+'noa'+CHAR(59)+'"+@accy+"'
+	,checker,'','erp',b.value
+	from signform a
+	outer apply(select top 1 value from qsys where noa='sys.ip') b
+	where form='orde'")
 	
 	insert @berrcount
 	EXEC("select count(*) from (
