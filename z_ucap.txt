@@ -244,6 +244,7 @@ declare @t_erate nvarchar(50)
 declare @t_showgno0 nvarchar(50)
 declare @t_groupbno nvarchar(50)
 declare @t_xcoin nvarchar(50)
+declare @t_vccnum nvarchar(50)
 declare @t_floata float
 
 set @t_bspno = case when '#non' = [3] then '' else [3] end
@@ -259,6 +260,7 @@ set @t_erate = case when '#non' = [42] then '99999' else [42] end
 set @t_showgno0 = case when '#non' = [43] then '' else [43] end
 set @t_groupbno = case when '#non' = [47] then '' else [47] end
 set @t_xcoin = case when '#non' = [48] then '' else [48] end
+set @t_vccnum = case when '#non' = [49] then '0' else [49] end
 set @t_floata=case when @t_xcoin='' then 1 else isnull((select top 1 floata from flors where coin=@t_xcoin order by bdate desc),0) end
 -----------------------------------------------------------------------------------------------------------------------------------------
 declare @parent nvarchar(20)
@@ -319,7 +321,19 @@ create table #tmpa(
 	costg float, --機器折舊
 	costh float, --模具費用
 	vprice float,--最近銷售價
-	rate float --毛利
+	rate float, --毛利
+	
+	--出貨
+	vdatea nvarchar(50),
+	vnoa nvarchar(50),
+	vnoq nvarchar(50),
+	vcustno nvarchar(255),
+	vcomp nvarchar(255),
+	vcoin nvarchar(50),
+	vsmount float,
+	vsprice float,
+	vsmoney float,
+	vrate float
 )
 
 if(@t_showgno0!='1') --106/03/20 子階
@@ -551,23 +565,19 @@ set stcost=isnull((select SUM(money) from #tmpacc where acc2 like '製造費用-
 *(a.totalsec/isnull((select SUM(totalsec) from #tmpworkb where a.partno=a.partno),0))
 from #tmpworkb a*/
 
-
 --毛利=case when 實際>0 then 實際 else 標準 end 目前 先撈 標準
 update a
 set stcost=isnull(b.stcost,0)
 ,accost=0 --報工時間，先不管
 ,diff=isnull(b.stcost,0)-0
-,vprice=case when isnull(e.vprice,0)!=0 then ISNULL(e.vprice,0) else ISNULL(d.oprice,0) end
+,vprice=d.vprice
 -- 無實際成本時，以 標準成本 算 
-,rate=case when case when isnull(e.vprice,0)!=0 then ISNULL(e.vprice,0) else ISNULL(d.oprice,0) end=0 then 0 else (case when isnull(e.vprice,0)!=0 then ISNULL(e.vprice,0) else ISNULL(d.oprice,0) end-isnull(a.total,0))/case when isnull(e.vprice,0)!=0 then ISNULL(e.vprice,0) else ISNULL(d.oprice,0) end end *100
+,rate=case when d.vprice=0 then 0 else (d.vprice-isnull(a.total,0))/d.vprice end *100
 from #tmpa a
 outer apply (select stcost from #tmpworkb where productno=a.productno) b
-outer apply (select top 1 ISNULL(ob.price,0) *case when isnull(oa.floata,0)=0 then 1 else oa.floata end oprice 
-from view_ordes ob left join view_orde oa on oa.noa=ob.noa
-where ob.productno=a.productno order by ob.odate desc)d
-outer apply (select top 1 isnull(vb.price,0)*case when isnull(oa.floata,0)=0 then 1 else oa.floata end vprice 
-from view_vccs vb left join view_orde oa on oa.noa=vb.ordeno
-where vb.productno=a.productno order by vb.datea desc)e
+outer apply (select top 1 isnull(vb.price,0)*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end vprice 
+from view_vccs vb left join view_vcc va on vb.noa=va.noa left join view_orde oa on oa.noa=vb.ordeno
+where vb.productno=a.productno order by vb.datea desc)d
 
 update a
 set stcost=(select SUM(stcost) from #tmpa where xnoa=a.xnoa and gno='2')
@@ -575,9 +585,9 @@ set stcost=(select SUM(stcost) from #tmpa where xnoa=a.xnoa and gno='2')
 ,diff=(select SUM(diff) from #tmpa where xnoa=a.xnoa and gno='2')
 from #tmpa a where gno='3'
 
-update a
-set rate=case when ISNULL(vprice,0)=0 then 0 else (ISNULL(vprice,0)-isnull(total,0))/ISNULL(vprice,0) end *100
-from #tmpa a where gno='3'
+--update a
+--set rate=case when ISNULL(vprice,0)=0 then 0 else (ISNULL(vprice,0)-isnull(total,0))/ISNULL(vprice,0) end *100
+--from #tmpa a where gno='3'
 
 if(@t_sbcost='1')
 	delete #tmpa where accost<stcost and gno='2'
@@ -611,6 +621,52 @@ begin
 	
 	insert #tmpa(gno,xnoa)
 	select '1',xnoa from #tmpa where gno='2' group by xnoa
+	
+	insert #tmpa(gno,xnoa)
+	select '6',xnoa from #tmpa group by xnoa
+end
+
+if(@t_vccnum!='0')
+begin
+	declare @xnoa nvarchar(255)
+	declare @total float
+	declare @accost float
+	declare cursor_table cursor for
+	select xnoa,total,accost from #tmpa a where gno='0'
+	and exists (select * from view_vccs where productno=a.xnoa)
+	open cursor_table
+	fetch next from cursor_table
+	into @xnoa,@total,@accost
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert #tmpa(gno,xnoa)
+		select '4',@xnoa
+		
+		EXEC("insert #tmpa(gno,xnoa,vdatea,vnoa,vnoq,vcustno,vcomp,vcoin,vsmount,vsprice,vsmoney,vrate,total,accost)
+		select top "+@t_vccnum+" '5','"+@xnoa+"',va.datea,vb.noa,vb.no2,va.custno,va.nick
+		,'"+@t_xcoin+"',vb.mount
+		,vb.price*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end
+		,vb.total*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end
+		,0,0,0
+		from view_vccs vb left join view_vcc va on va.noa=vb.noa
+		left join view_orde oa on vb.ordeno=oa.noa
+		where productno='"+@xnoa+"' order by va.datea desc")
+		
+		update #tmpa
+		set total=@total,accost=@accost
+		where gno='5' and xnoa=@xnoa
+	
+		fetch next from cursor_table
+		into @xnoa,@total,@accost
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update a
+	set vrate=case when ISNULL(vsprice,0)=0 then 0 else (ISNULL(vsprice,0)
+	-case when isnull(accost,0)!=0 then isnull(accost,0) else isnull(total,0) end
+	)/ISNULL(vsprice,0) end *100
+	from #tmpa a where gno='5'
 end
 
 select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))+cast(levels as nvarchar(20)) levels,unit
@@ -636,11 +692,16 @@ select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))
 ,dbo.getComma(coste/case when @t_floata=0 then 1 else @t_floata end,2) coste
 ,dbo.getComma(vprice/case when @t_floata=0 then 1 else @t_floata end,2) vprice
 ,dbo.getComma(rate,2) rate
+
+,vdatea,vnoa,vnoq,vcustno,vcomp,vcoin
+,dbo.getComma(vsmount,-1)vsmount
+,dbo.getComma(vsprice/case when @t_floata=0 then 1 else @t_floata end,2)vsprice
+,dbo.getComma(vsmoney/case when @t_floata=0 then 1 else @t_floata end,2)vsmoney
+,dbo.getComma(vrate,2)vrate
 from #tmpa
-order by case when @t_showgno0='1' then xnoa else '0' end
-,gno
+order by xnoa,gno
 ,case when @t_order='rate' then rate else 0 end desc
-,sortcol,levels
+,sortcol,levels,vdatea
 
 IF OBJECT_ID('tempdb..#tmpacc')is not null
 BEGIN
