@@ -8,6 +8,10 @@ declare @t_epno nvarchar(90)
 declare @t_showworkg nvarchar(90)
 declare @t_showforecast nvarchar(90)
 declare @t_style nvarchar(90)
+declare @t_rlen nvarchar(90)='[14]'
+declare @t_rlenm nvarchar(90)=cast(@t_rlen as int)+3
+declare @now_date nvarchar(10)--現在日期 
+set @now_date='[15]'
 
 set @t_bmon = case when '#non' = [1] then '' else [1] end
 set @t_emon = case when '#non' = [2] then CHAR(255) else [2] end
@@ -17,9 +21,6 @@ set @t_style = case when '#non' = [7] then '' else [7] end
 set @t_showworkg = case when '#non' = [8] then '0' else [8] end
 set @t_showforecast = case when '#non' = [10] then '0' else [10] end
 ---*********************************************************************
-declare @now_date nvarchar(10)--現在日期 
-set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
-set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2) 
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -61,9 +62,7 @@ begin
 	else
 		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
 	
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
 	
 	set @moncount=@moncount+1
 end
@@ -71,11 +70,11 @@ end
 
 create table #tmp2(
 	gno nvarchar(1), 
-	pno nvarchar(100), 
+	pno nvarchar(255), 
 	product nvarchar(300), 
-	style nvarchar(100), 
+	style nvarchar(255), 
 	recno int,
-	tit nvarchar(200), 
+	tit nvarchar(255), 
 	mount01 float,
 	mount02 float,
 	mount03 float,
@@ -98,28 +97,28 @@ begin
 	
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),1,'預測量',sum(a.mount)mount
-	from saleforecasts a where left(a.datea,6)='"+@tmp_mon+"'
+	from saleforecasts a where left(a.datea,"+@t_rlenm+")='"+@tmp_mon+"'
 	and a.productno between '"+@t_bpno+"' and '"+@t_epno+"'
 	group by a.productno,isnull(a.style,'')")
 
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),2,'訂單量',sum(ob.mount)mount
 	from view_orde oa left join view_ordes ob on oa.noa=ob.noa
-	where (case when oa.mon!='' then oa.mon else left(oa.odate,6) end)='"+@tmp_mon+"'
+	where (case when oa.mon!='' then oa.mon else left(oa.odate,"+@t_rlenm+") end)='"+@tmp_mon+"'
 	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ob.productno!=''
 	group by ob.productno,isnull(ob.style,'')")
 	
 	--exec(" insert #tmp2 (gno,pno,product,recno,tit,"+@tmp_moncol+") 
 	--select '9',gb.productno,MAX(gb.product)product,6,'預測已排產量',sum(gb.forecastprepare)mount
 	--from view_workg ga left join view_workgs gb on ga.noa=gb.noa
-	--where left(ga.sfedate,6) ='"+@tmp_mon+"'
+	--where left(ga.sfedate,"+@t_rlenm+") ='"+@tmp_mon+"'
 	--and gb.productno between '"+@t_bpno+"' and '"+@t_epno+"'
 	--group by gb.productno")
 	
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',wa.productno,MAX(wa.product)product,isnull(wa.style,''),6,'製令未入量',sum(isnull(wa.mount,0)-isnull(wa.inmount,0))mount
 	from view_work wa 
-	where left(wa.cuadate,6) ='"+@tmp_mon+"'
+	where left(wa.cuadate,"+@t_rlenm+") ='"+@tmp_mon+"'
 	and wa.productno between '"+@t_bpno+"' and '"+@t_epno+"'
 	and wa.noa like 'W[0-9]%'
 	--and len(replace(replace(replace(replace(replace(replace(replace(replace(replace(replace(SUBSTRING(wa.noa,2,1),'0',''),'1',''),'2',''),'3',''),'4',''),'5',''),'6',''),'7',''),'8',''),'9',''))=0
@@ -128,13 +127,11 @@ begin
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',gb.productno,MAX(gb.product)product,isnull(gb.style,''),7,'預測已請購量',sum(gb.forecastprepare)mount
 	from view_workg ga left join view_workgs gb on ga.noa=gb.noa
-	where left(ga.sfedate,6) ='"+@tmp_mon+"' and ordbno!=''
+	where left(ga.sfedate,"+@t_rlenm+") ='"+@tmp_mon+"' and ordbno!=''
 	and gb.productno between '"+@t_bpno+"' and '"+@t_epno+"'
 	group by gb.productno,isnull(gb.style,'')")
 
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
 	
 	set @moncount=@moncount+1
 end
@@ -148,7 +145,8 @@ end
 	,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount,sum(a.mount)mount
 	from stkucc('"+@now_date+"','','') a group by a.productno,isnull(a.style,'')")
 	
-	delete #tmp2 where recno=3 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=3 group by pno,style)
+	--delete #tmp2 where recno=3 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=3 group by pno,style)
+	delete a from #tmp2 a where recno=3 and not exists (select pno,style from #tmp2 where recno!=3 group by pno,style having pno=a.pno and style=a.style)
 	
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09,mount10,mount11,mount12) 
 	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),4,'在途量'
@@ -156,7 +154,8 @@ end
 	,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount,sum(a.mount-a.c1)mount
 	from view_ordcs a group by a.productno,isnull(a.style,'')")
 	
-	delete #tmp2 where recno=4 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=4 group by pno,style)
+	--delete #tmp2 where recno=4 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=4 group by pno,style)
+	delete a from #tmp2 a where recno=4 and not exists (select pno,style from #tmp2 where recno!=4 group by pno,style having pno=a.pno and style=a.style)
 	
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09,mount10,mount11,mount12) 
 	select '9',a.noa,MAX(a.product)product,isnull(a.style,''),5,'安全存量'
@@ -164,7 +163,8 @@ end
 	,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount,MAX(a.safemount) mount
 	from view_ucaucc a group by a.noa,isnull(a.style,'')")
 	
-	delete #tmp2 where recno=5 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=5 group by pno,style)
+	--delete #tmp2 where recno=5 and pno+'_'+style not in (select pno+'_'+style from #tmp2 where recno!=5 group by pno,style)
+	delete a from #tmp2 a where recno=5 and not exists (select pno,style from #tmp2 where recno!=5 group by pno,style having pno=a.pno and style=a.style)
 
 	insert #tmp2
 	select '0',pno,MAX(product),style,recno,tit
@@ -335,12 +335,14 @@ begin
 end
 
 if(@t_showworkg='1')
-	delete #tmp2 where pno+'_'+style in (select pno+'_'+style from #tmp2 where recno=8 and mount01<=0)
+	delete a from #tmp2 a where exists (select pno,style from #tmp2 where recno=8 and mount01<=0 and pno=a.pno and style=a.style)
 
 if(@t_showforecast='1')
-	delete #tmp2 where pno+'_'+style in (select pno+'_'+style from #tmp2 where recno=1 
+	delete a from #tmp2 a
+	where exists (select pno+'_'+style from #tmp2 where recno=1 
 	and (isnull(mount01,0)+isnull(mount02,0)+isnull(mount03,0)+isnull(mount04,0)+isnull(mount05,0)+isnull(mount06,0)
-	+isnull(mount07,0)+isnull(mount08,0)+isnull(mount09,0)+isnull(mount10,0)+isnull(mount11,0)+isnull(mount12,0))=0)
+	+isnull(mount07,0)+isnull(mount08,0)+isnull(mount09,0)+isnull(mount10,0)+isnull(mount11,0)+isnull(mount12,0))=0
+	and pno=a.pno and style=a.style)
 	
 update #tmp2 set product=(select top 1 product from view_ucaucc where #tmp2.pno=noa ) 
 
@@ -404,6 +406,10 @@ declare @t_showforecast nvarchar(90)
 declare @t_uccgano nvarchar(90)
 declare @t_uccgbno nvarchar(90)
 declare @t_uccgcno nvarchar(90)
+declare @t_rlen nvarchar(90)='[14]'
+declare @t_rlenm nvarchar(90)=cast(@t_rlen as int)+3
+declare @now_date nvarchar(10)--現在日期 
+set @now_date='[15]'
 
 set @t_bmon = case when '#non' = [1] then '' else [1] end
 set @t_emon = case when '#non' = [2] then '' else [2] end
@@ -416,9 +422,6 @@ set @t_uccgano = case when '#non' = [11] then '' else [11] end
 set @t_uccgbno = case when '#non' = [12] then '' else [12] end
 set @t_uccgcno = case when '#non' = [13] then '' else [13] end
 ---*********************************************************************
-declare @now_date nvarchar(10)--現在日期 
-set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
-set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2) 
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -462,9 +465,7 @@ begin
 	else
 		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
 	
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
 	
 	set @moncount=@moncount+1
 end
@@ -472,11 +473,11 @@ end
 
 create table #tmp2(
 	gno nvarchar(1), 
-	pno nvarchar(100), 
+	pno nvarchar(255), 
 	product nvarchar(300), 
-	style nvarchar(100),
+	style nvarchar(255),
 	recno int,
-	tit nvarchar(200), 
+	tit nvarchar(255), 
 	mount01 float,
 	mount02 float,
 	mount03 float,
@@ -504,20 +505,20 @@ begin
 	
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),1,'預測量',sum(a.mount)mount
-	from view_workhs a where left(a.cuadate,6)='"+@tmp_mon+"'
+	from view_workhs a where left(a.cuadate,"+@t_rlenm+")='"+@tmp_mon+"'
 	and a.productno between '"+@t_bpno+"' and '"+@t_epno+"'
 	group by a.productno,isnull(a.style,'')")
 	
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',a.productno,MAX(a.product)product,isnull(a.style,''),2,'製令未領量',sum(a.mount-a.gmount)mount
-	from view_works a where left(a.cuadate,6)<='"+@tmp_mon+"'
+	from view_works a where left(a.cuadate,"+@t_rlenm+")<='"+@tmp_mon+"'
 	and a.productno between '"+@t_bpno+"' and '"+@t_epno+"' and ('"+@t_showforecast+"'='0' or a.productno in (select pno from #tmp2))
 	group by a.productno,isnull(a.style,'')")
 
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),3,'訂單未交量',sum(ob.mount-ob.c1)mount
 	from view_orde oa left join view_ordes ob on oa.noa=ob.noa
-	where (case when oa.mon!='' then oa.mon else left(oa.odate,6) end)<='"+@tmp_mon+"'
+	where (case when oa.mon!='' then oa.mon else left(oa.odate,"+@t_rlenm+") end)<='"+@tmp_mon+"'
 	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' 
 	--and ob.productno in (select noa from ucc)
 	and exists (select noa from ucc where noa=ob.productno)
@@ -527,7 +528,7 @@ begin
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),4,'預測已請購量',sum(ob.mount-ob.c1)mount
 	from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa
-	where oa.workgno!='' and (select top 1 left(sfedate,6) from view_workg where CHARINDEX(noa,oa.workgno)>0)<='"+@tmp_mon+"'
+	where oa.workgno!='' and (select top 1 left(sfedate,"+@t_rlenm+") from view_workg where CHARINDEX(noa,oa.workgno)>0)<='"+@tmp_mon+"'
 	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' 
 	--and ob.productno in (select noa from ucc)
 	and exists (select noa from ucc where noa=ob.productno)
@@ -537,7 +538,7 @@ begin
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),5,'非預測請購量',sum(ob.mount-ob.c1)mount
 	from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa
-	where isnull(oa.workgno,'')='' and  left(oa.odate,6) <='"+@tmp_mon+"'
+	where isnull(oa.workgno,'')='' and  left(oa.odate,"+@t_rlenm+") <='"+@tmp_mon+"'
 	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"' 
 	--and ob.productno in (select noa from ucc)
 	and exists (select noa from ucc where noa=ob.productno)
@@ -547,16 +548,14 @@ begin
 	exec(" insert #tmp2 (gno,pno,product,style,recno,tit,"+@tmp_moncol+") 
 	select '9',ob.productno,MAX(ob.product)product,isnull(ob.style,''),8,'當月採購量',sum(ob.mount-ob.c1)mount
 	from view_ordb oa left join view_ordbs ob on oa.noa=ob.noa
-	where isnull(oa.workgno,'')='' and  left(oa.odate,6) ='"+@tmp_mon+"'
+	where isnull(oa.workgno,'')='' and  left(oa.odate,"+@t_rlenm+") ='"+@tmp_mon+"'
 	and ob.productno between '"+@t_bpno+"' and '"+@t_epno+"'
 	--and ob.productno in (select noa from ucc)
 	and exists (select noa from ucc where noa=ob.productno)
 	and ('"+@t_showforecast+"'='0' or ob.productno in (select pno from #tmp2))
 	group by ob.productno,isnull(ob.style,'')")	
 
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
 	
 	set @moncount=@moncount+1
 end
@@ -838,6 +837,10 @@ declare @t_style nvarchar(90)
 declare @t_uccgano nvarchar(90)
 declare @t_uccgbno nvarchar(90)
 declare @t_uccgcno nvarchar(90)
+declare @t_rlen nvarchar(90)='[14]'
+declare @t_rlenm nvarchar(90)=cast(@t_rlen as int)+3
+declare @now_date nvarchar(10)--現在日期 
+set @now_date='[15]'
 
 set @t_bmon = case when '#non' = [1] then '' else [1] end
 set @t_emon = case when '#non' = [2] then '' else [2] end
@@ -850,9 +853,6 @@ set @t_uccgano = case when '#non' = [11] then '' else [11] end
 set @t_uccgbno = case when '#non' = [12] then '' else [12] end
 set @t_uccgcno = case when '#non' = [13] then '' else [13] end
 ---*********************************************************************
-declare @now_date nvarchar(10)--現在日期 
-set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
-set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2) 
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -894,9 +894,7 @@ begin
 	else
 		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
 	
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
 	
 	set @moncount=@moncount+1
 end
@@ -905,9 +903,9 @@ create table #tmpa(
 	cuano nvarchar(100),
 	cuanoq nvarchar(100),
 	datea nvarchar(10),
-	tggno nvarchar(100),
-	pno nvarchar(100), 
-	style nvarchar(100),
+	tggno nvarchar(255),
+	pno nvarchar(255), 
+	style nvarchar(255),
 	amount float,
 	mount float,
 	ucasmount float
@@ -918,7 +916,7 @@ insert #tmpa
 select a.cuano,a.cuanoq,a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,case when a.mount=0 then 0 else b.mount/a.mount end
 from view_workh a left join view_workhs b on a.noa=b.noa 
 left join ucc c on b.productno=c.noa
-where (left(a.uindate,6) between @t_bmon and @t_emon)
+where (left(a.uindate,@t_rlenm) between @t_bmon and @t_emon)
 and b.productno between @t_bpno and @t_epno
 and (len(@t_style)=0 or isnull(b.style,'')=@t_style)
 and c.noa!='' --and isnull(c.tggno,'')!=''
@@ -932,7 +930,7 @@ insert #tmpa
 select a.cuano,a.cuanoq,a.uindate,c.tggno,b.productno,isnull(b.style,''),a.mount-a.inmount,b.mount-b.gmount,case when a.mount=0 then 0 else b.mount/a.mount end
 from view_work a left join view_works b on a.noa=b.noa 
 left join ucc c on b.productno=c.noa
-where (left(a.uindate,6) between @t_bmon and @t_emon)
+where (left(a.uindate,@t_rlenm) between @t_bmon and @t_emon)
 and b.productno between @t_bpno and @t_epno
 and (len(@t_style)=0 or isnull(b.style,'')=@t_style)
 and c.noa!='' and isnull(c.tggno,'')!=''
@@ -946,7 +944,7 @@ and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
 --select '','',b.datea,c.tggno,b.productno,isnull(b.style,''),b.mount-b.c1,b.mount-b.c1,1
 --from view_orde a left join view_ordes b on a.noa=b.noa 
 --left join ucc c on b.productno=c.noa
---where (left(b.datea,6) between @t_bmon and @t_emon)
+--where (left(b.datea,@t_rlenm) between @t_bmon and @t_emon)
 --and b.productno between @t_bpno and @t_epno
 --and (len(@t_style)=0 or isnull(b.style,'')=@t_style)
 --and c.noa!='' and isnull(c.tggno,'')!=''
@@ -959,8 +957,8 @@ and (len(@t_uccgcno)=0 or isnull(c.groupcno,'')=@t_uccgcno)
 
 --依製令的用量
 --update a
---set ucasmount=(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,6)=left(a.datea,6) and cuano=a.cuano and cuanoq=a.cuanoq)
---,mount=mount/(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,6)=left(a.datea,6) and cuano=a.cuano  and cuanoq=a.cuanoq)
+--set ucasmount=(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,@t_rlenm)=left(a.datea,@t_rlenm) and cuano=a.cuano and cuanoq=a.cuanoq)
+--,mount=mount/(select sum(ucasmount) from #tmpa where tggno=a.tggno and pno=a.pno and style=a.style and left(datea,@t_rlenm)=left(a.datea,@t_rlenm) and cuano=a.cuano  and cuanoq=a.cuanoq)
 --from #tmpa a
 
 --依機型的總用量
@@ -975,7 +973,7 @@ create table #tmpb(
 	tgg nvarchar(100),
 	pno nvarchar(100),
 	product nvarchar(300),
-	style nvarchar(100),
+	style nvarchar(255),
 	stdmount float,--標準包裝量
 	smount float,--最低庫存
 	hmount float,--最高庫存
@@ -1034,7 +1032,7 @@ begin
 	begin
 	
 		EXEC("update #tmpb 
-		set mount"+@tmp_moncol+"=(select sum(amount) from #tmpa where left(datea,6)='"+@tmp_mon+"' and tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"')
+		set mount"+@tmp_moncol+"=(select sum(amount) from #tmpa where left(datea,"+@t_rlenm+")='"+@tmp_mon+"' and tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"')
 		where tggno='"+@tggno+"' and pno='"+@pno+"' and style='"+@style+"' and cast(ucasmount as nvarchar(50))='"+@ucasmount+"'")
 		
 		fetch next from cursor_table
@@ -1043,10 +1041,8 @@ begin
 	close cursor_table
 	deallocate cursor_table	
 	
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
 	
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
 	set @moncount=@moncount+1
 end
 
@@ -1076,8 +1072,8 @@ begin
 	set @tmp_pmoncol=right('00'+cast(@moncount-1 as nvarchar(10)),2)
 	
 	EXEC("update a
-	set rdate"+@tmp_moncol+"=isnull((select MAX(trandate) from view_ordcs where left(trandate,6)='"+@tmp_mon+"' and productno=a.pno),'"+@tmp_mon+"'+'/01')
-	,rmount"+@tmp_moncol+"=isnull((select SUM(mount) from view_ordcs where left(trandate,6)='"+@tmp_mon+"' and productno=a.pno),0)
+	set rdate"+@tmp_moncol+"=isnull((select MAX(trandate) from view_ordcs where left(trandate,"+@t_rlenm+")='"+@tmp_mon+"' and productno=a.pno),'"+@tmp_mon+"'+'/01')
+	,rmount"+@tmp_moncol+"=isnull((select SUM(mount) from view_ordcs where left(trandate,"+@t_rlenm+")='"+@tmp_mon+"' and productno=a.pno),0)
 	from #tmpb a where gno='1'")
 	
 	if(@moncount=1)
@@ -1093,9 +1089,8 @@ begin
 		from #tmpb a where gno='1'")
 	end
 		
-	set @tmp_mon=cast(cast(left(@tmp_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@tmp_mon,2)+'/01'
-	set @tmp_mon=convert(varchar(10),dateadd(month,1,@tmp_mon),120)
-	set @tmp_mon=cast(cast(left(@tmp_mon,4) as int)-1911 as nvarchar(10))+'/'+left(right(@tmp_mon,5),2)
+	set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',35),@t_rlenm)
+	
 	set @moncount=@moncount+1
 end
 

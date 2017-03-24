@@ -244,6 +244,7 @@ declare @t_erate nvarchar(50)
 declare @t_showgno0 nvarchar(50)
 declare @t_groupbno nvarchar(50)
 declare @t_xcoin nvarchar(50)
+declare @t_vccnum nvarchar(50)
 declare @t_floata float
 
 set @t_bspno = case when '#non' = [3] then '' else [3] end
@@ -259,6 +260,7 @@ set @t_erate = case when '#non' = [42] then '99999' else [42] end
 set @t_showgno0 = case when '#non' = [43] then '' else [43] end
 set @t_groupbno = case when '#non' = [47] then '' else [47] end
 set @t_xcoin = case when '#non' = [48] then '' else [48] end
+set @t_vccnum = case when '#non' = [49] then '0' else [49] end
 set @t_floata=case when @t_xcoin='' then 1 else isnull((select top 1 floata from flors where coin=@t_xcoin order by bdate desc),0) end
 -----------------------------------------------------------------------------------------------------------------------------------------
 declare @parent nvarchar(20)
@@ -319,22 +321,41 @@ create table #tmpa(
 	costg float, --機器折舊
 	costh float, --模具費用
 	vprice float,--最近銷售價
-	rate float --毛利
+	rate float, --毛利
+	
+	--出貨
+	vdatea nvarchar(50),
+	vnoa nvarchar(50),
+	vnoq nvarchar(50),
+	vcustno nvarchar(255),
+	vcomp nvarchar(255),
+	vcoin nvarchar(50),
+	vsmount float,
+	vsoprice float,
+	vsprice float,
+	vsmoney float,
+	vrate float
 )
 
 if(@t_showgno0!='1') --106/03/20 子階
 begin
 	insert #tmpa(gno,xnoa,productno,product,unit,levels,sortcol,mount,badperc,stpr,costa,costb,costc,costd,adpr,coste,costf,costg,costh)
 	select '0' gno,a.noa,a.noa,a.product,a.unit,0,a.noa,1,a.badperc,b.price
-	,isnull(d.costa,0),isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
+	,isnull(d.costa,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costb,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costc,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costd,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
 	,isnull((select avg(wages_fee+makes_fee) from ucap where noa=a.noa and left(datea,len(bmon)-3)=left(bmon,len(bmon)-3)),0) plus
-	,isnull(d.coste,0),isnull(d.costf,0),isnull(d.costg,0),isnull(d.costh,0)
+	,isnull(d.coste,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costf,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costg,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costh,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
 	From uca a 
 	outer apply (select top 1 price from view_costs where productno=a.noa order by mon desc)b --mon=@t_mon and
 	outer apply (select MAX(mon) mon from view_wcost where productno=a.noa)e
-	outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd 
-	,SUM(coste)/SUM(mount) coste,SUM(costf)/SUM(mount) costf,SUM(costg)/SUM(mount) costg,SUM(costh)/SUM(mount)costh
-	from view_wcost where mon=e.mon and productno=a.noa having SUM(mount)>0)d --@t_mon
+	outer apply (select SUM(costa)costa,SUM(costb)costb,SUM(costc)costc,SUM(costd)costd 
+	,SUM(coste) coste,SUM(costf) costf,SUM(costg) costg,SUM(costh)costh,SUM(mount) cmount
+	from view_wcost where mon=e.mon and productno=a.noa)d --@t_mon
 	outer apply (select MAX(datea) bmon from ucap where noa=a.noa)f
 	where a.noa between @t_bspno and @t_espno
 	and (len(@t_typea)=0 or a.typea=@t_typea)
@@ -344,23 +365,39 @@ begin
 end
 else
 begin
-	--106/20/20 costb-d 抓wcost
+	--106/02/20 costb-d 抓wcost
 	insert into #tmp
 	select '',a.productno,a.product,a.noa,a.unit
 	,(isnull(a.mount,0)*(case when isnull(a.mul,0) =0 then 1 else isnull(a.mul,0) end))
 	/(case when isnull(a.dividea,0) =0 then 1 else isnull(a.dividea,0) end),a.loss
-	,isnull(c.price,0)
+	,--106/03/22 半成品 計算 寫入 stpr
+	case when b.noa is null then isnull(c.price,0)
+	else
+		isnull(d.costa,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	end
 	--,isnull(b.wages*((b.minutes+(b.hsec/60))/60),0)
 	--,isnull(b.makes*((b.minutes+(b.sec/60))/60),0)
 	--,isnull(b.price,0)
-	,isnull(d.costa,0),isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
-	,isnull(d.coste,0),isnull(d.costf,0),isnull(d.costg,0),isnull(d.costh,0)
+	,--106/03/22 原料 計算 寫入 costa
+	case when b.noa is null then isnull(c.price,0) --原料
+		*(isnull(a.mount,0)*(case when isnull(a.mul,0) =0 then 1 else isnull(a.mul,0) end)
+		/(case when isnull(a.dividea,0) =0 then 1 else isnull(a.dividea,0) end))*(1+(a.loss/100))
+	else --半成品 
+		0
+	end
+	,isnull(d.costb,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costc,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costd,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.coste,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costf,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costg,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costh,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
 	from ucas a outer apply (select * from uca where noa=a.productno)b
 	outer apply (select top 1 price from view_costs where productno=a.productno order by mon desc) c --mon=@t_mon and
 	outer apply (select MAX(mon) mon from view_wcost where productno=a.productno)e
-	outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd 
-	,SUM(coste)/SUM(mount)coste,SUM(costf)/SUM(mount)costf,SUM(costg)/SUM(mount)costg,SUM(costh)/SUM(mount)costh 
-	from view_wcost where mon=e.mon and productno=a.productno having SUM(mount)>0)d --@t_mon
+	outer apply (select SUM(costa)costa,SUM(costb)costb,SUM(costc)costc,SUM(costd)costd 
+	,SUM(coste)coste,SUM(costf)costf,SUM(costg)costg,SUM(costh)costh,SUM(mount) cmount
+	from view_wcost where mon=e.mon and productno=a.productno)d --@t_mon
 	where isnull(mount,0)!=0
 	
 	insert into #tmp
@@ -370,13 +407,19 @@ begin
 	--,isnull(a.wages*((isnull(a.minutes,0)+(isnull(a.hsec,0)/60))/60),10)
 	--,isnull(a.makes*((isnull(a.minutes,0)+(isnull(a.sec,0)/60))/60),10)
 	--,isnull(a.price,0)
-	,isnull(d.costa,0),isnull(d.costb,0),isnull(d.costc,0),isnull(d.costd,0)
-	,isnull(d.coste,0),isnull(d.costf,0),isnull(d.costg,0),isnull(d.costh,0)
+	,isnull(d.costa,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costb,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costc,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costd,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.coste,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costf,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costg,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
+	,isnull(d.costh,0)/case when ISNULL(d.cmount,0)=0 then 1 else d.cmount end
 	from uca a outer apply (select top 1 price from view_costs where productno=a.noa order by mon desc)b --mon=@t_mon and
 	outer apply (select MAX(mon) mon from view_wcost where productno=a.noa)e
-	outer apply (select SUM(costa)/SUM(mount)costa,SUM(costb)/SUM(mount)costb,SUM(costc)/SUM(mount)costc,SUM(costd)/SUM(mount)costd 
-	,SUM(coste)/SUM(mount)coste,SUM(costf)/SUM(mount)costf,SUM(costg)/SUM(mount)costg,SUM(costh)/SUM(mount)costh 
-	from view_wcost where mon=e.mon and productno=a.noa having SUM(mount)>0)d --@t_mon
+	outer apply (select SUM(costa)costa,SUM(costb)costb,SUM(costc)costc,SUM(costd)costd 
+	,SUM(coste)coste,SUM(costf)costf,SUM(costg)costg,SUM(costh)costh,SUM(mount) cmount
+	from view_wcost where mon=e.mon and productno=a.noa)d --@t_mon
 	where a.noa between @t_bspno and @t_espno
 	and (len(@t_typea)=0 or a.typea=@t_typea)
 	and (len(@t_groupano)=0 or a.groupano=@t_groupano)
@@ -416,23 +459,24 @@ end
 update #tmpa
 set total=costa+costb+costc+costd+adpr
 
-if(@t_showgno0='1')--106/03/20 子階
-begin
-	insert #tmpa (gno,xnoa,sortcol,productno,levels,costa,costb,costd,adpr,costc,total)
-	select '3',xnoa,productno+'ZZZZZZZ',productno,99
-	,(select sum(costa) from #tmpa x where xnoa=a.productno and exists (select noa from ucc where noa=x.productno))
-	,(select sum(costb) from #tmpa x where xnoa=a.productno)
-	,(select sum(costd) from #tmpa x where xnoa=a.productno)
-	,(select sum(adpr) from #tmpa x where xnoa=a.productno)
-	,(select sum(costc) from #tmpa x where xnoa=a.productno)
-	,0
-	from #tmpa a where levels=0
+--106/03/22 合計拿掉
+--if(@t_showgno0='1')--106/03/20 子階
+--begin
+	--insert #tmpa (gno,xnoa,sortcol,productno,levels,costa,costb,costd,adpr,costc,total)
+	--select '3',xnoa,productno+'ZZZZZZZ',productno,99
+	--,(select sum(costa) from #tmpa x where xnoa=a.productno and exists (select noa from ucc where noa=x.productno))
+	--,(select sum(costb) from #tmpa x where xnoa=a.productno)
+	--,(select sum(costd) from #tmpa x where xnoa=a.productno)
+	--,(select sum(adpr) from #tmpa x where xnoa=a.productno)
+	--,(select sum(costc) from #tmpa x where xnoa=a.productno)
+	--,0
+	--from #tmpa a where levels=0
 	
-	update a
-	set total=ISNULL(costa,0)+ISNULL(costb,0)+ISNULL(costd,0)+ISNULL(adpr,0)+ISNULL(costc,0) 
-	from #tmpa a
-	where gno='3'
-end
+	--update a
+	--set total=ISNULL(costa,0)+ISNULL(costb,0)+ISNULL(costd,0)+ISNULL(adpr,0)+ISNULL(costc,0) 
+	--from #tmpa a
+	--where gno='3'
+--end
 
 update #tmpa set gno='0' where levels=0
 
@@ -466,7 +510,7 @@ create table #tmpacc(
 	money float
 )
 
-if(@t_stbdate!='')
+/*if(@t_stbdate!='')
 begin
 	if(len(@t_stbdate)=10)
 		set @t_stbaccy=right('000'+cast(CAST(left(@t_stbdate,4) as int)-1911 as nvarchar(50)),3)
@@ -494,7 +538,7 @@ begin
 		where left(accc5,1) ='6' or left(accc5,1) ='8' or left(accc5,1) ='9'
 		and accc2 <=right('"+@t_steaccy+"',5)
 	")
-end
+end*/
 
 create table #tmpworkb(
 	productno nvarchar(255),
@@ -507,7 +551,7 @@ create table #tmpworkb(
 	partno nvarchar(50)
 )
 
-insert #tmpworkb(productno,mount,stationno)
+/*insert #tmpworkb(productno,mount,stationno)
 select b.productno,SUM(isnull(mount,0)+isnull(wmount,0)),a.stationno
 from view_workb a left join view_workbs b on a.noa=b.noa
 where a.datea between @t_stbdate and @t_stedate
@@ -531,33 +575,40 @@ from #tmpworkb a outer apply (select * from station where noa=a.stationno) b
 update a
 set stcost=isnull((select SUM(money) from #tmpacc where acc2 like '製造費用-%' and acc2 not like '%物料%' and partno=a.partno),0)
 *(a.totalsec/isnull((select SUM(totalsec) from #tmpworkb where a.partno=a.partno),0))
-from #tmpworkb a
+from #tmpworkb a*/
 
+--毛利=case when 實際>0 then 實際 else 標準 end 目前 先撈 標準
 update a
 set stcost=isnull(b.stcost,0)
 ,accost=0 --報工時間，先不管
 ,diff=isnull(b.stcost,0)-0
-,vprice=ISNULL(d.vprice,0)
+,vprice=d.vprice
 -- 無實際成本時，以 標準成本 算 
-,rate=case when ISNULL(d.vprice,0)=0 then 0 else (ISNULL(d.vprice,0)-isnull(b.stcost,0))/ISNULL(d.vprice,0) end *100
+,rate=case when d.vprice=0 then 0 else (d.vprice-isnull(a.total,0))/d.vprice end *100
 from #tmpa a
 outer apply (select stcost from #tmpworkb where productno=a.productno) b
-outer apply (select top 1 price vprice from view_vccs where productno=a.productno and price!=0 order by datea desc)d
+outer apply (select top 1 isnull(vb.price,0)*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end vprice 
+from view_vccs vb left join view_vcc va on vb.noa=va.noa left join view_orde oa on oa.noa=vb.ordeno
+where vb.productno=a.productno order by vb.datea desc)d
 
-update a
-set stcost=(select SUM(stcost) from #tmpa where xnoa=a.xnoa and gno='2')
-,accost=(select SUM(accost) from #tmpa where xnoa=a.xnoa and gno='2')
-,diff=(select SUM(diff) from #tmpa where xnoa=a.xnoa and gno='2')
-from #tmpa a where gno='3'
+--106/03/22 合計拿掉
+--update a
+--set stcost=(select SUM(stcost) from #tmpa where xnoa=a.xnoa and gno='2')
+--,accost=(select SUM(accost) from #tmpa where xnoa=a.xnoa and gno='2')
+--,diff=(select SUM(diff) from #tmpa where xnoa=a.xnoa and gno='2')
+--from #tmpa a where gno='3'
 
-update a
-set rate=case when ISNULL(vprice,0)=0 then 0 else (ISNULL(vprice,0)-isnull(stcost,0))/ISNULL(vprice,0) end *100
-from #tmpa a where gno='3'
+--update a
+--set rate=case when ISNULL(vprice,0)=0 then 0 else (ISNULL(vprice,0)-isnull(total,0))/ISNULL(vprice,0) end *100
+--from #tmpa a where gno='3'
 
 if(@t_sbcost='1')
-	delete #tmpa where accost<stcost and gno='2'
+	delete #tmpa where accost<stcost and gno='0'
 	
-delete #tmpa where gno='2' and rate not between cast(@t_brate as float) and cast(@t_erate as float)
+delete #tmpa where gno='0' and isnull(rate,0) not between cast(@t_brate as float) and cast(@t_erate as float)
+
+delete a from  #tmpa a
+where gno='2' and not exists (select * from #tmpa where gno='0' and xnoa=a.xnoa)
 
 update #tmpa 
 set badperc=case when badperc=0 then null else badperc end
@@ -581,41 +632,111 @@ where gno='2'
 
 if(@t_showgno0='1')
 begin
-	update #tmpa set stcost=null,accost=null,diff=null,coste=null,vprice=null,rate=null,costf=null,costg=null,costh=null
-	where gno='0'
+	--106/03/22 因合計拿掉所以製成品後面成本不拿掉
+	--update #tmpa set stcost=null,accost=null,diff=null,coste=null,costf=null,costg=null,costh=null --,vprice=null,rate=null
+	--where gno='0'
 	
 	insert #tmpa(gno,xnoa)
 	select '1',xnoa from #tmpa where gno='2' group by xnoa
+	
+	insert #tmpa(gno,xnoa)
+	select '6',xnoa from #tmpa group by xnoa
+end
+
+if(@t_vccnum!='0')
+begin
+	--declare @xnoa nvarchar(255)
+	--declare @total float
+	--declare @accost float
+	--declare cursor_table cursor for
+	--select xnoa,total,accost from #tmpa a where gno='0'
+	--and exists (select * from view_vccs where productno=a.xnoa)
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @xnoa,@total,@accost
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	insert #tmpa(gno,xnoa)
+	--	select '4',@xnoa
+		
+	--	EXEC("insert #tmpa(gno,xnoa,vdatea,vnoa,vnoq,vcustno,vcomp,vcoin,vsmount,vsprice,vsmoney,vrate,total,accost)
+	--	select top "+@t_vccnum+" '5','"+@xnoa+"',va.datea,vb.noa,vb.no2,va.custno,va.nick
+	--	,'"+@t_xcoin+"',vb.mount
+	--	,vb.price*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end
+	--	,vb.total*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end
+	--	,0,0,0
+	--	from view_vccs vb left join view_vcc va on va.noa=vb.noa
+	--	left join view_orde oa on vb.ordeno=oa.noa
+	--	where productno='"+@xnoa+"' order by va.datea desc")
+	--	
+	--	update #tmpa
+	--	set total=@total,accost=@accost
+	--	where gno='5' and xnoa=@xnoa
+	
+	--	fetch next from cursor_table
+	--	into @xnoa,@total,@accost
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	insert #tmpa(gno,xnoa)
+	select '4',xnoa from #tmpa a where gno='0'
+	and exists (select * from view_vccs where productno=a.xnoa)
+	
+	EXEC("insert #tmpa(gno,xnoa,vdatea,vnoa,vnoq,vcustno,vcomp,vcoin,vsoprice,vsmount,vsprice,vsmoney,vrate,total,accost)
+	select '5',vb.productno,va.datea,vb.noa,vb.no2,va.custno,va.nick
+	,va.coin,vb.price,vb.mount
+	,vb.price*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end
+	,vb.total*case when isnull(va.coin,'')!='' and ISNULL(va.floata,0)!=0 then va.floata else case when isnull(oa.floata,0)=0 then 1 else oa.floata end end
+	,0,c.total,c.accost
+	from view_vccs vb left join view_vcc va on va.noa=vb.noa
+	left join view_orde oa on vb.ordeno=oa.noa
+	outer apply (select top "+@t_vccnum+" MAX(datea+'-'+noa+'-'+noq)maxnoa,price from view_vccs where productno=vb.productno group by price order by maxnoa)xb
+	outer apply (select top "+@t_vccnum+" * from view_vccs where productno=vb.productno and datea+'-'+noa+'-'+noq=xb.maxnoa and price=xb.price order by datea desc)b
+	outer apply (select * from #tmpa where gno='0' and xnoa=vb.productno) c
+	where c.xnoa is not null
+	and vb.noa=b.noa and vb.noq=b.noq")
+	
+	update a
+	set vrate=case when ISNULL(vsprice,0)=0 then 0 else (ISNULL(vsprice,0)
+	-case when isnull(accost,0)!=0 then isnull(accost,0) else isnull(total,0) end
+	)/ISNULL(vsprice,0) end *100
+	from #tmpa a where gno='5'
 end
 
 select gno,sortcol,productno,product xproduct,REPLICATE('&nbsp&nbsp',(levels-1))+cast(levels as nvarchar(20)) levels,unit
 ,dbo.getComma(mount,5) mount
 ,dbo.getComma(badperc,-1) badperc
-,dbo.getComma(stpr*@t_floata,2) stpr
-,dbo.getComma(costa*@t_floata,2) costa
-,dbo.getComma(costb*@t_floata,2) costb
-,dbo.getComma(costc*@t_floata,2) costc
-,dbo.getComma(costd*@t_floata,2) costd
-,dbo.getComma(adpr*@t_floata,2) adpr
-,dbo.getComma(coste*@t_floata,2) coste
-,dbo.getComma(costf*@t_floata,2) costf
-,dbo.getComma(costg*@t_floata,2) costg
-,dbo.getComma(costh*@t_floata,2) costh
-,dbo.getComma(total*@t_floata,2) total
+,dbo.getComma(stpr/case when @t_floata=0 then 1 else @t_floata end,2) stpr
+,dbo.getComma(costa/case when @t_floata=0 then 1 else @t_floata end,2) costa
+,dbo.getComma(costb/case when @t_floata=0 then 1 else @t_floata end,2) costb
+,dbo.getComma(costc/case when @t_floata=0 then 1 else @t_floata end,2) costc
+,dbo.getComma(costd/case when @t_floata=0 then 1 else @t_floata end,2) costd
+,dbo.getComma(adpr/case when @t_floata=0 then 1 else @t_floata end,2) adpr
+,dbo.getComma(coste/case when @t_floata=0 then 1 else @t_floata end,2) coste
+,dbo.getComma(costf/case when @t_floata=0 then 1 else @t_floata end,2) costf
+,dbo.getComma(costg/case when @t_floata=0 then 1 else @t_floata end,2) costg
+,dbo.getComma(costh/case when @t_floata=0 then 1 else @t_floata end,2) costh
+,dbo.getComma(total/case when @t_floata=0 then 1 else @t_floata end,2) total
 ,(case when @t_typea='2' then '製成品' when @t_typea='3' then '半成品' else '製成品、半成品' end) typea
 ,(case when len(@t_groupano)=0 then '全部' else (select namea from uccga where noa=@t_groupano) end) groupa
 
-,dbo.getComma(stcost*@t_floata,2) stcost
-,dbo.getComma(accost*@t_floata,2) accost --報工時間，先不管
-,dbo.getComma(diff*@t_floata,2) diff
-,dbo.getComma(coste*@t_floata,2) coste
-,dbo.getComma(vprice*@t_floata,2) vprice
+,dbo.getComma(stcost/case when @t_floata=0 then 1 else @t_floata end,2) stcost
+,dbo.getComma(accost/case when @t_floata=0 then 1 else @t_floata end,2) accost --報工時間，先不管
+,dbo.getComma(diff/case when @t_floata=0 then 1 else @t_floata end,2) diff
+,dbo.getComma(coste/case when @t_floata=0 then 1 else @t_floata end,2) coste
+,dbo.getComma(vprice/case when @t_floata=0 then 1 else @t_floata end,2) vprice
 ,dbo.getComma(rate,2) rate
+
+,vdatea,vnoa,vnoq,vcustno,vcomp,case when vcoin!=@t_xcoin then vcoin+'('+dbo.getComma(vsoprice,-1)+')' else @t_xcoin end vcoin
+,dbo.getComma(vsmount,-1)vsmount
+,dbo.getComma(vsprice/case when @t_floata=0 then 1 else @t_floata end,2)vsprice
+,dbo.getComma(vsmoney/case when @t_floata=0 then 1 else @t_floata end,2)vsmoney
+,dbo.getComma(vrate,2)vrate
 from #tmpa
-order by case when @t_showgno0='1' then xnoa else '0' end
-,gno
+order by xnoa,gno
 ,case when @t_order='rate' then rate else 0 end desc
-,sortcol,levels
+,sortcol,levels,vdatea desc
 
 IF OBJECT_ID('tempdb..#tmpacc')is not null
 BEGIN
@@ -751,6 +872,7 @@ set @t_typea = case when '#non' = [6] then '' else [6] end
 set @t_groupano = case when '#non' = [7] then '' else [7] end
 set @t_style = case when '#non' = [12] then '' else [12] end
 set @t_groupbno = case when '#non' = [47] then '' else [47] end
+declare @t_ip nvarchar(50) = '[50]'
 
 select '0' gno
 ,ROW_NUMBER()over(order by groupano,typea,noa)recno
@@ -767,13 +889,14 @@ select '0' gno
 ,dbo.getComma(packs,2)  packs
 ,dbo.getComma(wages,2)  wages
 ,dbo.getComma(safemount,2)  safemount
-,case when len(dbo.split(images+char(59),char(59),0))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),0)+'" width="100px" >' else '' end img1
-,case when len(dbo.split(images+char(59),char(59),1))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),1)+'" width="100px" >' else '' end img2
-,case when len(dbo.split(images+char(59),char(59),2))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),2)+'" width="100px" >' else '' end img3
-,case when len(dbo.split(images+char(59),char(59),3))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),3)+'" width="100px" >' else '' end img4
-,case when len(dbo.split(images+char(59),char(59),4))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),4)+'" width="100px" >' else '' end img5
-,case when len(dbo.split(images+char(59),char(59),5))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),5)+'" width="100px" >' else '' end img6
+,case when len(dbo.split(images+char(59),char(59),0))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),0)+'" width="100" >' else '' end img1
+,case when len(dbo.split(images+char(59),char(59),1))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),1)+'" width="100" >' else '' end img2
+,case when len(dbo.split(images+char(59),char(59),2))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),2)+'" width="100" >' else '' end img3
+,case when len(dbo.split(images+char(59),char(59),3))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),3)+'" width="100" >' else '' end img4
+,case when len(dbo.split(images+char(59),char(59),4))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),4)+'" width="100" >' else '' end img5
+,case when len(dbo.split(images+char(59),char(59),5))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),5)+'" width="100" >' else '' end img6
 ,*
+,'uca?noa=$noa'qhref
 from uca
 where noa between @t_bpno and @t_epno
 and (len(@t_typea)=0 or typea=@t_typea) and (len(@t_groupano)=0 or groupano=@t_groupano)
@@ -827,6 +950,7 @@ declare @t_bstation nvarchar(50) = case when '#non' = [36] then '' else [36] end
 declare @t_estation nvarchar(50) = case when '#non' = [37] then CHAR(255) else [37] end
 declare @t_xproduct nvarchar(50) = case when '#non' = [38] then '' else [38] end
 
+declare @t_ip nvarchar(50) = '[50]'
 
 if(@t_proserch='1')
 begin
@@ -852,13 +976,14 @@ begin
 	,(select top 1 mon from adknife where noa=uca.groupgno) tgroupgs
 	,(select top 1 mon from adpipe where noa=uca.grouphno) tgrouphs
 	,(select top 1 mon from adtran where noa=uca.groupino) tgroupis
-	,case when len(dbo.split(images+char(59),char(59),0))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),0)+'" width="100px" >' else '' end img1
-	,case when len(dbo.split(images+char(59),char(59),1))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),1)+'" width="100px" >' else '' end img2
-	,case when len(dbo.split(images+char(59),char(59),2))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),2)+'" width="100px" >' else '' end img3
-	,case when len(dbo.split(images+char(59),char(59),3))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),3)+'" width="100px" >' else '' end img4
-	,case when len(dbo.split(images+char(59),char(59),4))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),4)+'" width="100px" >' else '' end img5
-	,case when len(dbo.split(images+char(59),char(59),5))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),5)+'" width="100px" >' else '' end img6
+	,case when len(dbo.split(images+char(59),char(59),0))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),0)+'" width="100" >' else '' end img1
+	,case when len(dbo.split(images+char(59),char(59),1))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),1)+'" width="100" >' else '' end img2
+	,case when len(dbo.split(images+char(59),char(59),2))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),2)+'" width="100" >' else '' end img3
+	,case when len(dbo.split(images+char(59),char(59),3))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),3)+'" width="100" >' else '' end img4
+	,case when len(dbo.split(images+char(59),char(59),4))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),4)+'" width="100" >' else '' end img5
+	,case when len(dbo.split(images+char(59),char(59),5))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),5)+'" width="100" >' else '' end img6
 	,*
+	,'uca_jo?noa=$noa'qhref
 	from uca
 	where noa between @t_bpno and @t_epno
 	and (len(@t_typea)=0 or typea=@t_typea) 
@@ -912,13 +1037,14 @@ begin
 	,(select top 1 mon from adknife where noa=uca.groupgno) tgroupgs
 	,(select top 1 mon from adpipe where noa=uca.grouphno) tgrouphs
 	,(select top 1 mon from adtran where noa=uca.groupino) tgroupis
-	,case when len(dbo.split(images+char(59),char(59),0))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),0)+'" width="100px" >' else '' end img1
-	,case when len(dbo.split(images+char(59),char(59),1))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),1)+'" width="100px" >' else '' end img2
-	,case when len(dbo.split(images+char(59),char(59),2))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),2)+'" width="100px" >' else '' end img3
-	,case when len(dbo.split(images+char(59),char(59),3))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),3)+'" width="100px" >' else '' end img4
-	,case when len(dbo.split(images+char(59),char(59),4))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),4)+'" width="100px" >' else '' end img5
-	,case when len(dbo.split(images+char(59),char(59),5))>0 then '<img class="img" onclick="imgshow(this)" src="../images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),5)+'" width="100px" >' else '' end img6
+	,case when len(dbo.split(images+char(59),char(59),0))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),0)+'" width="100" >' else '' end img1
+	,case when len(dbo.split(images+char(59),char(59),1))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),1)+'" width="100" >' else '' end img2
+	,case when len(dbo.split(images+char(59),char(59),2))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),2)+'" width="100" >' else '' end img3
+	,case when len(dbo.split(images+char(59),char(59),3))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),3)+'" width="100" >' else '' end img4
+	,case when len(dbo.split(images+char(59),char(59),4))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),4)+'" width="100" >' else '' end img5
+	,case when len(dbo.split(images+char(59),char(59),5))>0 then '<img class="img" onclick="imgshow(this)" src="http://'+@t_ip+'/images/upload/'+REPLACE(noa,'/','CHR(47)')+'_'+dbo.split(images+char(59),char(59),5)+'" width="100" >' else '' end img6
 	,*
+	,'uca_jo?noa=$noa'qhref
 	from uca
 	where noa between @t_bpno and @t_epno
 	and (len(@t_typea)=0 or typea=@t_typea) 
