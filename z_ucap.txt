@@ -46,6 +46,7 @@ create table #tmp(
 	hsec float,
 	preday float,
 	pretime float,
+	loss float,
 	noq nvarchar(MAX)
 )
 declare @result table(
@@ -72,6 +73,7 @@ declare @result table(
 	preday float,
 	pretime float,
 	ucccost float,
+	loss float,
 	stationno nvarchar(max),
 	stations nvarchar(max),
 	tggno nvarchar(max),
@@ -85,7 +87,7 @@ select a.productno,a.product,a.noa,(isnull(a.mount,0)*(case when isnull(a.mul,0)
 ,isnull(b.makes*((b.minutes+(b.sec/60))/60),0)
 ,isnull(b.price,0)
 ,isnull(b.hours,0),isnull(b.minutes,0),isnull(b.hminutes,0),isnull(b.sec,0),isnull(b.hsec,0)
-,isnull(b.preday,0),isnull(b.pretime,0)
+,isnull(b.preday,0),isnull(b.pretime,0),ISNULL(a.loss,0)
 ,noq
 from ucas a outer apply (select * from uca where noa=a.productno) b
 outer apply (select * from view_costs where mon=@t_mon and productno=a.productno)c
@@ -103,6 +105,7 @@ select a.noa,a.product,@parent,1,0,0
 ,isnull(a.hsec,0)
 ,isnull(a.preday,0)
 ,isnull(a.pretime,0)
+,ISNULL(a.badperc,0)
 ,'000' from uca a 
 outer apply (select * from view_costs where mon=@t_mon and productno=a.noa)b
 where a.noa between @t_bspno and @t_espno 
@@ -115,15 +118,15 @@ CREATE INDEX tmpindex1 ON #tmp (parent)
 
 BEGIN TRY
 	--遞迴
-	WITH OrdersTable (uno,productno,product,noa,Level,sortCol,mount,dividea,mul,price,costb,costc,costd,hours,minutes,hminutes,sec,hsec,preday,pretime) as (
+	WITH OrdersTable (uno,productno,product,noa,Level,sortCol,mount,dividea,mul,price,costb,costc,costd,hours,minutes,hminutes,sec,hsec,preday,pretime,loss) as (
 		Select
-			productno,productno,product,parent,0, CONVERT(nvarchar(MAX),productno),mount,dividea,mul,price,costb,costc,costd,hours,minutes,hminutes,sec,hsec,preday,pretime
+			productno,productno,product,parent,0, CONVERT(nvarchar(MAX),productno),mount,dividea,mul,price,costb,costc,costd,hours,minutes,hminutes,sec,hsec,preday,pretime,loss
 		from #tmp
 		where parent=@parent
 		UNION ALL
 		SELECT
 			OrdersTable.uno,a.productno,a.product,a.parent,OrdersTable.Level+1,CONVERT(nvarchar(MAX)
-			,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)+'**'+a.noq),a.mount,a.dividea,a.mul,a.price,a.costb,a.costc,a.costd,a.hours,a.minutes,a.hminutes,a.sec,a.hsec,a.preday,a.pretime
+			,OrdersTable.SortCol+'-'+CONVERT(nvarchar(128),a.productno)+'**'+a.noq),a.mount,a.dividea,a.mul,a.price,a.costb,a.costc,a.costd,a.hours,a.minutes,a.hminutes,a.sec,a.hsec,a.preday,a.pretime,a.loss
 		FROM #tmp a, OrdersTable
 		WHERE a.parent=OrdersTable.productno
 	)
@@ -136,7 +139,7 @@ BEGIN TRY
 			case when @t_isprice='1' then isnull(a.price*a.mount,0) else null end costa,a.costb,a.costc,a.costd,a.hours,a.minutes,a.hminutes,a.sec,a.hsec,a.preday,a.pretime,
 			case when @t_isprice='1' then
 				(select SUM(price*mount+costb+costc+costd) from OrdersTable where left(sortcol,len(a.sortcol))=a.sortcol)
-			else null end ucccost,
+			else null end ucccost,a.loss,
 			b.stationno stationno,
 			b.station stations,
 			case when (isnull(b.tggno,'')='') and (b.isoutsource='1') then 'V' else b.tggno end tggno,
@@ -213,13 +216,16 @@ select uno,
 	case a.pretime when 0 then null else a.pretime end pretime,
 	a.ucccost,a.stationno,a.stations,a.tggno
 	,(select top 1 (case when isnull(nick,'')!='' then nick when isnull(comp,'')!='' then left(comp,4) else left(a.tggs,4) end) from tgg where noa=a.tggno) tggs
-	, case when stuff(isnull(dividea,''),1,3,'')=stuff(isnull(mul,''),1,3,'') then cast(a.mount as nvarchar) else cast(a.mount as nvarchar)+isnull(dividea,'')+isnull(mul,'') end modiv
+	,case when (select COUNT(*) from ucc where noa= replace(a.pno,'　　',''))>0 then '' else case when stuff(isnull(dividea,''),1,3,'')=stuff(isnull(mul,''),1,3,'') then cast(a.mount as nvarchar) else cast(a.mount as nvarchar)+isnull(dividea,'')+isnull(mul,'') end end modiv
+	,case when (select COUNT(*) from ucc where noa= replace(a.pno,'　　',''))>0 then case when stuff(isnull(dividea,''),1,3,'')=stuff(isnull(mul,''),1,3,'') then cast(a.mount as nvarchar) else cast(a.mount as nvarchar)+isnull(dividea,'')+isnull(mul,'') end else '' end sodiv
+	--, case when stuff(isnull(dividea,''),1,3,'')=stuff(isnull(mul,''),1,3,'') then cast(a.mount as nvarchar) else cast(a.mount as nvarchar)+isnull(dividea,'')+isnull(mul,'') end modiv
 	--,case when (a.hours=0 and a.minutes=0) then null when (a.minutes>0) then cast(a.minutes as nvarchar)+' Min'	else cast(a.hours as nvarchar)+' Hr' end usetime
 	--105/03/31 顯示分秒
 	,case when (a.sec=0 and a.minutes=0) then null when (a.minutes>0) then cast(a.minutes as nvarchar)+' Min'	else cast(a.sec as nvarchar)+' Sec' end usetime
 	,case when (a.hsec=0 and a.hminutes=0) then null when (a.hminutes>0) then cast(a.hminutes as nvarchar)+' Min'	else cast(a.hsec as nvarchar)+' Sec' end husetime
 	,case when (select COUNT(*) from ucc where noa= replace(a.pno,'　　',''))>0 then 'v' else '' end isucc
-	,'uca?left(noa,'+cast(len(a.pno) as nvarchar)+')=$pno?' ghref
+	,case when (select COUNT(*) from ucc where noa= replace(a.pno,'　　',''))>0 then 'ucc?left(noa,'+cast(len(a.pno) as nvarchar)+')=$pno?' else 'uca?left(noa,'+cast(len(a.pno) as nvarchar)+')=$pno?' end ghref
+	,case when a.loss=0 then null else a.loss end loss
 from @result a
 order by a.pageno,xgno,a.sortCol
 
