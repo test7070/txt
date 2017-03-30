@@ -3142,13 +3142,30 @@ z_ucc5_xy:--ucc5_xy--庫存預估表
 	set @t_ucc = case when '#non'=[24] then '' else [24] end
 	set @lowsafe = case when '#non'=[26] then '' else [26] end
 	
+	declare @t_bcustno nvarchar(50)
+	declare @t_ecustno nvarchar(50)
+	declare @t_product nvarchar(MAX)
+	declare @t_style nvarchar(MAX)
+	declare @t_spec nvarchar(MAX)
+	
+	set @t_bcustno = case when '#non' = [29] then '' else [29] end
+	set @t_ecustno = case when '#non' = [30] then char(255) else [30] end
+	set @t_product = case when '#non' = [31] then '' else [31] end
+	set @t_style = case when '#non' = [32] then '' else [32] end
+	set @t_spec = case when '#non' = [33] then '' else [33] end
+-------------------------------------------------------------------------------------------	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+
 	declare @types table(
 		typesno nvarchar(20),
 		typea nvarchar(50)
 	)
 	
 	declare @typestmp nvarchar(MAX)
-	set @typestmp='[14]'
+	set @typestmp='1@商品,4@原料,5@物料,6@下腳品,7@加工'
 	
 	while(charindex(',',@typestmp)>0) 
 	begin 
@@ -3160,17 +3177,25 @@ z_ucc5_xy:--ucc5_xy--庫存預估表
 	insert @types
 	select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,LEN(@typestmp)) 
 
-	declare @result table(
+	create table #tmp(
 		gno nvarchar(1),
 		pno nvarchar(100),
 		product nvarchar(255),
 		spec nvarchar(255),
+		style nvarchar(255),
 		unit nvarchar(50),
 		mount float,--庫存量
 		safem float,--安全存量
 		vmount float,--預計出貨量
 		rmount float,--預計入庫量
-		smount float--預估存量 (現有庫存+預入-預計出)
+		smount float,--預估存量 (現有庫存+預入-預計出)
+		
+		price float, --平均單價
+		total float, --金額
+		cmount float,--寄庫量
+		
+		custno nvarchar(50),
+		comp nvarchar(MAX)
 	)
 	
 	declare @stkucc table(
@@ -3185,7 +3210,8 @@ z_ucc5_xy:--ucc5_xy--庫存預估表
 	
 	declare @ordcunrc2 table(
 		pno nvarchar(100),
-		rmount float
+		rmount float,
+		rmoney float
 	)
 	
 	insert @stkucc
@@ -3201,20 +3227,24 @@ z_ucc5_xy:--ucc5_xy--庫存預估表
 	group by o.productno
 	
 	insert @ordcunrc2
-	select productno,SUM(rmount) from (
-		select c.productno,SUM(isnull(c.mount,0)-isnull(r.rmount,0))rmount from view_ordcs c 
+	select productno,SUM(rmount),SUM(rmoney) from (
+		select c.productno,SUM(isnull(c.mount,0)-isnull(r.rmount,0))rmount 
+		,SUM((isnull(c.mount,0)-isnull(r.rmount,0))*c.price)rmoney
+		from view_ordcs c 
 		outer apply (select sum(mount)rmount from view_rc2s where c.noa=ordeno and c.no2=no2 and typea!='2')r
 		where isnull(c.enda,0)!=1 and isnull(c.cancel,0)!=1 and isnull(c.mount,0)-isnull(r.rmount,0)>0
 		group by c.productno
 		union all
 		select a.productno,SUM(isnull(a.mount,0)-isnull(b.mount,0)) mount 
+		,SUM((isnull(a.mount,0)-isnull(b.mount,0))*a.price) rmoney 
 		from view_cub a outer apply (select SUM(mount)mount from view_inas where rc2no=a.noa)b
 		where isnull(a.enda,0)!=1 and isnull(a.cancel,0)!=1 and isnull(a.mount,0)-isnull(b.mount,0)>0
 		group by a.productno
 	)tmp group by productno
 	
-	insert into @result
-	select '0',a.noa,a.product,a.spec,a.unit,isnull(b.mount,0),isnull(a.safemount,0),isnull(c.vmount,0),isnull(d.rmount,0),isnull(b.mount,0)-isnull(c.vmount,0)+isnull(d.rmount,0)
+	insert into #tmp(gno,pno,product,spec,style,unit,mount,safem,vmount,rmount,smount,price,total)
+	select '0',a.noa,a.product,a.spec,style,a.unit,isnull(b.mount,0),isnull(a.safemount,0),isnull(c.vmount,0),isnull(d.rmount,0),isnull(b.mount,0)-isnull(c.vmount,0)+isnull(d.rmount,0)
+	,isnull(round(d.rmoney/d.rmount,4),0),isnull(d.rmoney,0)
 	from ucc a left join @stkucc b on a.noa=b.pno
 	left join @ordeunvcc c on a.noa=c.pno
 	left join @ordcunrc2 d on a.noa=d.pno
@@ -3223,33 +3253,51 @@ z_ucc5_xy:--ucc5_xy--庫存預估表
 	and (len(@t_typea)=0 or typea=@t_typea)
 	and (len(@t_group)=0 or groupano=@t_group)
 	and (isnull(tggno,'') between @t_btggno and @t_etggno)
+	and (len(@t_product)=0 or product like '%'+@t_product+'%')
+	and (len(@t_style)=0 or style=@t_style)
+	and (len(@t_spec)=0 or spec like '%'+@t_spec+'%')
 	
-	if(@lowsafe='1')
-		delete @result where smount>=safem
+	update a
+	set custno=isnull(b.noa,'')
+	,comp=isnull(b.nick,'')
+	,cmount=isnull(c.cmount,0)
+	from #tmp a left join cust b on left(pno,5)=b.noa and CHARINDEX('-',pno)>0
+	outer apply (select sum(case when typea='1' then 1 else -1 end * isnull(tranmoney2,0)-isnull(tranmoney3,0))cmount 
+	from view_vccs where datea<=@enddate and (itemno='1' or itemno='2') and productno=a.pno) c
+	
+	delete #tmp where custno not between @t_bcustno and @t_ecustno
 		
-	delete @result where mount=0 and vmount=0 and rmount=0
+	if(@lowsafe='1')
+		delete #tmp where smount>=safem
+		
+	delete #tmp where mount=0 and vmount=0 and rmount=0
 	
-	if((select count(*) from @result)>0)
+	if((select count(*) from #tmp)>0)
 	begin
-		insert @result
-		select '1',CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(mount),SUM(safem),SUM(vmount),SUM(rmount),SUM(smount) from @result
+		insert #tmp(gno,pno,product,spec,style,unit,mount,safem,vmount,rmount,smount,total,cmount)
+		select '1',CHAR(255),CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(mount),SUM(safem),SUM(vmount),SUM(rmount),SUM(smount) 
+		,sum(total),SUM(cmount)
+		from #tmp
 	end
 
 	select 
-		dbo.getComma(mount,[21]) mount
-		,dbo.getComma(safem,[21]) safem
-		,dbo.getComma(vmount,[21]) vmount
-		,dbo.getComma(rmount,[21]) rmount
-		,dbo.getComma(smount,[21]) smount
-		,product+case when @isspec='1' then ' '+isnull(spec,'') else '' end product
-		,case when isnull(c.inmount,0)!=0 then dbo.getComma(case when a.mount<0 then -1 else 1 end*FLOOR(abs(a.mount)/c.inmount),-1) else '' end lengthcb
-		,case when isnull(c.inmount,0)!=0 then cast(a.mount as int)%cast(c.inmount as int) else a.mount end lengthcc
-		,c.inmount
-		,case when isnull(c.inmount,0)!=0 then dbo.getComma(case when a.smount<0 then -1 else 1 end*FLOOR(abs(a.smount)/c.inmount),-1) else '' end slengthcb
-		,case when isnull(c.inmount,0)!=0 then cast(a.smount as int)%cast(c.inmount as int) else a.smount end slengthcc
-		,*
-	from @result a outer apply (select top 1 noq,inmount,pack,packway from pack2s where noa=a.pno and isnull(pack,'')!='' order by inmount desc)c 
+	dbo.getComma(mount,-1) mount
+	,dbo.getComma(safem,-1) safem
+	,dbo.getComma(vmount,-1) vmount
+	,dbo.getComma(rmount,-1) rmount
+	,dbo.getComma(smount,-1) smount
+	,dbo.getComma(price,-1) price
+	,dbo.getComma(total,-1) total
+	,dbo.getComma(cmount,-1) cmount
+	,*
+	,'z_vcc_xy?pno=\'''+pno+'\'' and edate=\'''+@enddate+'\'' and cmount=$cmount' qhref
+	from #tmp a 
 	order by gno,pno
+	
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
 ;
 --***************************************************************************************
 z_ucctb_xy:--z_ucctb_xy
