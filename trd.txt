@@ -1,10 +1,240 @@
+trd2vcca:--trd2vcca  trd.txt
+	SET QUOTED_IDENTIFIER OFF 
+	declare @cmd nvarchar(max)
+	
+	declare @trdno nvarchar(20) = [1]	
+	------------------------------------------------------------
+	if not exists(select * from view_trd where noa=@trdno)
+	begin
+		select '0' [status],'立帳單【'+@trdno+'】遺失' msg
+		return
+	end
+	if exists(select * from view_trd where noa=@trdno and len(isnull(vccano,''))>0)
+	begin
+		select '0' [status],'立帳單【'+@trdno+'】，發票【'+vccano+'】已存在。' msg
+		from view_trd where noa=@trdno
+		return
+	end
+	declare @invoice nvarchar(20) = ''
+	declare @accy nvarchar(20)
+	declare @custno nvarchar(20) = ''
+	declare @mon nvarchar(10) = ''
+	declare @datea nvarchar(20) = ''
+	declare @cno nvarchar(20) = '' --同上一次開過的發票
+	select @accy=accy,@mon=LEFT(datea,6),@custno=custno,@datea=datea from view_trd where noa=@trdno
+	select top 1 @cno=cno from vcca where custno=@custno and datea<=@datea order by noa desc,datea desc 
+	-------------------------------------------------------------
+	--找出可以用的發票
+	declare @tmpa table(
+		sel int identity(1,1)
+		,binvono nvarchar(20)
+		,einvono nvarchar(20)
+		
+	)
+	declare @binvono nvarchar(20)
+	declare @einvono nvarchar(20)
+	
+	declare @key nvarchar(20)
+	declare @n int,@nstr int,@nend int
+	declare @no nvarchar(10) = ''
+	declare @bno nvarchar(10) = ''
+	declare @bdate nvarchar(10)
+	
+	declare cursor_table cursor for
+	
+	select b.cno,a.binvono,a.einvono 
+	from vccars a
+	left join vccar b on a.noa=b.noa 
+	where @mon+'/01' between b.bdate and b.edate
+	and (len(@cno)=0 or b.cno=@cno)
+	
+	open cursor_table
+	fetch next from cursor_table
+	into @cno,@binvono,@einvono
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @key = LEFT(@binvono,2)
+		set @nstr = cast(RIGHT(@binvono,8) as int)
+		set @nend = cast(RIGHT(@einvono,8) as int)
+		set @n = @nstr
+		while @n<=@nend
+		begin
+			set @no = @key + right('00000000'+CAST(@n as nvarchar),8)
+			
+			if not exists(select * from vcca where noa=@no)
+			begin
+				if @no=@binvono
+				begin
+					set @invoice = @no
+					break	
+				end
+				else
+				begin
+					--檢查發票日期
+					set @bno = @key + right('00000000'+CAST(@n-1 as nvarchar),8)
+					set @bdate=''
+					select @bdate=datea from vcca where noa=@bno
+					if @bdate>@datea
+					begin
+						--換別本發票
+						break
+					end
+					else if @datea>=@bdate--必需 大於等於前一張日期
+					begin
+						set @invoice = @no
+						break
+					end
+				end
+				
+			end
+			else
+			begin
+				set @n = @n + 1
+			end
+		end
+		
+		if LEN(@invoice)>0
+		begin
+			--找到可用的發票號碼
+			--select 'Invoice',@invoice
+			break
+		end
+		
+		fetch next from cursor_table
+		into @cno,@binvono,@einvono
+	end
+	close cursor_table
+	deallocate cursor_table
+	---------------------------------------------
+	if len(@invoice)=0
+	begin
+		select '0' [status],'找不到可用的發票號碼' msg
+		return
+	end
+	
+	--===================================
+	--產生發票
+	--===================================
+	declare @money float = 0
+	declare @tax float = 0
+	declare @total float =0
+	
+	select @money=[money] from view_trd where noa=@trdno
+	set @money = ISNULL(@money,0)
+	set @tax = round(@money * 0.05,0)
+	set @total = @money+@tax
+	
+	---------------------------------------------------------
+	declare @tmpvcca table(
+		noa nvarchar(20)
+		,cno nvarchar(20)
+		,acomp nvarchar(50)
+		,serial nvarchar(20)
+		,custno nvarchar(20)
+		,comp nvarchar(50)
+		,nick nvarchar(20)
+		,zip nvarchar(10)
+		,[address] nvarchar(50)
+		,datea nvarchar(20)
+		,mon nvarchar(20)
+		
+		,taxtype nvarchar(20)
+		,[money] float
+		,tax float
+		,total float
+		,memo nvarchar(max)
+	)
+	declare @tmpvccas table(
+		noa nvarchar(20)
+		,noq nvarchar(10)
+		,productno nvarchar(20)
+		,product nvarchar(50)
+		,unit nvarchar(20)
+		,price float
+		,mount float
+		,[money] float
+		,aprice bit
+		,memo nvarchar(max)
+	)
+	insert into @tmpvcca(noa,cno,acomp,serial,custno,comp,nick,zip,[address],datea,mon
+		,taxtype,[money],tax,total,memo)
+	select @invoice,@cno,c.acomp,b.serial,a.custno,b.comp,b.nick,b.zip_invo,b.addr_invo
+		,a.datea,@mon
+		,'1',@money,@tax,@total,''
+	from view_trd a
+	left join cust b on a.custno=b.noa
+	left join acomp c on @cno=c.noa
+	where a.noa=@trdno
+	
+	insert into @tmpvccas(noa,noq,productno,product,unit,price,mount,[money],aprice,memo)
+	select @invoice,'001','','運費','',@money,1,@money,0,''
+	--=====================================================================
+	--寫入 VCCA
+	--=====================================================================
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	
+	begin try
+		insert into vcca(noa,cno,acomp,serial,custno,comp,nick,zip,[address],datea,mon
+			,taxtype,[money],tax,total,memo)
+		select noa,cno,acomp,serial,custno,comp,nick,zip,[address],datea,mon
+			,taxtype,[money],tax,total,memo
+		from @tmpvcca
+		
+		insert into vccas(noa,noq,productno,product,unit,price,mount,[money],aprice,memo)
+		select noa,noq,productno,product,unit,price,mount,[money],aprice,memo
+		from @tmpvccas
+		
+		--  ISNULL([plus],0)-ISNULL([discount],0) trd.aspx才有用
+		set @cmd=
+		"update trd"+@accy+" set tax=@tax
+			,total=ISNULL([money],0)+ISNULL([money],0)+@tax+ISNULL([plusmoney],0)-ISNULL([minusmoney],0)
+			,vccano = @invoice
+		where noa=@trdno"
+		execute sp_executesql @cmd,N'@invoice nvarchar(20),@tax float,@trdno nvarchar(20)'
+			,@invoice=@invoice,@tax=@tax,@trdno=@trdno
+		declare @curtime datetime = getdate()
+		--mess
+		INSERT INTO mess (datea,qtime,[tables],data,usera,act) 
+		select replace(CONVERT(nvarchar,@curtime,120),'-','')
+			,@trdno+' '+replace(CONVERT(nvarchar,@curtime,120),':','') qtime
+			,'trd_post.post' [tables]
+			,@accy+','+@trdno+',1'
+			,'erp'
+			,7
+		--drun
+		insert into drun(datea,timea,usera,[action],noa,tablea,title,memo)
+		select dbo.AD2ChineseEraName( CONVERT(nvarchar,@curtime,111))
+			,LEFT(CONVERT(nvarchar,@curtime,108),5)
+			,'Auto'
+			,'Insert'
+			,@invoice
+			,'vcca'
+			,'trd2vcca'
+			,'trdno:'+@trdno
+		
+		IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select '0' [status],'錯誤!!!!' msg
+		END
+		ELSE BEGIN
+			Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+			select '1' [status],'發票：'+@invoice msg,@invoice invoice,@tax tax,@total total
+		END
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		--有錯誤就都不執行
+		select '0' [status],ERROR_MESSAGE() msg
+	end catch;
+
 import_es:--import_es
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)	
 	declare @t_key nvarchar(max) = [1]
 	declare @t_mon nvarchar(20) = [2]
 	declare @t_type nvarchar(20) =  [3]  --現金、回收、月結
-	-------------------------------------------------------------------------
+	declare @t_getdate nvarchar(20) = [4] --收款日,  月結客戶才有需要用
 	----------------------------------------------------------------------
 	declare @tmpa table(
 		sel int identity(1,1)
@@ -73,11 +303,11 @@ import_es:--import_es
 		left join cust c on a.custno=c.noa
 		where b.noa is null
 		and a.ship = '月結'
-		--and ( (c.paytype='月結' and ISNUMERIC(c.[getdate])=0 and LEFT(a.trandate,6)=@t_mon)
-		--	or (c.paytype='月結' and ISNUMERIC(c.[getdate])=1 and a.trandate > @bmon+RIGHT('00'+c.[getdate],2) and a.trandate<=@t_mon+RIGHT('00'+c.[getdate],2)) )
+		and (@t_getdate=isnull(c.[getdate],''))
 		and ( (ISNUMERIC(c.[getdate])=0 and LEFT(a.trandate,6)=@t_mon)
-			or (ISNUMERIC(c.[getdate])!=0 and a.trandate > @bmon+RIGHT('00'+c.[getdate],2) and a.trandate<=@t_mon+'/'+RIGHT('00'+c.[getdate],2)) )
+			or (ISNUMERIC(c.[getdate])!=0 and a.trandate > @bmon+'/'+RIGHT('00'+c.[getdate],2) and a.trandate<=@t_mon+'/'+RIGHT('00'+c.[getdate],2)) )
 	end
+
 	-----------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#trans2trd_es')is not null
 	BEGIN
@@ -319,7 +549,6 @@ import_es:--import_es
 
 	delete #trans2trd_es
 	delete #trans2trds_es;
-
 
 import:--import	
 	SET QUOTED_IDENTIFIER OFF

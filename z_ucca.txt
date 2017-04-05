@@ -41,23 +41,24 @@
 		typeb nvarchar(10),
 		custno nvarchar(50),
 		comp nvarchar(100),
-		mount float,
-		totmount float,
-		totmoney float,
-		price float,
-		total float,
+		mount decimal(15,4),
+		totmount decimal(15,4),
+		totmoney decimal(15,4),
+		price decimal(15,4),
+		total decimal(15,4),
 		--1050224 根據FE舊系統 畫面
-		aprice float, --平均單價
-		emount float, --期末數量
-		emoney float, --期末金額
-		rmount float, --進貨數量
-		rmoney float, --進貨金額
-		vmount float, --銷貨數量
-		vmoney float --銷貨金額
+		aprice decimal(15,4), --平均單價
+		emount decimal(15,4), --期末數量
+		emoney decimal(15,4), --期末金額
+		rmount decimal(15,4), --進貨數量
+		rmoney decimal(15,4), --進貨金額
+		vmount decimal(15,4), --銷貨數量
+		vmoney decimal(15,4), --銷貨金額
+		caprice nvarchar(max)
 	)
 
-	insert #result
-	select *,0,0,0,0,0,0,0 from (
+	insert into #result
+	select *,0,0,0,0,0,0,0,'' from (
 		select '0'gno,va.cno,va.datea,va.noa,vb.productno,vb.product,vb.unit,'銷貨'typea,'3' typeb,va.custno,va.comp,vb.mount,0 totmount,0 totmoney,vb.price,vb.money
 		from vcca va left join vccas vb on va.noa=vb.noa
 		where (len(@t_cno)=0 or va.cno=@t_cno) and (va.datea between @t_bdate and @t_edate ) and (vb.productno between @t_bproductno and @t_eproductno)
@@ -90,25 +91,25 @@
 	declare @productno nvarchar(50)
 	declare @t_productno nvarchar(50)='ZZZZ#ZZZZ'
 	declare @typea nvarchar(50)
-	declare @mount float
-	declare @price float
-	declare @total float
-	declare @t_mount float = 0
-	declare @totmount float= 0
-	declare @totmoney float = 0
+	declare @mount decimal(15,4)
+	declare @price decimal(15,4)
+	declare @total decimal(15,4)
+	declare @t_mount decimal(15,4) = 0
+	declare @totmount decimal(15,4)= 0
+	declare @totmoney decimal(15,4) = 0
 	
-	declare @rmount float = 0
-	declare @rmoney float = 0
-	declare @vmount float = 0
-	declare @vmoney float = 0
+	declare @rmount decimal(15,4) = 0
+	declare @rmoney decimal(15,4) = 0
+	declare @vmount decimal(15,4) = 0
+	declare @vmoney decimal(15,4) = 0
 	
 	create table #tmpa(
 		tablea nvarchar(50),
 		datea nvarchar(10),
 		pno nvarchar(50),
 		cno nvarchar(50),
-		mount DECIMAL(20,4),
-		total DECIMAL(20,4)
+		mount decimal(15,4),
+		total decimal(15,4)
 	) 
 	
 	--期初抓ucca 
@@ -206,7 +207,7 @@
 		begin
 			insert #result(gno,cno,productno,mount,totmount,totmoney,emount,emoney,aprice,rmount,rmoney,vmount,vmoney)
 			select '1',@t_xcno,@t_productno,@t_mount,@totmount,@totmoney,@totmount,@totmoney
-			,case when @totmount=0 then 0 else @totmoney/@totmount end,@rmount,@rmoney,@vmount,@vmoney
+			,case when @totmount=0 then 0 else round(@totmoney/@totmount,2) end,@rmount,@rmoney,@vmount,@vmoney
 			
 			set @t_mount=0
 			set @rmount = 0
@@ -275,8 +276,30 @@
 	begin
 		insert #result(gno,cno,productno,mount,totmount,totmoney,emount,emoney,aprice,rmount,rmoney,vmount,vmoney)
 		select '1',@t_xcno,@t_productno,@t_mount,@totmount,@totmoney,@totmount,@totmoney
-		,case when @totmount=0 then 0 else @totmoney/@totmount end,@rmount,@rmoney,@vmount,@vmoney
+		,case when @totmount=0 then 0 else round(@totmoney/@totmount,2) end,@rmount,@rmoney,@vmount,@vmoney
 	end
+
+
+	declare @rr int
+	declare @aprice float
+
+	declare cursor_table cursor for 
+	select recno,aprice from #result
+	open cursor_table 
+	fetch next from cursor_table 
+	into @rr,@aprice
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+		print @aprice
+		update #result set caprice = dbo.getComma(round(@aprice,2),2) where recno=@rr
+	
+		
+		fetch next from cursor_table 
+		into @rr,@aprice
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+
 
 	select gno,recno,cno,productno,products,custno,typeb
 	--0225 FE 不同類別 顯示不同顏色
@@ -290,7 +313,7 @@
 	,"<font color="+case when typeb in ('1','2') then 'red' else 'blue' end +">"+dbo.getComma(total,0)+"</font>" total
 	,"<font color="+case when typeb in ('1','2') then 'red' else 'blue' end +">"+dbo.getComma(totmount,2)+"</font>" totmount
 	,dbo.getComma(totmoney,0)totmoney
-	,dbo.getComma(round(aprice,2),-1)aprice
+	,caprice aprice
 	,dbo.getComma(emount,2)emount
 	,dbo.getComma(emoney,0)emoney
 	,dbo.getComma(rmount,2)rmount
@@ -300,18 +323,9 @@
 	,(select nick from acomp where noa=a.cno) acomp
 	from #result a order by cno,productno,gno,recno
 	
-	IF OBJECT_ID('tempdb..#result')is not null
-	BEGIN
-		set @cmd = 'drop table #result'
-		EXECUTE sp_executesql @cmd
-	END
-	
-	IF OBJECT_ID('tempdb..#tmpa')is not null
-	BEGIN
-		set @cmd = 'drop table #tmpa'
-		EXECUTE sp_executesql @cmd
-	END
-	;
+
+	drop table #result
+	drop table #tmpa;
 --------------------------------------------------------------------------------------------------------------------------------------------------------
 z_ucca2:--z_ucca2
 	declare @t_bdate nvarchar(10)
