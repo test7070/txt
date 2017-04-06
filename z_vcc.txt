@@ -5452,6 +5452,199 @@ z_vcc21:--z_vcc21
 	declare @t_ecustno nvarchar(20)
 	declare @t_bsalesno nvarchar(20)
 	declare @t_esalesno nvarchar(20)
+	
+	set @t_bdate = case when '#non'=[4] then '' else [4] end
+	set @t_edate = case when '#non'=[5] then char(255) else [5] end
+	set @t_bcustno = case when '#non'=[8] then '' else [8] end
+	set @t_ecustno = case when '#non'=[9] then char(255) else [9] end
+	set @t_bsalesno = case when '#non'=[10] then '' else [10] end
+	set @t_esalesno = case when '#non'=[11] then char(255) else [11] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa	nvarchar(50),
+	datea nvarchar(10),
+	custno nvarchar(100),
+	sno	nvarchar(50),
+	total float,
+	cost float,--P/O Cost
+	cfee float,--報關費
+	trans float,--內陸運費	
+	bill float,--提單費
+	ptotal float,--Profit Am't.
+	bfee float,--銀行手續費
+	cdm	float,--港工捐
+	vfee float,--簽証費
+	ecost float,-- Extra.Cost 	
+	per float,
+	chgitem nvarchar(100),
+	comp nvarchar(200)
+)
+insert @tmp(gno,noa,datea,custno,sno,total,ptotal,per)
+select '9',a.noa,d.onboarddate,a.custno,e.salesno,sum(b.amount),sum(b.benifit),round((sum(b.benifit)/sum(b.amount))*100,2)
+from invo a left join invos b on a.noa=b.noa
+left join orde e on a.ordeno=e.noa
+left join shiporders c on a.noa=c.invono
+left join shiporder d on c.noa=d.noa
+where (a.datea between @t_bdate and @t_edate)
+and(a.custno between @t_bcustno and @t_ecustno)
+and(isnull(e.salesno,'') between @t_bsalesno and @t_esalesno)
+group by a.noa,d.onboarddate,a.custno,e.salesno
+
+insert @tmp(gno,noa,datea,custno,sno,cfee,trans,bill,bfee,cdm,vfee,ecost)
+select '8',a.noa,a.datea,a.custno,a.sno,SUM(ISNULL(b.cfee,0)),SUM(ISNULL(b.trans,0)),SUM(ISNULL(b.bill,0)),SUM(ISNULL(b.bfee,0))
+,SUM(ISNULL(b.cdm,0)),SUM(ISNULL(b.vfee,0)),SUM(ISNULL(b.ecost,0))
+from @tmp a 
+outer apply (select invono
+,case when chgitem like '%報關費%' then SUM(total)end cfee
+,case when chgitem like '%運費%' then SUM(total)end trans
+,case when chgitem like '%提單費%'then SUM(total)end bill
+,case when chgitem like '%銀行手續費%' then SUM(total)end bfee
+,case when chgitem like '%港工捐%' then SUM(total)end cdm
+,case when chgitem like '%簽証費%'then SUM(total)end vfee
+,case when chgitem like '%其他費用%' then SUM(total)end ecost from paybs where a.noa=invono group by invono,chgitem)b
+group by a.noa,a.datea,a.custno,a.sno
+
+insert @tmp(gno,noa,datea,custno,sno,total,cfee,trans,bill,ptotal,bfee,cdm,vfee,ecost,per)
+select '0',noa,datea,custno,sno,SUM(ISNULL(total,0)),SUM(ISNULL(cfee,0))
+,SUM(ISNULL(trans,0)),SUM(ISNULL(bill,0)),SUM(ISNULL(ptotal,0)),SUM(ISNULL(bfee,0)),SUM(ISNULL(cdm,0))
+,SUM(ISNULL(vfee,0)),SUM(ISNULL(ecost,0)),MAX(per)
+from @tmp
+group by noa,datea,custno,sno
+
+delete @tmp where gno='9' or gno='8'
+
+update @tmp
+set cost=total-cfee-trans-bill-ptotal-bfee-cdm-vfee-ecost
+
+insert @tmp(gno,total,cost,cfee,trans,bill,ptotal,bfee,cdm,vfee,ecost,per)
+select '1',SUM(total),SUM(cost),SUM(cfee),SUM(trans),SUM(bill),SUM(ptotal),SUM(bfee)
+,SUM(cdm),SUM(vfee),SUM(ecost),round((SUM(ptotal)/SUM(total))*100,2)
+from @tmp
+
+insert @tmp(gno,chgitem,custno,comp,total)
+select '2',b.chgitem,c.tggno,c.comp,SUM(b.total)
+from @tmp a left join paybs b on a.noa=b.invono
+left join payb c on b.noa=c.noa
+where
+b.chgitem like '%報關費%' or b.chgitem like '%運費%' or b.chgitem like '%提單費%' 
+or b.chgitem like '%銀行手續費%' or b.chgitem like '%港工捐%' or b.chgitem like '%簽証費%' 
+or b.chgitem like '%其他費用%'
+group by b.chgitem,c.tggno,c.comp
+
+select
+dbo.getComma(total,0)total
+,dbo.getComma(cost,0)cost
+,dbo.getComma(cfee,0)cfee 
+,dbo.getComma(trans,0)trans 
+,dbo.getComma(bill,0)bill 
+,dbo.getComma(ptotal,0)ptotal
+,dbo.getComma(bfee,0)bfee
+,dbo.getComma(cdm,0)cdm 
+,dbo.getComma(vfee,0)vfee 
+,dbo.getComma(ecost,0)ecost
+,cast(per as nvarchar)+'%' per 
+,* from @tmp
+order by gno,noa
+;
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+z_vcc22:--z_vcc22
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	
+	set @t_bdate = case when '#non'=[4] then '' else [4] end
+	set @t_edate = case when '#non'=[5] then char(255) else [5] end
+	set @t_bcustno = case when '#non'=[8] then '' else [8] end
+	set @t_ecustno = case when '#non'=[9] then char(255) else [9] end
+	set @t_bproductno = case when '#non'=[12] then '' else [12] end
+	set @t_eproductno = case when '#non'=[13] then char(255) else [13] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	rr int,
+	datea nvarchar(10),
+	noa nvarchar(50),	
+	custno nvarchar(100),
+	nick nvarchar(100),	
+	port nvarchar(100),								
+	productno nvarchar(100),
+	product nvarchar(max),
+	mount float,
+	unit nvarchar(10),	
+	notv float,	
+	total float,
+	ordcnoa nvarchar(50),	
+	tgg	nvarchar(100),
+	cost float,
+	packwayno nvarchar(50),	
+	cuft float,	
+	weight float,	
+	ctn  float
+)
+insert @tmp
+select '0','',a.date1,a.noa,a.custno,a.nick,c.edock,b.productno,b.product,b.mount,b.unit,b.notv,b.notv*b.price
+,d.noa,d.nick,e.total,b.packwayno,f.cuft*case when isnull(f.inmount,0)*isnull(f.outmount,0)=0 then 1 else ceiling(b.mount/nullif((f.inmount*f.outmount),0)) end
+,b.mount*f.uweight
+,case when isnull(f.inmount,0)*isnull(f.outmount,0)=0 then 0 else ceiling(b.mount/nullif((f.inmount*f.outmount),0)) end
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join view_ordei c on a.noa=c.noa
+left join view_ordc d on a.ordcno=d.noa
+left join view_ordcs e on d.noa=e.noa and b.productno=e.productno and b.no2=e.no2
+left join pack2s f on f.noa=isnull(b.productno,'') and b.packwayno=f.packway and b.packway=f.pack
+where (a.date1 between @t_bdate and @t_edate)
+and (a.custno between @t_bcustno and @t_ecustno)
+and (b.productno between @t_bproductno and @t_eproductno)
+
+update a
+set rr=rx,gno=case when rx!=1 then 1 else 0 end
+from (select ROW_NUMBER()over(partition by noa order by noa)rx,rr,gno from @tmp)a
+
+--單位小計
+insert @tmp(gno,noa,mount,unit,notv)
+select '2',noa,SUM(mount),unit,SUM(notv)
+from @tmp
+group by noa,unit
+
+update a
+set rr=rx,gno=case when rx!=1 then 3 else 2 end
+from (select ROW_NUMBER()over(partition by noa order by unit)rx,rr,gno from @tmp where gno=2)a
+where gno=2
+
+--單位總計
+insert @tmp (gno,noa,mount,unit,notv)
+select '4',CHAR(255),SUM(mount),isnull(unit,''),SUM(notv)
+from @tmp
+group by isnull(unit,'')
+
+update a
+set rr=rx,gno=case when rx!=1 then 5 else 4 end
+from (select ROW_NUMBER()over(partition by gno order by unit)rx,rr,gno from @tmp where gno=4)a
+where gno=4
+
+select 
+@t_bdate bdate,@t_edate edate
+,dbo.getComma(mount,0)mount 
+,dbo.getComma(notv,0)notv 
+,dbo.getComma(total,0)total 
+,dbo.getComma(cuft,3)cuft 
+,dbo.getComma(weight,2)weight 
+,dbo.getComma(ctn,0)ctn
+,dbo.getComma(cost,0)cost
+,* from @tmp
+order by noa,gno
+;
+------------------------------------------------------------------------------------------------------------------------------------------------------------
+z_vcc23:--z_vcc23
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bsalesno nvarchar(20)
+	declare @t_esalesno nvarchar(20)
 	declare @t_bproductno nvarchar(30)
 	declare @t_eproductno nvarchar(30)
 	declare @t_typea nvarchar(30)
@@ -5534,7 +5727,7 @@ insert @tmp(gno,custno)
  ;
  
 ----------------------------------------------------------------------------------------------------------
-z_vcc22:--z_vcc22
+z_vcc24:--z_vcc24
 declare @t_bdate nvarchar(20) = case when '#non'=[4] then '' else [4] end
 declare @t_edate nvarchar(20) = case when '#non'=[5] then char(255) else [5] end
 declare @t_bcustno nvarchar(50) = case when '#non'=[8] then '' else [8] end
