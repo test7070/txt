@@ -1956,6 +1956,12 @@ SET QUOTED_IDENTIFIER OFF
 		EXECUTE sp_executesql @cmd
 	END
 	
+	IF OBJECT_ID('tempdb..#tmppacc')is not null
+	BEGIN
+		set @cmd = 'drop table #tmppacc'
+		EXECUTE sp_executesql @cmd
+	END
+	
 	if(RIGHT(@t_xcarnos,1)='.')
 	set @t_xcarnos=left(@t_xcarnos,len(@t_xcarnos)-1)
 		
@@ -2042,6 +2048,13 @@ SET QUOTED_IDENTIFIER OFF
 		[inmoney] int, 
 		[total] int
 	) 
+	
+	create table #tmppacc(
+		noa nvarchar(30), 
+		carno nvarchar(20), 
+		carownerno nvarchar(20), 
+		unpay float, 
+	)
 
 	declare @gno nvarchar(1) 
 	declare @noa nvarchar(20) 
@@ -2200,8 +2213,30 @@ SET QUOTED_IDENTIFIER OFF
 		into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
 		end 
 		close cursor_table 
-		deallocate cursor_table 
+		deallocate cursor_table
 		
+		--106/04/18 增加查詢速度
+		insert #tmppacc(noa,carno,carownerno,unpay)
+		select a.noa,(case when isnull(aa.carno,'')!='' 
+		and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
+		then aa.carno 
+		when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+		when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+		else isnull(af.carno,'') end)
+		,a.custno,a.total-a.payed unpay 
+		from view_vcc a 
+		outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
+		left join car2 b on 
+		Replace((case when isnull(aa.carno,'')!='' then aa.carno
+		when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+		when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+		else af.carno end),' ','') =b.noa 
+		where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 		
 	end
 
 	--月小計
@@ -2330,27 +2365,27 @@ SET QUOTED_IDENTIFIER OFF
 				if(left(@t_bmon,3)>='101' and @iacc='顯示')
 				begin
 					--求得開始月份之前的未付金額
-					set @unpay =isnull((select sum(a.total-a.payed) unpay from view_vcc a 
-					outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
-					left join car2 b on 
-					Replace((case when isnull(aa.carno,'')!='' then aa.carno
-					when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
-					when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
-					else af.carno end),' ','') =b.noa 
-					--left join carbrand d on b.carbrandno=d.noa 
-					--left join carOwner e on a.custno=e.noa 
-					where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
-					and (case when isnull(aa.carno,'')!='' 
-					and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
-					then aa.carno 
-					when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
-					when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
-					else af.carno end)= @carno),0)
+					set @unpay =isnull((select sum(unpay) from #tmppacc where carno= @carno),0)
+					
+					--set @unpay =isnull((select sum(a.total-a.payed) unpay from view_vcc a 
+					--outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
+					--left join car2 b on 
+					--Replace((case when isnull(aa.carno,'')!='' then aa.carno
+					--when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+					--when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+					--else af.carno end),' ','') =b.noa 
+					--where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
+					--and (case when isnull(aa.carno,'')!='' 
+					--and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
+					--then aa.carno 
+					--when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+					--when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+					--else af.carno end)= @carno),0)
 					
 					--set @unpay =isnull((select 
 					--	sum(a.total-a.payed) unpay 
@@ -2557,6 +2592,12 @@ SET QUOTED_IDENTIFIER OFF
 		set @cmd = 'drop table #tmpb'
 		EXECUTE sp_executesql @cmd
 	END
+	
+	IF OBJECT_ID('tempdb..#tmppacc')is not null
+	BEGIN
+		set @cmd = 'drop table #tmppacc'
+		EXECUTE sp_executesql @cmd
+	END
 ;
 
 --------------------------------------------------------------------------------------------------
@@ -2681,6 +2722,12 @@ SET QUOTED_IDENTIFIER OFF
 		EXECUTE sp_executesql @cmd
 	END
 	
+	IF OBJECT_ID('tempdb..#tmppacc')is not null
+	BEGIN
+		set @cmd = 'drop table #tmppacc'
+		EXECUTE sp_executesql @cmd
+	END
+	
 	if(RIGHT(@t_xcarnos,1)='.')
 	set @t_xcarnos=left(@t_xcarnos,len(@t_xcarnos)-1)
 		
@@ -2768,6 +2815,13 @@ SET QUOTED_IDENTIFIER OFF
 		[inmoney] int, 
 		[total] int
 	) 
+	
+	create table #tmppacc(
+		noa nvarchar(30), 
+		carno nvarchar(20), 
+		carownerno nvarchar(20), 
+		unpay float, 
+	)
 
 	declare @gno nvarchar(2) 
 	declare @noa nvarchar(20) 
@@ -2891,7 +2945,6 @@ SET QUOTED_IDENTIFIER OFF
 		and ("+@sql_carnos+" 1=1) 
 		order by noa") 
 
-		
 		--插入tmpc(vcctran)
 		declare cursor_table cursor for 
 		select * from #tmpc 
@@ -2905,12 +2958,35 @@ SET QUOTED_IDENTIFIER OFF
 			insert into #tmp 
 			select @gno,@noa,(select right('00'+cast((cast(isnull(MAX(noq),0) as int)+1)as nvarchar(3)),3) from #tmp where noa=@noa),@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
 		
-		fetch next from cursor_table 
-		into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
+			fetch next from cursor_table 
+			into @gno,@noa,@noq,@carno,@carownerno,@carowner,@indate,@carbrandno,@carbrand,@caryear,@mobile,@caritemno,@caritem,@mon,@datea,@memo,@outmoney,@inmoney,@total 
 		end 
 		close cursor_table 
 		deallocate cursor_table 
-		end
+		
+		--106/04/18 增加查詢速度
+		insert #tmppacc(noa,carno,carownerno,unpay)
+		select a.noa,(case when isnull(aa.carno,'')!='' 
+		and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
+		then aa.carno 
+		when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+		when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+		else isnull(af.carno,'') end)
+		,a.custno,a.total-a.payed unpay 
+		from view_vcc a 
+		outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
+		left join car2 b on 
+		Replace((case when isnull(aa.carno,'')!='' then aa.carno
+		when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+		when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+		else af.carno end),' ','') =b.noa 
+		where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
+	end
 
 	--月小計
 	insert into #tmp 
@@ -3053,27 +3129,27 @@ SET QUOTED_IDENTIFIER OFF
 				if(left(@t_bmon,3)>='101' and @iacc='顯示')
 				begin
 					--求得開始月份之前的未付金額
-					set @unpay =isnull((select sum(a.total-a.payed) unpay from view_vcc a 
-					outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
-					left join car2 b on 
-					Replace((case when isnull(aa.carno,'')!='' then aa.carno
-					when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
-					when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
-					else af.carno end),' ','') =b.noa 
-					--left join carbrand d on b.carbrandno=d.noa 
-					--left join carOwner e on a.custno=e.noa 
-					where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
-					and (case when isnull(aa.carno,'')!='' 
-					and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
-					then aa.carno 
-					when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
-					when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
-					else af.carno end)= @carno),0)
+					set @unpay =isnull((select sum(unpay) from #tmppacc where carno= @carno),0)
+					
+					--set @unpay =isnull((select sum(a.total-a.payed) unpay from view_vcc a 
+					--outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
+					--left join car2 b on 
+					--Replace((case when isnull(aa.carno,'')!='' then aa.carno
+					--when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+					--when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+					--else af.carno end),' ','') =b.noa 
+					--where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
+					--and (case when isnull(aa.carno,'')!='' 
+					--and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
+					--then aa.carno 
+					--when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+					--when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+					--else af.carno end)= @carno),0)
 					
 					--set @unpay =isnull((select 
 					--	sum(a.total-a.payed) unpay 
@@ -3368,6 +3444,12 @@ SET QUOTED_IDENTIFIER OFF
 		set @cmd = 'drop table #tmpc'
 		EXECUTE sp_executesql @cmd
 	END
+	
+	IF OBJECT_ID('tempdb..#tmppacc')is not null
+	BEGIN
+		set @cmd = 'drop table #tmppacc'
+		EXECUTE sp_executesql @cmd
+	END
 ;
 --------------------------------------------------------------------------------------------------
 z_carpack:--z_carpack
@@ -3632,6 +3714,12 @@ SET QUOTED_IDENTIFIER OFF
 		EXECUTE sp_executesql @cmd
 	END
 	
+	IF OBJECT_ID('tempdb..#tmppacc')is not null
+	BEGIN
+		set @cmd = 'drop table #tmppacc'
+		EXECUTE sp_executesql @cmd
+	END
+	
 	if(RIGHT(@t_xcarnos,1)='.')
 	set @t_xcarnos=left(@t_xcarnos,len(@t_xcarnos)-1)
 		
@@ -3718,6 +3806,13 @@ SET QUOTED_IDENTIFIER OFF
 		[inmoney] int, 
 		[total] int
 	) 
+	
+	create table #tmppacc(
+		noa nvarchar(30), 
+		carno nvarchar(20), 
+		carownerno nvarchar(20), 
+		unpay float, 
+	)
 
 	declare @gno nvarchar(1) 
 	declare @noa nvarchar(20) 
@@ -3858,6 +3953,29 @@ SET QUOTED_IDENTIFIER OFF
 		end 
 		close cursor_table 
 		deallocate cursor_table 
+		
+		--106/04/18 增加查詢速度
+		insert #tmppacc(noa,carno,carownerno,unpay)
+		select a.noa,(case when isnull(aa.carno,'')!='' 
+		and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
+		then aa.carno 
+		when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+		when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+		else isnull(af.carno,'') end)
+		,a.custno,a.total-a.payed unpay 
+		from view_vcc a 
+		outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
+		outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
+		left join car2 b on 
+		Replace((case when isnull(aa.carno,'')!='' then aa.carno
+		when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+		when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+		else af.carno end),' ','') =b.noa 
+		where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
 	end
 
 	--月小計
@@ -3987,27 +4105,27 @@ SET QUOTED_IDENTIFIER OFF
 				if(left(@t_bmon,3)>='101' and @iacc='顯示')
 				begin
 					--求得開始月份之前的未付金額
-					set @unpay =isnull((select sum(a.total-a.payed) unpay from view_vcc a 
-					outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
-					outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
-					left join car2 b on 
-					Replace((case when isnull(aa.carno,'')!='' then aa.carno
-					when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
-					when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
-					else af.carno end),' ','') =b.noa 
-					--left join carbrand d on b.carbrandno=d.noa 
-					--left join carOwner e on a.custno=e.noa 
-					where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
-					and (case when isnull(aa.carno,'')!='' 
-					and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
-					then aa.carno 
-					when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
-					when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
-					else af.carno end)= @carno),0)
+					set @unpay =isnull((select sum(unpay) from #tmppacc where carno= @carno),0)
+					
+					--set @unpay =isnull((select sum(a.total-a.payed) unpay from view_vcc a 
+					--outer apply (select carno from car2 where noa=substring(substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)),0,case when CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo)))>0 then CHARINDEX(' ',substring(a.memo,CHARINDEX(' ',a.memo)+1,len(a.memo))) else len(a.memo) end)) aa
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ab
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='A' or left(d.carspecno,1)='C')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ac
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (isnull(d.outdate,'')='' and isnull(d.enddate,'')='' and isnull(d.wastedate,'')='' and isnull(d.suspdate,'')='') and (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ad
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where (left(d.carspecno,1)='B')  and c.mon=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) ae
+					--outer apply (select top 1 c.carno from cara c left join car2 d on c.carno=d.noa where c.mon<=left(a.carno,6) and a.custno=c.carownerno order by c.mon desc,c.carno) af
+					--left join car2 b on 
+					--Replace((case when isnull(aa.carno,'')!='' then aa.carno
+					--when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+					--when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+					--else af.carno end),' ','') =b.noa 
+					--where left(a.custno,1)='H' and a.total-a.payed!=0 and (left(a.carno,6) < @t_bmon) 
+					--and (case when isnull(aa.carno,'')!='' 
+					--and exists (select c.carno from cara c left join car2 d on c.carno=d.noa where c.carno=aa.carno and ((d.outdate='' or d.outdate is null) and (d.enddate='' or d.enddate is null) and (d.wastedate='' or d.wastedate is null) and (d.suspdate='' or d.suspdate is null)) and c.mon=left(a.carno,6) and a.custno=c.carownerno) 
+					--then aa.carno 
+					--when isnull(ab.carno,'')!='' then ab.carno when isnull(ac.carno,'')!='' then ac.carno
+					--when isnull(ad.carno,'')!='' then ad.carno when isnull(ae.carno,'')!='' then ae.carno 
+					--else af.carno end)= @carno),0)
 					
 					--set @unpay =isnull((select 
 					--	sum(a.total-a.payed) unpay 
@@ -4207,6 +4325,12 @@ SET QUOTED_IDENTIFIER OFF
 	IF OBJECT_ID('tempdb..#tmpb')is not null
 	BEGIN
 		set @cmd = 'drop table #tmpb'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#tmppacc')is not null
+	BEGIN
+		set @cmd = 'drop table #tmppacc'
 		EXECUTE sp_executesql @cmd
 	END
 ;
