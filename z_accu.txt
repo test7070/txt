@@ -1,3 +1,224 @@
+z_accu02:--z_accu02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)		
+	declare @t_bmon nvarchar(10) = case when '#non' = [1] then ' ' else [1] end
+	declare @t_emon nvarchar(10) = case when '#non' = [2] then CHAR(255) else [2] end
+	declare @t_projno nvarchar(max) = case when '#non' = [3] then ' ' else [3] end
+	declare @t_partno nvarchar(max) = case when '#non' = [4] then ' ' else [4] end
+	declare @t_acc1 nvarchar(max) = ''
+	------------------------------------------------------------------------------
+	declare @t_byear nvarchar(20) = case when len(@t_bmon)=7 then right('000'+cast(cast(left(@t_bmon,4) as int)-1911 as nvarchar),3) else left(@t_bmon,3) end
+	declare @t_eyear nvarchar(20) = case when len(@t_emon)=7 then right('000'+cast(cast(left(@t_emon,4) as int)-1911 as nvarchar),3) else left(@t_emon,3) end
+	------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_accu02')is not null
+	BEGIN
+		drop table #z_accu02
+	END
+	create table #z_accu02 (
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,mon nvarchar(20)
+		,acc1 nvarchar(20)
+		,acc2 nvarchar(20)
+		,partno nvarchar(20)
+		,part nvarchar(50)
+		,projno nvarchar(20)
+		,proj nvarchar(50)
+		,[money] float
+		,memo nvarchar(max)
+	)
+	
+	declare @tmpb table(
+		sel int identity(1,1)
+		,accy nvarchar(20)
+		,part nvarchar(20)
+		,proj nvarchar(20)
+		,accc2 nvarchar(20)
+		,accc3 nvarchar(20)
+		,accc5 nvarchar(20)
+		,accc6 nvarchar(50)
+		,accc7 nvarchar(50)
+		,dmoney float 
+		,cmoney float 	
+	)
+	------------------------------------------------------------------------------------------------
+	insert into #z_accu02(noa,noq,mon,acc1,acc2,partno,part,projno,proj,[money],memo)
+	select a.noa,a.noq,b.mon,a.acc1,a.acc2,isnull(a.partno,''),a.part,isnull(a.projno,''),a.proj,a.[money],a.memo
+	from accus a
+	left join accu b on a.noa=b.noa
+	where ISNULL(b.mon,'') between @t_bmon and @t_emon
+	and len(ISNULL(a.acc1,''))>0
+	and (len(@t_acc1)=0 or CHARINDEX(','+a.acc1+',',','+@t_acc1+',')>0)
+	and (len(@t_partno)=0 or CHARINDEX(','+a.partno+',',','+@t_partno+',')>0)
+	and (len(@t_projno)=0 or CHARINDEX(','+a.projno+',',','+@t_projno+',')>0)
+	order by a.noa,a.noq
+	------------------------------------------------------------------------------------------------
+	declare @year nvarchar(20)
+	
+	declare cursor_table cursor for
+	select SUBSTRING(name,6,3)
+	from sys.tables
+	where name like 'acccs[0-9][0-9][0-9]_[0-9]'
+	and SUBSTRING(name,6,3) between @t_byear and @t_eyear
+	open cursor_table
+	fetch next from cursor_table
+	into @year
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd=
+		"select isnull(a.part,''),isnull(a.proj,''),@year,a.accc2,a.accc3,a.accc5,a.accc6,a.accc7
+			,ISNULL(a.dmoney,0)
+			,ISNULL(a.cmoney,0)
+		from acccs"+@year+"_1 a
+		left join accc"+@year+"_1 b on a.accc3=b.accc3
+		left join (select acc1 from #z_accu02 group by acc1) c on a.accc5=c.acc1
+		where a.accc5=c.acc1 
+		and @year+'/'+left(b.accc2,2) between @t_byear+right(@t_bmon,3) and @t_eyear+right(@t_emon,3)  
+		and (len(@t_acc1)=0 or CHARINDEX(','+a.accc5+',',','+@t_acc1+',')>0)
+		and (len(@t_partno)=0 or CHARINDEX(','+a.part+',',','+@t_partno+',')>0)
+		and (len(@t_projno)=0 or CHARINDEX(','+a.proj+',',','+@t_projno+',')>0)
+		order by a.accc3,a.noq"
+		
+		insert into @tmpb(part,proj,accy,accc2,accc3,accc5,accc6,accc7,dmoney,cmoney)
+		execute sp_executesql @cmd,N'@year nvarchar(20),@t_byear nvarchar(20),@t_eyear nvarchar(20),@t_bmon nvarchar(20),@t_emon nvarchar(20),@t_acc1 nvarchar(max),@t_partno nvarchar(max),@t_projno nvarchar(max)'
+		,@year=@year,@t_byear=@t_byear,@t_eyear=@t_eyear,@t_bmon=@t_bmon,@t_emon=@t_emon,@t_acc1=@t_acc1,@t_partno=@t_partno,@t_projno=@t_projno
+		
+		fetch next from cursor_table
+		into @year
+	end
+	close cursor_table
+	deallocate cursor_table	
+	-------------------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		sel int identity(1,1)
+		,gno nvarchar(20)
+		,pno int
+		,acc1 nvarchar(20)
+		,acc2 nvarchar(50)
+		,partno nvarchar(20)
+		,part nvarchar(50)
+		,projno nvarchar(20)
+		,proj nvarchar(50)
+		
+		,[noa] nvarchar(20)
+		,[mon] nvarchar(20)
+		,[money] float	
+		,[memo] nvarchar(max)
+		
+		,accy nvarchar(10)
+		,accc2 nvarchar(20)
+		,accc3 nvarchar(20)
+		,accc7 nvarchar(50)
+		,dmoney float
+		,cmoney float
+		
+	)
+	declare @acc1 nvarchar(20)
+	declare @partno nvarchar(20)
+	declare @projno nvarchar(20)
+	
+	declare @accy nvarchar(20)
+	declare @accc2 nvarchar(20)
+	declare @accc3 nvarchar(20)
+	declare @accc7 nvarchar(50)
+	declare @dmoney float
+	declare @cmoney float
+	
+	declare @sel int
+	
+	declare cursor_table cursor for
+	select acc1,partno,projno from #z_accu02 group by acc1,partno,projno
+	open cursor_table
+	fetch next from cursor_table
+	into @acc1,@partno,@projno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into @tmp(gno,pno,acc1,partno,projno,noa,mon,[money],memo)
+		select '1',1,acc1,partno,projno,noa,mon,[money],memo
+		from #z_accu02 
+		where acc1=@acc1 and partno=@partno and projno=@projno
+		
+		declare cursor_table2 cursor for
+		select accy,accc2,accc3,accc7,dmoney,cmoney 
+		from @tmpb
+		where accc5=@acc1 and part=@partno and proj=@projno
+		order by accy,accc3,sel
+		open cursor_table2
+		fetch next from cursor_table2
+		into @accy,@accc2,@accc3,@accc7,@dmoney,@cmoney
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @sel = 0
+			select top 1 @sel=sel 
+			from @tmp 
+			where acc1=@acc1 and partno=@partno and projno=@projno and len(isnull(accy,''))=0 
+			order by sel 
+
+			if isnull(@sel,0)=0
+			begin
+				insert into @tmp(gno,pno,acc1,partno,projno,accy,accc2,accc3,accc7,dmoney,cmoney)
+				select '1',1,@acc1,@partno,@projno,@accy,@accc2,@accc3,@accc7,@dmoney,@cmoney
+			end
+			else
+			begin
+				update @tmp set accy=@accy,accc2=@accc2,accc3=@accc3,accc7=@accc7,dmoney=@dmoney,cmoney=@cmoney where sel=@sel
+			end
+			
+			fetch next from cursor_table2
+			into @accy,@accc2,@accc3,@accc7,@dmoney,@cmoney
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		
+		fetch next from cursor_table
+		into @acc1,@partno,@projno
+	end
+	close cursor_table
+	deallocate cursor_table
+	-----------------------------------------------------------------------------
+	-- SUM
+	insert into @tmp(gno,pno,acc1,partno,projno,[money],dmoney,cmoney)
+	select '2',2,acc1,partno,projno,sum(isnull([money],0)),sum(isnull([dmoney],0)),sum(isnull([cmoney],0))
+	from @tmp
+	group by acc1,partno,projno
+	
+	update @tmp set acc2=b.accc6
+	from @tmp a
+	outer apply(select top 1 accc6 from @tmpb where accc5=a.acc1 and len(ISNULL(accc6,''))>0) b
+	where b.accc6 is not null
+	and len(ISNULL(a.acc2,''))=0
+	
+	update @tmp set part=b.part
+	from @tmp a
+	outer apply(select top 1 part from @tmpb where partno=a.partno and len(ISNULL(part,''))>0) b
+	where b.part is not null
+	and len(ISNULL(a.part,''))=0
+	
+	update @tmp set proj=b.proj
+	from @tmp a
+	outer apply(select top 1 proj from @tmpb where projno=a.projno and len(ISNULL(proj,''))>0) b
+	where b.proj is not null
+	and len(ISNULL(a.proj,''))=0
+
+	select gno
+		,acc1 a01
+		,acc2 a02
+		,partno a03
+		,part a04
+		,projno a05
+		,proj a06
+		,dbo.getComma([money],-1) a07
+		,memo a08
+		,accc2 a09
+		,dbo.getComma([dmoney],-1) a10
+		,dbo.getComma([cmoney],-1) a11
+		,accc7 a12
+	from @tmp order by acc1,partno,projno,pno,sel
+	
+	drop table #z_accu02;
+
 z_accu01:--z_accu01
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
