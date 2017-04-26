@@ -529,6 +529,7 @@ import_es:--import_es
 		where b.noa is null
 		and a.ship = '現金' 
 		and LEFT(a.datea,6)=@t_mon
+		order by a.datea,a.custno,a.accy,a.noa,a.noq
 	end
 	if @t_type='回收'
 	begin
@@ -571,6 +572,7 @@ import_es:--import_es
 		,nick nvarchar(20)
 		,mount float
 		,[money] float
+		,ship nvarchar(max)
 		,memo nvarchar(max)
 		,custchgno nvarchar(max)
 		,plusmoney float
@@ -598,6 +600,7 @@ import_es:--import_es
 		,custdiscount float
 		,straddr nvarchar(max)
 		,tax float
+		,memo nvarchar(max)
 	)
 	declare @sel int
 	declare @mon nvarchar(20)
@@ -609,35 +612,66 @@ import_es:--import_es
 	declare @memo nvarchar(max)
 	declare @tax float
 	
+	declare @n int
 	--現金
+	----  一張出車單對應一張立帳單
 	declare cursor_table cursor for
-	select a.datea,a.custno,SUM(ISNULL(mount,0)),SUM(ISNULL(total,0)),SUM(ISNULL(tax,0))
-	from @tmpa a
-	group by a.datea,a.custno
+	select sel from @tmpa order by sel
 	open cursor_table
 	fetch next from cursor_table
-	into @datea,@custno,@mount,@total,@tax
+	into @sel
 	while(@@FETCH_STATUS <> -1)
 	begin
-
-		insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,memo)
-		select @datea,@custno,@mount,@total,0 plusmoney,0 minusmoney,@tax,'現金'
-		set @sel = @@IDENTITY
-		
-		insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr,tax)
-		select @sel
-			,right('000'+cast(ROW_NUMBER()over(order by a.accy,a.noa,a.noq) as nvarchar),3)
-			,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr,a.tax
+		insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,ship,memo)
+		select a.datea,a.custno,a.mount,a.total,0,0,a.tax,'現金',b.memo
 		from @tmpa a
 		left join view_trans b on a.accy=b.accy and a.noa=b.noa and a.noq=b.noq
-		where a.datea=@datea 
-		and a.custno=@custno
+		where a.sel=@sel
+		
+		set @n = @@IDENTITY
+		
+		insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr,tax,memo)
+		select @n
+			,right('000'+cast(ROW_NUMBER()over(order by a.accy,a.noa,a.noq) as nvarchar),3)
+			,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr,a.tax,b.memo
+		from @tmpa a
+		left join view_trans b on a.accy=b.accy and a.noa=b.noa and a.noq=b.noq
+		where a.sel=@sel
 		
 		fetch next from cursor_table
-		into @datea,@custno,@mount,@total,@tax
+		into @sel
 	end
 	close cursor_table
 	deallocate cursor_table
+	
+	--declare cursor_table cursor for
+	--select a.datea,a.custno,SUM(ISNULL(mount,0)),SUM(ISNULL(total,0)),SUM(ISNULL(tax,0))
+	--from @tmpa a
+	--group by a.datea,a.custno
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @datea,@custno,@mount,@total,@tax
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+
+	--	insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,memo)
+	--	select @datea,@custno,@mount,@total,0 plusmoney,0 minusmoney,@tax,'現金'
+	--	set @sel = @@IDENTITY
+		
+	--	insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr,tax)
+	--	select @sel
+	--		,right('000'+cast(ROW_NUMBER()over(order by a.accy,a.noa,a.noq) as nvarchar),3)
+	--		,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr,a.tax
+	--	from @tmpa a
+	--	left join view_trans b on a.accy=b.accy and a.noa=b.noa and a.noq=b.noq
+	--	where a.datea=@datea 
+	--	and a.custno=@custno
+		
+	--	fetch next from cursor_table
+	--	into @datea,@custno,@mount,@total,@tax
+	--end
+	--close cursor_table
+	--deallocate cursor_table
 	--回收
 	declare cursor_table cursor for
 	select a.datea,a.custno,SUM(ISNULL(mount,0)),SUM(ISNULL(total,0)),SUM(ISNULL(tax,0))
@@ -648,14 +682,14 @@ import_es:--import_es
 	into @datea,@custno,@mount,@total,@tax
 	while(@@FETCH_STATUS <> -1)
 	begin
-		insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,memo)
-		select @datea,@custno,@mount,@total,0 plusmoney,0 minusmoney,@tax,'回收'
+		insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,ship,memo)
+		select @datea,@custno,@mount,@total,0 plusmoney,0 minusmoney,@tax,'回收',''
 		set @sel = @@IDENTITY
 		
-		insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr)
+		insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr,memo)
 		select @sel
 			,right('000'+cast(ROW_NUMBER()over(order by a.accy,a.noa,a.noq) as nvarchar),3)
-			,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr
+			,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr,b.memo
 		from @tmpb a
 		left join view_trans b on a.accy=b.accy and a.noa=b.noa and a.noq=b.noq
 		where a.datea=@datea 
@@ -690,14 +724,14 @@ import_es:--import_es
 			set @datea = @t_mon+'/'+@payday
 		end
 
-		insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,memo)
-		select @datea,@custno,@mount,@total,0 plusmoney,0 minusmoney,@tax,@memo
+		insert into #trans2trd_es(datea,custno,mount,[money],plusmoney,minusmoney,tax,ship,memo)
+		select @datea,@custno,@mount,@total,0 plusmoney,0 minusmoney,@tax,@memo,''
 		set @sel = @@IDENTITY
 		
-		insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr)
+		insert into #trans2trds_es(sel,noq,tranaccy,tranno,trannoq,trandate,carno,driverno,mount,total,price,custdiscount,straddr,memo)
 		select @sel
 			,right('000'+cast(ROW_NUMBER()over(order by a.accy,a.noa,a.noq) as nvarchar),3)
-			,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr
+			,a.accy,a.noa,a.noq,b.trandate,b.carno,b.driverno,b.mount,b.total,b.price,b.custdiscount,b.aaddr,b.memo
 		from @tmpc a
 		left join view_trans b on a.accy=b.accy and a.noa=b.noa and a.noq=b.noq
 		where a.payday=@payday
@@ -715,7 +749,6 @@ import_es:--import_es
 	declare @maxno nvarchar(20)
 	declare @maxno1 nvarchar(20)
 	declare @maxno2 nvarchar(20)
-	declare @n int
 
 	declare cursor_table cursor for
 	select sel,datea from #trans2trd_es order by datea,sel
@@ -762,17 +795,17 @@ import_es:--import_es
 	
 	begin try
 	
-		set @cmd = N'insert into trd'+@t_accy+'(noa,datea,mon,custno,comp,nick,ship
+		set @cmd = N'insert into trd'+@t_accy+'(noa,datea,mon,custno,comp,nick,ship,memo
 			,[money],[tax],[total],[payed],[unpay]
 			,custchgno,plusmoney,minusmoney,mount,qtime)
-			select noa,datea,@t_mon,custno,cust,nick,memo
+			select noa,datea,@t_mon,custno,cust,nick,ship,memo
 				,[money],[tax],[total],0 [payed],[total] [unpay]
 				,"" custchgno,plusmoney,minusmoney,mount,CONVERT(nvarchar,@curtime,120)
 			from #trans2trd_es '
 		execute sp_executesql @cmd,N'@t_mon nvarchar(10),@curtime datetime',@t_mon=@t_mon,@curtime=@curtime
 		
-		set @cmd =N'insert into trds'+@t_accy+'(noa,noq,tranaccy,tranno,trannoq,trandate,carno,mount,price,total,tranmoney,custdiscount,straddr)
-		select noa,noq,tranaccy,tranno,trannoq,trandate,carno,mount,price,total,total,custdiscount,straddr
+		set @cmd =N'insert into trds'+@t_accy+'(noa,noq,tranaccy,tranno,trannoq,trandate,carno,mount,price,total,tranmoney,custdiscount,straddr,memo)
+		select noa,noq,tranaccy,tranno,trannoq,trandate,carno,mount,price,total,total,custdiscount,straddr,memo
 		from #trans2trds_es'
 		execute sp_executesql @cmd
 		--產生傳票
@@ -798,7 +831,7 @@ import_es:--import_es
 
 	delete #trans2trd_es
 	delete #trans2trds_es;
-
+	
 import:--import	
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)	
