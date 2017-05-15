@@ -462,21 +462,13 @@ z_ummtran5:--#z_ummtran5
 z_ummtran2:--z_ummtran2
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
-	declare @t_accy nvarchar(10)
-	declare @t_bmon nvarchar(10)
-	declare @t_emon nvarchar(10)
-	declare @t_bummmon nvarchar(10)
-	declare @t_eummmon nvarchar(10)
-	declare @t_bcustno nvarchar(20)
-	declare @t_ecustno nvarchar(20)
-
-	set @t_accy = [1]
-	set @t_bmon = case when '#non'=[2] then '' else [2] end
-	set @t_emon = case when '#non'=[3] then CHAR(255) else [3] end
-	set @t_bummmon = case when '#non'=[4] then '' else [4] end
-	set @t_eummmon = case when '#non'=[5] then CHAR(255) else [5] end
-	set @t_bcustno = case when '#non'=[6] then '' else [6] end
-	set @t_ecustno = case when '#non'=[7] then CHAR(255) else [7] end
+	declare @t_accy nvarchar(10) = [1]
+	declare @t_bmon nvarchar(10) = case when '#non'=[2] then '' else [2] end
+	declare @t_emon nvarchar(10) = case when '#non'=[3] then CHAR(255) else [3] end
+	declare @t_bummmon nvarchar(10) = case when '#non'=[4] then '' else [4] end
+	declare @t_eummmon nvarchar(10) = case when '#non'=[5] then CHAR(255) else [5] end
+	declare @t_bcustno nvarchar(20) = case when '#non'=[6] then '' else [6] end
+	declare @t_ecustno nvarchar(20) = case when '#non'=[7] then CHAR(255) else [7] end
 	-------------------------------------------------------------------------------------------
 	declare @custno nvarchar(20)
 	declare @mon nvarchar(10)
@@ -512,25 +504,29 @@ z_ummtran2:--z_ummtran2
 		plusmoney  float,
 		minusmoney  float,
 		total float,
+		payed float,
 		unpay float
 	)
 
-	set @cmd=
-	" select '0',a.custno,a.mon,a.noa,0,0"+
-	" ,ISNULL(a.[money],0)"+
-	" ,ISNULL(a.tax,0)"+
-	" ,ISNULL(a.discount,0)"+
-	" ,ISNULL(a.plus,0)"+
-	" ,ISNULL(a.plusmoney,0)"+
-	" ,ISNULL(a.minusmoney,0)"+
-	" ,ISNULL(a.total,0)"+
-	" ,ISNULL(a.unpay,0)"+
-	" from view_trd"+@t_accy+" a"+
-	" where (a.custno between @t_bcustno and @t_ecustno)"+
-	" and (a.mon between @t_bummmon and @t_eummmon)"
-	insert  into  #z_ummtran2
-	execute sp_executesql  @cmd,N'@t_bummmon nvarchar(10),@t_eummmon nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20)'
-	,@t_bummmon=@t_bummmon,@t_eummmon=@t_eummmon,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno
+	insert  into  #z_ummtran2(gno,custno,mon,noa,curmoney,befmoney,[money]
+		,tax,discount,plus,plusmoney,minusmoney,total)
+	select '0',a.custno,a.mon,a.noa,0,0
+	,ISNULL(a.[money],0)
+	,ISNULL(a.tax,0)
+	,ISNULL(a.discount,0)
+	,ISNULL(a.plus,0)
+	,ISNULL(a.plusmoney,0)
+	,ISNULL(a.minusmoney,0)
+	,ISNULL(a.total,0)
+	from view_trd a
+	where (a.custno between @t_bcustno and @t_ecustno)
+	and (a.mon between @t_bummmon and @t_eummmon)
+	
+	update #z_ummtran2 set payed = ISNULL(b.pay,0) 
+	from #z_ummtran2 a
+	outer apply(select SUM(ISNULL(paysale,0)) pay from umms where vccno=a.noa) b
+	
+	update #z_ummtran2 set unpay = ISNULL(total,0)-ISNULL(payed,0)
 	
 	declare @tmp table(
 		custno nvarchar(20),
@@ -539,19 +535,16 @@ z_ummtran2:--z_ummtran2
 		curmoney float,
 		befmoney float
 	)
-	set @cmd=
-	" select a.custno,c.mon,b.noa"+
-	" ,SUM(case when left(a.trandate,6)=c.mon then ISNULL(a.total,0)  else 0  end) 當月帳款"+
-	" ,SUM(case when left(a.trandate,6)!=c.mon then ISNULL(a.total,0)  else 0  end) 上月帳款"+
-	" from view_trans"+@t_accy+" a"+
-	" left join view_trds"+@t_accy+" b on a.noa=b.tranno"+
-	" left join view_trd"+@t_accy+" c on b.noa=c.noa"+
-	" where (a.custno between @t_bcustno and @t_ecustno)"+ 
-	" and (c.mon between @t_bummmon and @t_eummmon)"+
-	" group  by  a.custno,c.mon,b.noa"
 	insert into @tmp
-	execute sp_executesql  @cmd,N'@t_bummmon nvarchar(10),@t_eummmon nvarchar(10),@t_bcustno nvarchar(20),@t_ecustno nvarchar(20)'
-	,@t_bummmon=@t_bummmon,@t_eummmon=@t_eummmon,@t_bcustno=@t_bcustno,@t_ecustno=@t_ecustno
+	select a.custno,c.mon,b.noa
+	,SUM(case when left(a.trandate,6)=c.mon then ISNULL(a.total,0)  else 0  end) 當月帳款
+	,SUM(case when left(a.trandate,6)!=c.mon then ISNULL(a.total,0)  else 0  end) 上月帳款
+	from view_trans a
+	left join view_trds b on a.noa=b.tranno
+	left join view_trd c on b.accy=c.accy and b.noa=c.noa
+	where (a.custno between @t_bcustno and @t_ecustno) 
+	and (c.mon between @t_bummmon and @t_eummmon)
+	group  by  a.custno,c.mon,b.noa
 	
 	declare cursor_table cursor for
 	select custno,mon,trdno,curmoney,befmoney from @tmp
@@ -570,7 +563,8 @@ z_ummtran2:--z_ummtran2
 	close cursor_table
 	deallocate cursor_table
 	
-	insert  into #z_ummtran2
+	insert  into #z_ummtran2(gno,custno,mon,noa,curmoney,befmoney,[money]
+		,tax,discount,plus,plusmoney,minusmoney,total,unpay)
 	select  '2' ,CHAR(255),'','',SUM(curmoney),SUM(befmoney),SUM([money]),SUM(tax),SUM(discount),SUM(plus),SUM(plusmoney),SUM(minusmoney),SUM(total),SUM(unpay)  
 	from  #z_ummtran2 where gno='0'
 	
@@ -597,16 +591,16 @@ z_ummtran2:--z_ummtran2
 	
 	select a.gno,a.custno cc,a.mon,a.noa
 	,(case when len(b.nick)>0 then b.nick else b.comp end) cp
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.curmoney),1)),4,12)) curm
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.befmoney),1)),4,12)) befm
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.[money]),1)),4,12)) [money]
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.tax),1)),4,12)) tax
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.discount),1)),4,12)) disc
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.plus),1)),4,12)) plus
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.plusmoney),1)),4,12)) pm
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.minusmoney),1)),4,12)) mm
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.total),1)),4,12)) total
-	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.unpay),1)),4,12)) unpay
+	,dbo.getComma(a.curmoney,-1) curm
+	,dbo.getComma(a.befmoney,-1) befm
+	,dbo.getComma(a.[money],-1) [money]
+	,dbo.getComma(a.tax,-1) tax
+	,dbo.getComma(a.discount,-1) disc
+	,dbo.getComma(a.plus,-1) plus
+	,dbo.getComma(a.plusmoney,-1) pm
+	,dbo.getComma(a.minusmoney,-1) mm
+	,dbo.getComma(a.total,-1) total
+	,dbo.getComma(a.unpay,-1) unpay
 	from #z_ummtran2 a
 	left join cust b on a.custno=b.noa
 	order by a.custno,a.gno,a.mon,a.noa
