@@ -1,0 +1,551 @@
+z_salpresent1:--z_salpresent1
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xperson nvarchar(20) 
+declare @t_bsssno nvarchar(20)
+declare @t_esssno nvarchar(20)
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then CHAR(255) else [2] end
+set @t_xperson = case when '#non' = [3] then '' else [3] end 
+set @t_bsssno = case when '#non' = [4] then '' else [4] end
+set @t_esssno = case when '#non' = [5] then CHAR(255) else [5] end
+
+declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(50),
+		sssno nvarchar(50),
+		namea nvarchar(50),
+		clockin nvarchar(50),
+		clockout nvarchar(50),
+		tripout nvarchar(50),
+		tripin nvarchar(50),
+		addh float,
+		w100 float,
+		spec float,
+		memo nvarchar(MAX),
+		day1 float,
+		day2 float,
+		day3 float, 
+		tmemo varchar(MAX),
+		vmemo varchar(MAX)
+)
+
+declare @trip table(
+		noa nvarchar(50),
+		sssno nvarchar(50),
+		datea nvarchar(10),
+		btime nvarchar(10),
+		etime nvarchar(10)
+)
+
+
+declare @day1 float=0
+declare @datea nvarchar(MAX)=@t_bdate
+declare @t_weekday nvarchar(10)--星期
+while (@datea<=@t_edate)
+begin
+	insert @trip
+	select * from dbo.tripmerge(@datea,'')
+
+	set @datea=cast(cast(left(@datea,3) as int)+1911 as nvarchar(10))
+		+RIGHT(@datea,6)
+	set @t_weekday=DATEPART(WEEKDAY, @datea)-1
+	
+	if((@t_weekday!=6 and @t_weekday!=0
+		and (right('000'+cast(cast(left(@datea,4) as int)-1911 as nvarchar(10)),3)+RIGHT(@datea,6)) not in (select noa from holiday where isnull(iswork,0)=0)
+		)or (right('000'+cast(cast(left(@datea,4) as int)-1911 as nvarchar(10)),3)+RIGHT(@datea,6)) in (select noa from holiday where isnull(iswork,0)=1) )
+		set @day1=@day1+1
+		
+	set @datea= CONVERT (VARCHAR(7), DATEADD(d, DATEDIFF(d,0,@datea)+1,0),12 )+0890000
+	set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+end
+
+insert into @tmp 
+select '0' gno,a.noa,a.sssno,a.namea,a.clockin,a.clockout
+,a.restout,a.restin
+--,case when isnull(a.restout,'')='' then c.btime else a.restout end
+--,case when isnull(a.restin,'')='' then c.etime else a.restin end
+--,c.btime,c.etime
+,isnull(a.w133,0)+isnull(a.w166,0),a.w100,a.hr_special,a.memo,@day1,0
+,case when isnull(clockin,'')!='' or isnull(clockout,'')!='' then 1 else 0 end
+,case when isnull(a.clockin,'')='' and isnull(a.clockout,'')=''  then 
+STUFF((select ','+acomp+(case when len(acomp)>0 and len(memo)>0 then ':' else '' end)+memo from trips where sssno=a.sssno and datea=a.noa FOR XML PATH('')),1,1,'')
+else (
+	case when isnull(a.clockin,'')='' or isnull(a.clockin,'')>'08:00' then STUFF((select ','+acomp+(case when len(acomp)>0 and len(memo)>0 then ':' else '' end)+ memo from trips where sssno=a.sssno and datea=a.noa and noq=(select top 1 noq from trips where sssno=a.sssno and datea=a.noa and etime!='' order by noq )FOR XML PATH('')),1,1,'')else '' end
+	+case when (isnull(a.clockin,'')='' or isnull(a.clockin,'')>'08:00') and (isnull(a.clockout,'')='' or isnull(a.clockout,'')<'17:30') then ',' else '' end
+	+case when isnull(a.clockout,'')='' or isnull(a.clockout,'')<'17:30' then STUFF((select ','+acomp+(case when len(acomp)>0 and len(memo)>0 then ':' else '' end)+ memo from trips where sssno=a.sssno and datea=a.noa and noq=(select top 1 noq from trips where sssno=a.sssno and datea=a.noa and btime!='' order by noq desc)FOR XML PATH('')),1,1,'') else '' end
+)end
+,STUFF((select ','+ hname from salvacause where sssno=a.sssno and a.noa between bdate and edate FOR XML PATH('')),1,1,'')
+from salpresents a left join sss b on a.sssno = b.noa
+outer apply (select MIN(btime)btime,MAX(etime)etime from @trip where sssno=a.sssno and datea=a.noa)c
+where (a.noa between @t_bdate and @t_edate)
+and (LEN(@t_xperson) = 0 or @t_xperson = b.person)  
+and (a.sssno between @t_bsssno and @t_esssno)
+
+update a 
+set day2=(select SUM(day3) from @tmp where sssno=a.sssno ) 
+from @tmp a
+
+insert into @tmp (gno,noa,sssno) 
+select '1','999/99/99',sssno from @tmp group by sssno 
+
+select gno,right(noa,5)noa,sssno,namea,clockin,clockout,tripout,tripin,addh,w100,spec,day1,day2, 
+	dbo.charbr(memo,17)memo,case when len(tmemo)>0 then dbo.charbr(tmemo,39) else '' end tmemo,vmemo 
+from @tmp order by sssno,noa,gno 
+
+;
+--*****************************************************************
+z_salpresent2:--z_salpresent2
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_xperson nvarchar(20) 
+declare @t_bsssno nvarchar(20)
+declare @t_esssno nvarchar(20)
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then CHAR(255) else [2] end
+set @t_xperson = case when '#non' = [3] then '' else [3] end 
+set @t_bsssno = case when '#non' = [4] then '' else [4] end
+set @t_esssno = case when '#non' = [5] then CHAR(255) else [5] end
+
+declare @tmp table(
+		gno nvarchar(1),
+		rec int,
+		noa nvarchar(50),
+		part nvarchar(50),
+		sssno nvarchar(50),
+		namea nvarchar(50),
+		clockin nvarchar(50),
+		clockout nvarchar(50),
+		w133 float,
+		w166 float,
+		w100 float,
+		spec float,
+		memo nvarchar(MAX),
+		tmemo nvarchar(MAX)
+)
+insert into @tmp 
+select
+	'0' gno,ROW_NUMBER() over (partition by a.noa order by isnull(b.partno,'999999'),b.jobno),a.noa,b.part,a.sssno,a.namea,a.clockin,a.clockout,a.w133,a.w166,a.w100,a.hr_special,a.memo,
+	case when isnull(a.clockin,'')='' and isnull(a.clockout,'')='' then STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa FOR XML PATH('')),1,1,'')
+	else 
+	case when charindex('外勤-晚 進',a.memo)>0 or isnull(a.clockin,'')='' then STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa and noq=(select top 1 noq from trips where sssno=a.sssno and datea=a.noa and etime!='' order by noq )FOR XML PATH('')),1,1,'')else '' end 
+	+case when charindex('外勤-晚 進',a.memo)>0 or isnull(a.clockin,'')='' then ',' else '' end
+	+case when charindex('外勤-早 退',a.memo)>0 or isnull(a.clockout,'')='' then STUFF((select ','+ memo from trips where sssno=a.sssno and datea=a.noa and noq=(select top 1 noq from trips where sssno=a.sssno and datea=a.noa and btime!='' order by noq desc)FOR XML PATH('')),1,1,'') else '' end 
+	end
+from salpresents a left join sss b on a.sssno = b.noa
+where (a.noa between @t_bdate and @t_edate)
+and (LEN(@t_xperson) = 0 or @t_xperson = b.person)  
+and (a.sssno between @t_bsssno and @t_esssno)
+
+
+declare @rec int
+declare @noa nvarchar(50)
+declare @xnoa nvarchar(50) = 'xxxxxx'
+declare @count int 
+declare @max int
+
+declare cursor_table cursor for 
+select rec,noa from @tmp where gno = '0'
+open cursor_table 
+fetch next from cursor_table 
+into @rec,@noa
+while(@@FETCH_STATUS <> -1) 
+begin
+	set @count = @count + 1
+	
+	if(@noa != @xnoa)
+	begin
+		set @max = (select COUNT(*) from @tmp where noa = @noa)
+		set @count = 1
+	end
+	
+	if(@count % 25 = 0 and @rec != @max)
+	begin
+		insert into @tmp(gno,rec,noa)
+		select '1',@rec,@noa
+	end
+	
+	set @xnoa = @noa
+	
+	fetch next from cursor_table 
+	into @rec,@noa
+end 
+close cursor_table 
+deallocate cursor_table
+
+
+insert into @tmp (gno,rec,noa,w133,w166,w100,spec) 
+select '2',999999,noa,sum(w133),sum(w166),sum(w100),sum(spec) from @tmp group by noa
+
+select * from @tmp order by noa,rec;
+---------------------------------------------------------------------------------------------------------------------------------------------
+z_salpresent3:--z_salpresent3
+declare @t_bsssno nvarchar(50)
+declare @t_esssno nvarchar(50)
+declare @t_bpartno nvarchar(50)
+declare @t_epartno nvarchar(50)
+declare @t_rlen nvarchar(50)
+declare @t_bmon nvarchar(50)
+declare @t_emon nvarchar(50)
+declare @t_order nvarchar(50)
+
+set @t_bsssno = case when '#non' = [4] then '' else [4] end
+set @t_esssno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bpartno = case when '#non' = [6] then '' else [6] end
+set @t_epartno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_rlen = [8]
+set @t_bmon = case when '#non' = [9] then '' else [9] end
+set @t_emon = case when '#non' = [10] then char(255) else [10] end
+set @t_order = case when '#non' = [11] then '' else [11] end
+-----------------------------------------------------------------------------------------------------------------
+SET QUOTED_IDENTIFIER OFF
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(10),
+	mon nvarchar(50),
+	datea nvarchar(20), 
+	work bit,
+	weeks nvarchar(10),
+	
+	sssno nvarchar(50), 
+	namea nvarchar(50), 
+	partno nvarchar(50), 
+	part nvarchar(50), 
+	
+	class5 nvarchar(50), --sss和saladj
+	dclass5 nvarchar(50),--非輪班和輪班
+	
+	btime nvarchar(50),
+	etime nvarchar(50),
+	clockin nvarchar(50),
+	clockout nvarchar(50),
+	bresttime nvarchar(50),
+	eresttime nvarchar(50),
+	workhours nvarchar(50),
+	
+	late float,
+	early float,
+	vacahours float,
+	
+	addbtime nvarchar(50),
+	addetime nvarchar(50),
+	addhours float,
+	
+	overtime nvarchar(10), --加班開始時間
+	doverhours float,--平日最多時數/天
+	overhours float,--平日最多時數/月
+	dhoverhours float,--假日最多時數/天
+	hoverhours float,--假日最多時數/月
+	
+	hours float,
+	memo nvarchar(MAX)
+) 
+
+insert #tmp(gno,mon,datea,sssno,namea,partno,part,class5,dclass5,btime,etime,clockin,clockout,bresttime,eresttime,workhours,memo
+,late,early,vacahours,overtime,doverhours,overhours,dhoverhours,hoverhours)
+select '0',left(a.noa,CAST(@t_rlen as int)+3),a.noa
+,b.sssno,b.namea,s.partno,s.part
+,case when isnull(adj.class5,'')!='' then adj.class5 else s.class5 end
+,case when isnull(c1.noa,'')!='' then c1.noa else c2.noa end
+,case when isnull(c1.noa,'')!='' then c1.btime else c2.btime end
+,case when isnull(c1.noa,'')!='' then c1.etime else c2.etime end
+,b.clockin,b.clockout
+,case when isnull(c1.noa,'')!='' then c1.bresttime else c2.bresttime end
+,case when isnull(c1.noa,'')!='' then c1.eresttime else c2.eresttime end
+,case when isnull(c1.noa,'')!='' then 
+round((Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c1.btime,Convert(NVARCHAR(10),getdate(),20)+' '+c1.etime)
+-case when c1.etime>c1.bresttime or (left(c1.etime,1)='0' and c1.bresttime between '19:00' and '23:59') then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c1.bresttime,Convert(NVARCHAR(10),getdate(),20)+' '+c1.eresttime)else 0 end
+-case when c1.etime>c1.bresttime2 or (left(c1.etime,1)='0' and c1.bresttime2 between '19:00' and '23:59') then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c1.bresttime2,Convert(NVARCHAR(10),getdate(),20)+' '+c1.eresttime2)else 0 end
+-case when c1.etime>c1.bresttime3 or (left(c1.etime,1)='0' and c1.bresttime3 between '19:00' and '23:59') then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c1.bresttime3,Convert(NVARCHAR(10),getdate(),20)+' '+c1.eresttime3)else 0 end)/60,1)
+else 
+round((Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c2.btime,Convert(NVARCHAR(10),getdate(),20)+' '+c2.etime)
+-case when c2.etime>c2.bresttime or (left(c2.etime,1)='0' and c2.bresttime between '19:00' and '23:59') then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c2.bresttime,Convert(NVARCHAR(10),getdate(),20)+' '+c2.eresttime)else 0 end
+-case when c2.etime>c2.bresttime2 or (left(c2.etime,1)='0' and c2.bresttime2 between '19:00' and '23:59') then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c2.bresttime2,Convert(NVARCHAR(10),getdate(),20)+' '+c2.eresttime2)else 0 end
+-case when c2.etime>c2.bresttime3 or (left(c2.etime,1)='0' and c2.bresttime3 between '19:00' and '23:59') then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+c2.bresttime3,Convert(NVARCHAR(10),getdate(),20)+' '+c2.eresttime3)else 0 end)/60,1)
+end
+,b.memo,0,0,0
+,case when isnull(c1.noa,'')!='' then c1.overtime else c2.overtime end
+,case when isnull(c1.noa,'')!='' then c1.doverhours else c2.doverhours end
+,case when isnull(c1.noa,'')!='' then c1.overhours else c2.overhours end
+,case when isnull(c1.noa,'')!='' then c1.dhoverhours else c2.dhoverhours end
+,case when isnull(c1.noa,'')!='' then c1.hoverhours else c2.hoverhours end
+from salpresent a 
+outer apply (select sssno,MAX(namea)namea,Min(clockin)clockin,MAX(clockout)clockout,MAX(memo) memo
+from salpresents where noa=a.noa group by sssno) b
+left join sss s on b.sssno=s.noa
+outer apply (select top 1 * from saladjust where noa=b.sssno and datea<=a.noa order by datea desc)adj
+--非輪班
+outer apply(select top 1 * from class5s  where noa=case when isnull(adj.class5,'')!='' then adj.class5 else s.class5 end
+and bdate<a.noa order by bdate desc --有效日
+)c1
+--輪班(用上班時間與約定上班時間的時差來判斷)
+outer apply(select top 1 * from class5s  where ','+case when isnull(adj.class5,'')!='' then adj.class5 else s.class5 end+',' like '%,'+noa+',%'
+and bdate<a.noa
+order by bdate desc,
+	case when left(btime,2)<='04' and clockin between '19:00:00' and '23:59:59' --昨天進(24)
+	then ABS(cast(LEFT(clockin,2)as float)-cast('24' as float))
+	when left(btime,2)>='20' and clockin between '00:00:00' and '05:00:00' --隔天進(24)
+	then ABS((cast(LEFT(clockin,2)as float)+24)-cast(LEFT(btime,2) as float))
+	else ABS(cast(LEFT(clockin,2)as float)-cast(LEFT(btime,2) as float)) end --正常區間
+)c2
+
+where left(a.noa,CAST(@t_rlen as int)+3) between @t_bmon and @t_emon
+and b.sssno between @t_bsssno and @t_esssno
+and s.partno between @t_bpartno and @t_epartno
+order by sssno
+
+--更新日期
+update a
+set weeks=DATEPART(weekday,case when @t_rlen='3' then dbo.ChineseEraName2AD(datea) else datea end)-1
+from #tmp a 
+
+--正常周休二日
+update a set work=case when weeks=6 or weeks=0 then 0 else 1 end from #tmp a 
+
+--休假日與補假
+update a set work=case when isnull(b.iswork,0)=1 then 1 else 0 end
+from #tmp a left join holiday b on a.datea=b.noa where b.noa is not null
+
+--遲到
+update #tmp
+set late=case when isnull(btime,'') < isnull(clockin,'') 
+then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+btime,Convert(NVARCHAR(10),getdate(),20)+' '+clockin) 
+else Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+btime,Convert(NVARCHAR(10),DateAdd(Day,1,getdate()),20)+' '+clockin) end
+where isnull(btime,'')!='' and isnull(clockin,'')!='' and (isnull(btime,'') < isnull(clockin,'') 
+or(left(isnull(btime,''),2)>='20' and isnull(clockin,'') between '00:00:00' and '05:00:00'))--隔天進(24)
+
+--早退
+update #tmp
+set early=case when isnull(etime,'') > isnull(clockout,'') 
+then Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+clockout,Convert(NVARCHAR(10),getdate(),20)+' '+etime) 
+else Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+clockout,Convert(NVARCHAR(10),DateAdd(Day,1,getdate()),20)+' '+etime) end
+where isnull(etime,'')!='' and isnull(clockout,'')!='' and (isnull(etime,'') > isnull(clockout,'') 
+or(left(isnull(etime,''),1)='0' and isnull(clockout,'') between '19:00:00' and '23:59:59'))--昨天出(24)
+
+--請假
+update a
+set vacahours=case when isnull(hr_used,0)>8 then 8 else isnull(hr_used,0) end
+from #tmp a outer apply (select SUM(hr_used)hr_used from salvacause where a.datea between bdate and edate and sssno=a.sssno)b
+
+--加班
+update a 
+set addbtime=b.btime,addetime=b.etime,addhours=b.hours
+from #tmp a outer apply (select top 1 * from saladd where datea=a.datea and sssno=a.sssno and isnull(isapv,0)=1) b
+
+--更新實際上班時數
+update #tmp
+set workhours=round(workhours-((late+early)/60),1)
+
+--更新總時數
+update #tmp
+set hours=isnull(workhours,0)+isnull(addhours,0)
+
+---------------------------------------------------------------------------------
+--調整 實際出勤時數 與 限制加班時數
+declare @mon nvarchar(50)
+declare @datea nvarchar(20) 
+declare @work bit
+declare @sssno nvarchar(50)
+declare @btime nvarchar(50)
+declare @etime nvarchar(50)
+declare @clockin nvarchar(50)
+declare @clockout nvarchar(50)
+declare @overtime nvarchar(10)
+declare @addbtime nvarchar(50)
+declare @addetime nvarchar(50)
+declare @addhours float
+declare @doverhours float
+declare @overhours float
+declare @dhoverhours float
+declare @hoverhours float
+
+declare @x_sssno nvarchar(50)=char(255)
+declare @x_mon nvarchar(50)=char(255)
+declare @x_datea nvarchar(20)=char(255)
+
+declare @x_overhours float
+declare @x_hoverhours float
+
+
+declare cursor_table cursor for
+select sssno,mon,datea,work,btime,etime,clockin,clockout
+,overtime,addbtime,addetime,addhours,doverhours,overhours,dhoverhours,hoverhours
+from #tmp order by sssno,mon,datea
+open cursor_table
+fetch next from cursor_table
+into @sssno,@mon,@datea,@work,@btime,@etime,@clockin,@clockout,@overtime,@addbtime,@addetime,@addhours
+,@doverhours,@overhours,@dhoverhours,@hoverhours
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@x_sssno!=@sssno or @x_mon!=@mon )
+	begin
+		set @x_overhours=isnull(@overhours,0)
+		set @x_hoverhours=isnull(@hoverhours,0)
+	end	
+	
+	--加班處理
+	--平日
+	if(@work=1)
+	begin
+		if(@x_overhours>0)--當月平日是否有加班時數
+		begin
+			if(isnull(@addhours,0)>isnull(@doverhours,0)) --當天是否超過限定時數
+			begin
+				if(isnull(@doverhours,0)=0) --沒有加班時數
+				begin
+					update #tmp set addbtime='',addetime='',addhours=0 where datea=@datea and sssno=@sssno
+				end
+				else
+				begin
+					update #tmp set addetime=right('00'+cast(case when cast(LEFT(addbtime,2) as int)+@doverhours>23 then 
+					(cast(LEFT(addbtime,2) as int)+@doverhours-23) else cast(LEFT(addbtime,2) as int)+@doverhours end as nvarchar(10)),2)
+					+substring(addbtime,3,len(addbtime))
+					,addhours=@doverhours where datea=@datea and sssno=@sssno
+					set @x_overhours=@x_overhours-isnull(@doverhours,0)
+				end
+			end	
+			else
+			begin
+				set @x_overhours=@x_overhours-isnull(@addhours,0)
+			end
+		end
+		else
+		begin
+			update #tmp set addbtime='',addetime='',addhours=0 where datea=@datea and sssno=@sssno
+		end
+	end
+	else--假日
+	begin
+		if(@x_hoverhours>0)--當月平日是否有加班時數
+		begin
+			if(isnull(@addhours,0)>isnull(@dhoverhours,0)) --當天是否超過限定時數
+			begin
+				if(isnull(@dhoverhours,0)=0) --沒有加班時數
+				begin
+					update #tmp set addbtime='',addetime='',addhours=0 where datea=@datea and sssno=@sssno
+				end
+				else
+				begin
+					update #tmp set addetime=right('00'+cast(case when cast(LEFT(addbtime,2) as int)+@dhoverhours>23 then 
+					(cast(LEFT(addbtime,2) as int)+@dhoverhours-23) else cast(LEFT(addbtime,2) as int)+@dhoverhours end as nvarchar(10)),2)
+					+substring(addbtime,3,len(addbtime))
+					,addhours=@dhoverhours where datea=@datea and sssno=@sssno
+					set @x_hoverhours=@x_hoverhours-isnull(@dhoverhours,0)
+				end
+			end	
+			else
+			begin
+				set @x_hoverhours=@x_hoverhours-isnull(@addhours,0)
+			end
+		end
+		else
+		begin
+			update #tmp set addbtime='',addetime='',addhours=0 where datea=@datea and sssno=@sssno
+		end
+	end
+	
+	set @x_sssno=@sssno
+	set @x_mon=@mon
+	set @x_datea=@datea
+	
+	fetch next from cursor_table
+	into @sssno,@mon,@datea,@work,@btime,@etime,@clockin,@clockout,@overtime,@addbtime,@addetime,@addhours
+	,@doverhours,@overhours,@dhoverhours,@hoverhours
+end
+close cursor_table
+deallocate cursor_table
+
+declare cursor_table cursor for
+select sssno,mon,datea,work,btime,etime,clockin,clockout
+,overtime,addbtime,addetime,addhours,doverhours,overhours,dhoverhours,hoverhours
+from #tmp order by sssno,mon,datea
+open cursor_table
+fetch next from cursor_table
+into @sssno,@mon,@datea,@work,@btime,@etime,@clockin,@clockout,@overtime,@addbtime,@addetime,@addhours
+,@doverhours,@overhours,@dhoverhours,@hoverhours
+while(@@FETCH_STATUS <> -1)
+begin
+	
+	--出勤
+	--平日
+	if(@work=1)
+	begin
+		if( (@clockout>@etime or (LEFT(@etime,2)>='20' and @clockout between '00:00:00' and '05:00:00'))
+		and (@clockout>@overtime or (LEFT(@clockout,2)>='20' and @overtime  between '00:00:00' and '05:00:00'))
+		)--下班時間大於加班時間 
+		begin
+			if(@addbtime='')--沒有加班資料
+			begin
+				if(@overtime='') --加班時間空白
+				begin
+					update #tmp set clockout=@etime where datea=@datea and sssno=@sssno
+				end
+				else --有加班時間
+				begin
+					update #tmp set clockout=left(@overtime,2)+':'
+					+ case when right(@overtime,2)='00' then '59' else right('00'+CAST(CAST(right(@overtime,2) as int)-1 as nvarchar(10)),'2') end
+					where datea=@datea and sssno=@sssno
+				end
+			end
+			else --有加班資料
+			begin
+				if(@clockout>@addetime and ABS(Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+@addetime,Convert(NVARCHAR(10),getdate(),20)+' '+@clockout))>5)--下班時間>加班時數 且超過5分鐘
+				begin
+					update #tmp set clockout=@addetime where datea=@datea and sssno=@sssno
+				end
+			end
+		end
+	end
+	else--假日
+	begin
+		if(@addbtime='')--沒有加班資料
+		begin
+			--假日不上班
+			update #tmp set clockout='',clockin='' where datea=@datea and sssno=@sssno
+		end	
+		else
+		begin
+			if(ABS(Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+@addbtime,Convert(NVARCHAR(10),getdate(),20)+' '+@clockin))>10)--上班時間>加班時數 且超過10分鐘
+			begin
+				update #tmp set clockin=@addbtime where datea=@datea and sssno=@sssno
+			end
+			
+			if(ABS(Datediff(Minute,Convert(NVARCHAR(10),getdate(),20)+' '+@addetime,Convert(NVARCHAR(10),getdate(),20)+' '+@clockout))>5)--下班時間>加班時數 且超過5分鐘
+			begin
+				update #tmp set clockout=@addetime where datea=@datea and sssno=@sssno
+			end
+		end
+	end
+	
+	fetch next from cursor_table
+	into @sssno,@mon,@datea,@work,@btime,@etime,@clockin,@clockout,@overtime,@addbtime,@addetime,@addhours
+	,@doverhours,@overhours,@dhoverhours,@hoverhours
+end
+close cursor_table
+deallocate cursor_table
+
+insert #tmp(gno,mon)
+select '1',mon from #tmp group by mon
+
+if(@t_order='sssno')
+begin
+	select * from #tmp order by mon,gno,sssno,datea
+end
+else if(@t_order='partno')
+begin
+	select * from #tmp order by mon,gno,partno,sssno,datea
+end
+else
+begin
+	select * from #tmp order by mon,gno,datea,partno,sssno
+end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;

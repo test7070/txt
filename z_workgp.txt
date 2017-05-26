@@ -1,0 +1,296 @@
+z_workgp1:--z_workgp1
+declare @t_date nvarchar(30)
+declare @t_bpno nvarchar(50)
+declare @t_epno nvarchar(50)
+declare @t_monweek nvarchar(50)
+declare @isordes nvarchar(50)
+declare @r_len nvarchar(50)='[2]'
+declare @r_lenm nvarchar(50)=cast(@r_len as int)+3
+set @t_date = case when '#non' = [3] then CHAR(255) else  [3] end
+set @t_bpno = case when '#non' = [4] then '' else  [4] end
+set @t_epno = case when '#non' = [5] then CHAR(255) else  [5] end
+set @t_monweek = case when '#non' = [6] then '' else  [6] end
+set @isordes = case when '#non' = [7] then '' else  [7] end
+
+--分週(取最小和最大預交日)
+declare @tmp table(
+	idno int identity(1,1),
+	week int,
+	bweek nvarchar(50),
+	eweek nvarchar(50)
+)
+
+--今天日期
+declare @now_date nvarchar(30)
+if(@r_len='4')
+begin
+	set @now_date=Replace(CONVERT (VARCHAR(10), GETDATE(),20),'-','/')
+end
+else
+begin
+	set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+	set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+end
+
+declare @minday nvarchar(10)=(select MIN(datea)minday from view_ordes a where (datea between @now_date and @t_date) and exists (select noa from uca where noa=a.productno) and (productno between @t_bpno and @t_epno))
+declare @maxday nvarchar(10)=(select MAX(datea)maxday from view_ordes a where (datea between @now_date and @t_date) and exists (select noa from uca where noa=a.productno) and (productno between @t_bpno and @t_epno) )
+declare @t_minday nvarchar(10)
+
+if(@t_monweek='1')
+begin
+	--取當週的第一天
+	declare @mindayweeks int=0
+	if(@r_len='4')
+	begin
+		set @mindayweeks=-1*(select DATEPART(WEEKDAY, CONVERT(datetime ,left(@minday,4)+right(left(@minday,7),2)+right(@minday,2)))-1)
+	end
+	else 
+	begin
+		set @mindayweeks=-1*(select DATEPART(WEEKDAY, CONVERT(datetime ,CONVERT(nvarchar(10),CONVERT(int,left(@minday,3))+1911)+right(left(@minday,6),2)+right(@minday,2)))-1)
+	end
+	
+	set @minday=dbo.q_cdn(@minday,@mindayweeks)
+	
+	while(@minday<=@maxday)
+	begin
+		
+		set @t_minday=dbo.q_cdn(@minday,6)
+		
+		if(@r_len='4')
+		begin
+			insert into @tmp
+			select datepart(week,@minday)-datepart(week,dateadd(month,datediff(month,0,@minday),0))+1 
+			,@minday,@t_minday
+		end
+		else
+		begin
+			insert into @tmp
+			select datepart(week,CONVERT(nvarchar(10),CONVERT(int,left(@minday,3))+1911)+right(left(@minday,6),2)+right(@minday,2))-datepart(week,dateadd(month,datediff(month,0,CONVERT(nvarchar(10),CONVERT(int,left(@minday,3))+1911)+right(left(@minday,6),2)+right(@minday,2)),0))+1 
+			,@minday,@t_minday
+		end
+		
+		set @minday=dbo.q_cdn(@minday,7)
+	end
+end
+else
+begin
+	while(@minday<=@maxday) 
+	begin 
+		
+		set @t_minday=dbo.q_cdn(left(dbo.q_cdn(left(@minday,@r_lenm)+'/01',45),@r_lenm)+'/01',-1)
+		
+		insert into @tmp 
+		select '',@minday,@t_minday 
+		
+		set @minday=dbo.q_cdn(@t_minday,1)	
+	end 
+end
+
+--判斷資料的第一周的日期>今天日期
+if((select bweek from @tmp where idno=1)<@now_date)
+begin
+	update @tmp
+	set bweek=@now_date
+	where idno=1
+end
+
+--判斷資料的最後一周的日期<終止日期
+if(@t_date!=CHAR(255) and (select bweek from @tmp where idno=(select top 1 idno from @tmp order by idno desc))<@t_date)
+begin
+	update @tmp
+	set eweek=@t_date
+	where idno=(select top 1 idno from @tmp order by idno desc)
+end
+
+--每週應排程
+declare @tmpa table(
+	gno nvarchar(2),
+	weeks nvarchar(50),
+	idno int identity(1,1),
+	bday nvarchar(50),
+	eday nvarchar(50),
+	productno nvarchar(100),
+	products nvarchar(250),
+	ordemount float,
+	planmount float,
+	stkmount float,
+	intmount float,
+	purmount float,
+	ordenos nvarchar(MAX),
+	availmount float,
+	bornmount float, 
+	ordenoa nvarchar(50),
+	ordenoq nvarchar(20),
+	omount float, 
+	oc1 float, 
+	onotv float, 
+	odate nvarchar(10),
+	custno nvarchar(50),
+	custs nvarchar(50)
+)
+
+declare @weeks int
+
+declare cursor_table cursor for 
+select week,bweek,eweek from @tmp order by idno
+open cursor_table 
+fetch next from cursor_table 
+into @weeks,@minday,@maxday
+while(@@FETCH_STATUS <> -1) 
+begin 
+	insert into @tmpa
+	select '0',case when left(@minday,@r_lenm)=left(@maxday,@r_lenm) then @weeks else '1' end,@minday,@maxday,a.productno,MAX(a.product)product
+	,SUM(a.mount-a.c1)-isnull((select SUM(c.mount-c.c1) from view_ordes c left join view_orde d on c.noa=d.noa where (c.datea between @minday and @maxday) and d.stype='5' and c.productno=a.productno and c.enda!='1'),0) ordemount
+	,isnull((select SUM(c.mount-c.c1) from view_ordes c left join view_orde d on c.noa=d.noa where (c.datea between @minday and @maxday) and d.stype='5' and c.productno=a.productno and c.enda!='1'),0) planmount
+	,isnull((select SUM(mount) from stkucc (@now_date,'','') where productno=a.productno),0) stkmount
+	,isnull((select SUM(mount-inmount) from view_work where productno=a.productno),0) inmount
+	,isnull((select sum(mount-c1) from view_ordcs where productno=a.productno),0) purmount
+	--,MAX(ucastation.pretime)pretime,MAX(ucastation.ucahours)ucahours,MAX(ucastation.stationgen)stationgen,MAX(ucastation.stationhours)stationhours
+	,(select e.noa+'-'+e.no2+',' from view_ordes e left join view_orde f on e.noa=f.noa where e.enda!='1' and e.productno=a.productno and (e.datea between @minday and @maxday)  and e.productno in (select noa from uca)  FOR XML PATH('')) ordeno
+	,0,0,'','','','','','','',''
+	from view_ordes a left join view_orde b on a.noa=b.noa
+	--left join (select a.noa ucapno,a.hours ucahours,a.pretime,b.hours stationhours,b.gen stationgen from uca a left join station b on a.stationno=b.noa)ucastation on a.productno=ucastation.ucapno
+	where a.enda!='1' 
+	and (a.datea between @minday and @maxday)
+	and a.productno in (select noa from uca) and (a.productno between @t_bpno and @t_epno)
+	--and charindex(a.noa+'-'+a.no2,(select ordeno+',' from workgs FOR XML PATH('')))=0 
+	group by productno
+	
+	--if((select COUNT(*) from @tmpa where bday=@minday)=0)
+	--begin
+	--	insert into @tmpa(gno,weeks,bday,eday)
+	--	select '0',case when left(@minday,6)=left(@maxday,6) then @weeks else '1' end,@minday,@maxday
+	--end
+	
+	if(len(@isordes)>0)
+	begin
+		insert into @tmpa(gno,bday,eday,productno,ordenoa,ordenoq,omount,oc1,onotv,odate,custno,custs)
+		select '2',@minday,@maxday,a.productno,a.noa,a.no2,a.mount,a.c1,a.notv,a.datea,a.custno,left(a.comp,4)
+		from view_ordes a left join view_orde b on a.noa=b.noa
+		where CHARINDEX(a.noa+'-'+a.no2,(select ordenos+',' from @tmpa where bday=@minday FOR XML PATH('')))>0
+	end
+	
+	fetch next from cursor_table 
+	into @weeks,@minday,@maxday
+end 
+close cursor_table 
+deallocate cursor_table 
+
+--update @tmpa
+--set ordenos=LEFT(ordenos,len(ordenos)-1)
+--,availmount=-1*(ordemount+planmount-stkmount-intmount-purmount)
+
+--可用庫存計算
+--儲存起始庫存
+declare @tmpb table( 
+	productno nvarchar(50),
+	edy nvarchar(50), 
+	mount float,
+	intmount float,
+	purmount float,
+	bornmount float
+) 
+insert into @tmpb
+select productno,(select top 1 eday from @tmpa where productno=a.productno order by bday)eday
+,(select top 1 stkmount from @tmpa where productno=a.productno order by bday)mount
+,(select top 1 intmount from @tmpa where productno=a.productno order by bday)mount
+,(select top 1 purmount from @tmpa where productno=a.productno order by bday)mount
+,(select top 1 intmount+purmount+stkmount from @tmpa where productno=a.productno order by bday)mount
+from @tmpa a where productno!='' group by productno
+
+declare @idnos int 
+declare cursor_table cursor for 
+select idno from @tmpa where productno!='' order by idno 
+open cursor_table 
+fetch next from cursor_table 
+into @idnos
+while(@@FETCH_STATUS <> -1) 
+begin 
+	update a
+	set a.stkmount=b.mount,a.intmount=b.intmount,a.purmount=b.purmount,a.bornmount=b.bornmount
+	from @tmpa a left join @tmpb b on a.productno=b.productno
+	where idno=@idnos
+	
+	update @tmpa 
+	set availmount=-1*(ordemount+planmount-stkmount)
+	,bornmount= (case when -1*(ordemount+planmount)+bornmount>=0 then 0 else (ordemount+planmount)-bornmount end)
+	where idno=@idnos
+	
+	update @tmpb 
+	set mount=(select -1*(ordemount+planmount-stkmount) from @tmpa where idno=@idnos)
+	,intmount=0,purmount=0
+	,bornmount=bornmount+(select -1*(ordemount+planmount) from @tmpa where idno=@idnos)
+	where productno=(select productno from @tmpa where idno=@idnos) 
+	
+	fetch next from cursor_table 
+	into @idnos
+end 
+close cursor_table 
+deallocate cursor_table 
+
+if(len(@isordes)>0)
+begin
+	insert into @tmpa(gno,bday,eday,productno)
+	select '1',bday,eday,productno from @tmpa where gno='2' group by bday,eday,productno
+	insert into @tmpa(gno,bday,eday,productno)
+	select '3',bday,eday,productno from @tmpa where gno='2' group by bday,eday,productno
+end
+
+select gno,left(eday,@r_lenm) mons,case when @t_monweek='1' then '週' else '' end isweeks,case when @t_monweek='1' then weeks else '' end weeks,bday,eday,productno,products
+,dbo.getComma(ordemount,2) ordemount 
+,dbo.getComma(planmount,2) planmount 
+,dbo.getComma(stkmount,2) stkmount 
+,dbo.getComma(intmount,2) intmount 
+,dbo.getComma(purmount,2) purmount 
+,dbo.getComma(availmount,2) avaimount 
+,dbo.getComma(bornmount,2) bornmount 
+,ordenos,ordenoa,ordenoq
+,dbo.getComma(omount,2) omount 
+,dbo.getComma(oc1,2) oc1
+,dbo.getComma(onotv,2) onotv
+,odate,custno,custs from @tmpa
+order by bday,productno,gno
+;
+--******************************************************************************************
+z_workgp2:--z_workgp2
+declare @t_bstationno nvarchar(50)
+declare @t_estationno nvarchar(50)
+declare @r_len nvarchar(50)='[2]'
+
+set @t_bstationno = case when '#non' = [8] then '' else  [8] end
+set @t_estationno = case when '#non' = [9] then CHAR(255) else  [9] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	stations nvarchar(100),
+	workno nvarchar(50),
+	pno nvarchar(100),
+	product nvarchar(250),
+	processno nvarchar(100),
+	processs nvarchar(100),
+	mount float,
+	inmount float,
+	unmount float,
+	uindate nvarchar(10),
+	cuanoa nvarchar(100),
+	cuanoq nvarchar(100)
+)
+
+insert @tmp
+select '0',a.stationno,a.station,a.noa,a.productno,a.product,a.processno,a.process
+,a.mount,a.inmount,isnull(a.mount,0)-isnull(a.inmount,0),a.uindate,a.cuano,a.cuanoq
+from view_work a  
+where isnull(a.isfreeze,0)=1 and 
+isnull(a.stationno,'') between @t_bstationno and @t_estationno 
+
+insert @tmp (gno,stationno,stations,mount,inmount,unmount)
+select '1',stationno,stations,sum(mount),sum(inmount),sum(unmount) from @tmp where gno='0'
+group by stationno,stations
+
+select 
+dbo.getComma(mount,-1) mount 
+,dbo.getComma(inmount,-1) inmount 
+,dbo.getComma(unmount,-1) unmount  
+,* from @tmp order by stationno,gno,pno,uindate
+;

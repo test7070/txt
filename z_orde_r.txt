@@ -1,0 +1,2574 @@
+z_orde_r01:--z_orde_r01
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bmon = case when '#non' = [6] then '' else [6] end
+set @t_emon = case when '#non' = [7] then CHAR(255) else [7] end
+
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @now_date=replace(dbo.ChineseEraName2AD(@now_date),'-','/')
+	set @t_lenm='7'
+end 
+
+if(len(@t_bmon)=0)
+begin
+	set @t_bmon=left(@now_date,@t_lenm)
+end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+
+--月份
+create table #tmp(
+	mon01 nvarchar(10),
+	mon02 nvarchar(10),
+	mon03 nvarchar(10),
+	mon04 nvarchar(10),
+	mon05 nvarchar(10),
+	mon06 nvarchar(10),
+	mon07 nvarchar(10),
+	mon08 nvarchar(10),
+	mon09 nvarchar(10),
+	mon10 nvarchar(10),
+	mon11 nvarchar(10),
+	mon12 nvarchar(10)
+)
+
+declare @moncount int=1
+declare @tmp_mon nvarchar(10)=@t_bmon
+declare @tmp_moncol nvarchar(50)
+while(@tmp_mon<=@t_emon and @moncount<=12)
+begin
+	set @tmp_moncol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+	if(@moncount=1)
+		exec(" insert #tmp ("+@tmp_moncol+") select '"+@tmp_mon+"'")
+	else
+		exec(" update #tmp set "+@tmp_moncol+"='"+@tmp_mon+"'")
+	
+	if(@t_len='4')
+	begin
+		set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',45),7)
+	end
+	else
+	begin
+		set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',45),6)
+	end
+	
+	set @moncount=@moncount+1
+end
+
+
+create table #tmp2(
+	gno nvarchar(1), 
+	recno int,
+	tit nvarchar(200), 
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float,
+	mount07 float,
+	mount08 float,
+	mount09 float,
+	mount10 float,
+	mount11 float,
+	mount12 float
+) 
+
+set @moncount=1
+set @tmp_mon =@t_bmon
+while(@tmp_mon<=@t_emon and @moncount<=12)
+begin
+	set @tmp_moncol='mount'+right('00'+cast(@moncount as nvarchar(10)),2)
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',1,'產能',sum(a.mount)mount
+	from supforecasts a left join supforecast b on a.noa=b.noa where b.mon='"+@tmp_mon+"' ")
+
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',4,'已入庫量',sum(wb.mount)mount
+	from view_workb wa left join view_workbs wb on wa.noa=wb.noa left join uca c on wb.productno=c.noa
+	where isnull(wb.ordeno,'')!='' and left(wa.datea,"+@t_lenm+")='"+@tmp_mon+"' and isnull(c.typea,'')='2' ")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',5,'出貨量',sum(vb.mount)mount
+	from view_vcc va left join view_vccs vb on va.noa=vb.noa left join uca c on vb.productno=c.noa
+	where left(va.datea,"+@t_lenm+")='"+@tmp_mon+"' and isnull(c.typea,'')='2' ")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',7,'已完工量',sum(wb.mount)mount
+	from view_workb wa left join view_workbs wb on wa.noa=wb.noa left join uca c on wb.productno=c.noa
+	where left(wa.datea,"+@t_lenm+")='"+@tmp_mon+"' and isnull(c.typea,'')='2'")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',8,'未完工量',sum(isnull(wa.mount,0)-isnull(wa.inmount,0))mount
+	from view_work wa left join uca b on wa.productno=b.noa
+	where left(wa.cuadate,"+@t_lenm+") ='"+@tmp_mon+"' and isnull(b.typea,'')='2' --and wa.noa like 'W[0-9]%' 
+	")
+	
+	--exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	--select '9',3,'訂單數量',sum(isnull(b.mount,0))mount
+	--from view_orde a left join view_ordes b on a.noa=b.noa left join uca c on b.productno=c.noa
+	--where left(a.odate,"+@t_lenm+") ='"+@tmp_mon+"' and isnull(c.typea,'')='2' 
+	--and (a.stype='3' or a.stype='4') ")
+	
+	--105/05/25 用排產週
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',3,'訂單數量',sum(isnull(b.mount,0))mount
+	from view_orde a left join view_ordes b on a.noa=b.noa left join uca c on b.productno=c.noa
+	where left(case when len(a.date3)=0 then a.odate else	dbo.ISOWEEKbdate(LEFT(a.odate,"+@t_len+"),a.date3,"+@t_len+")end,"+@t_lenm+")='"+@tmp_mon+"'
+	and isnull(c.typea,'')='2' and (a.stype='3' or a.stype='4') ")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',2,'製令數量',sum(isnull(wa.mount,0))mount
+	from view_work wa left join uca b on wa.productno=b.noa
+	where left(wa.cuadate,"+@t_lenm+") ='"+@tmp_mon+"' and isnull(b.typea,'')='2' --and wa.noa like 'W[0-9]%' 
+	")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_moncol+") 
+	select '9',6,'訂單已入庫未出量',sum(wb.mount-isnull(d.mount,0))
+	from view_workb wa left join view_workbs wb on wa.noa=wb.noa left join uca c on wb.productno=c.noa
+	outer apply (select sum(mount)mount from view_vccs where ordeno+'-'+no2=isnull(wb.ordeno,''))d
+	where isnull(wb.ordeno,'')!='' and left(wa.datea,"+@t_lenm+")='"+@tmp_mon+"' and isnull(c.typea,'')='2' ")
+
+	if(@t_len='4')
+	begin
+		set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',45),7)
+	end
+	else
+	begin
+		set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',45),6)
+	end
+	
+	set @moncount=@moncount+1
+end
+
+insert #tmp2
+select '0',recno,tit
+,SUM(mount01),SUM(mount02),SUM(mount03),SUM(mount04),SUM(mount05),SUM(mount06)
+,SUM(mount07),SUM(mount08),SUM(mount09),SUM(mount10),SUM(mount11),SUM(mount12)
+from #tmp2 group by recno,tit
+
+delete #tmp2 where gno='9'
+
+--插入不在的標題
+
+insert #tmp2(gno,recno,tit)
+select '0',1,'產能' from #tmp2 a
+where not exists (select * from #tmp2 where recno=1)
+
+insert #tmp2(gno,recno,tit)
+select '0',4,'已入庫量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=4)
+
+insert #tmp2(gno,recno,tit)
+select '0',5,'出貨量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=5)
+
+insert #tmp2(gno,recno,tit)
+select '0',7,'已完工量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=7)
+
+insert #tmp2(gno,recno,tit)
+select '0',8,'未完工量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=8)
+
+insert #tmp2(gno,recno,tit)
+select '0',3,'訂單數量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=3)
+
+insert #tmp2(gno,recno,tit)
+select '0',2,'製令數量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=2)
+
+insert #tmp2(gno,recno,tit)
+select '0',6,'訂單已入庫未出量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=6)
+
+insert #tmp2(gno,recno)
+select '1',0
+
+insert #tmp2(gno,recno)
+select '3',10
+
+select 
+dbo.getComma(mount01,-1)mount01,
+dbo.getComma(mount02,-1)mount02,
+dbo.getComma(mount03,-1)mount03,
+dbo.getComma(mount04,-1)mount04,
+dbo.getComma(mount05,-1)mount05,
+dbo.getComma(mount06,-1)mount06,
+dbo.getComma(mount07,-1)mount07,
+dbo.getComma(mount08,-1)mount08,
+dbo.getComma(mount09,-1)mount09,
+dbo.getComma(mount10,-1)mount10,
+dbo.getComma(mount11,-1)mount11,
+dbo.getComma(mount12,-1)mount12,
+* from #tmp2,#tmp order by recno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+;
+
+--****************************************************************************************************
+z_orde_r02:--z_orde_r02
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bagent = case when '#non' = [13] then '' else [13] end
+set @t_eagent = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+
+declare @result table( 
+	gno nvarchar(1),
+	noa nvarchar(50), 
+	no2 nvarchar(30),
+	odate nvarchar(10),
+	agentno nvarchar(50),
+	comp nvarchar(200),
+	pno nvarchar(100),
+	product nvarchar(250),
+	price float,
+	comm float,
+	cprice float,
+	mount float,
+	cmoney float
+)
+
+insert @result
+select '0',a.noa,b.no2,a.odate,a.agentno,a.agent
+,b.productno,b.product,b.price,b.commission,round(b.price*(b.commission/100),2)
+,b.mount,round(b.price*(b.commission/100)*b.mount,0)
+from view_orde a left join view_ordes b on a.noa=b.noa
+where a.odate between @t_bdate and @t_edate
+and isnull(a.agentno,'') between @t_bagent and @t_eagent
+and isnull(b.productno,'') between @t_bpno and @t_epno
+and b.price!=0 and (a.stype='3' or a.stype='4')
+and (b.payterms='C＆F＆C' or b.payterms='C＆I＆C' or b.payterms='CIF＆C' or b.payterms='FOB＆C')
+
+if((select count(*) from @result)>0)
+begin
+	insert @result (gno,agentno,comp,cmoney)
+	select '1',agentno,MAX(comp),sum(cmoney)
+	from @result group by agentno
+end
+
+select 
+dbo.getComma(price,-1) price,
+dbo.getComma(comm,-1) comm,
+dbo.getComma(cprice,-1) cprice,
+dbo.getComma(mount,-1) mount,
+dbo.getComma(cmoney,-1) cmoney,
+'orde_r?noa=$noa' qhref,
+* from @result order by agentno,gno,odate,noa,no2;
+
+--****************************************************************************************************
+z_orde_r03:--z_orde_r03
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bagent = case when '#non' = [13] then '' else [13] end
+set @t_eagent = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+
+declare @result table( 
+	gno nvarchar(1),
+	agentno nvarchar(50),
+	comp nvarchar(200),
+	cmoney float
+)
+
+insert @result
+select '0',a.agentno,MAX(a.agent),sum(round(b.price*(b.commission/100)*b.mount,0))
+from view_orde a left join view_ordes b on a.noa=b.noa
+where a.odate between @t_bdate and @t_edate
+and isnull(a.agentno,'') between @t_bagent and @t_eagent
+and isnull(b.productno,'') between @t_bpno and @t_epno
+and b.price!=0 and (a.stype='3' or a.stype='4')
+and (b.payterms='C＆F＆C' or b.payterms='C＆I＆C' or b.payterms='CIF＆C' or b.payterms='FOB＆C')
+group by a.agentno
+
+if((select count(*) from @result)>0)
+begin
+	insert @result (gno,cmoney)
+	select '1',sum(cmoney)
+	from @result
+end
+
+select dbo.getComma(cmoney,-1) cmoney,* 
+from @result order by gno,agentno;
+
+--****************************************************************************************************
+z_orde_r04:--z_orde_r04
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_year nvarchar(10) 
+declare @t_len nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bagent = case when '#non' = [13] then '' else [13] end
+set @t_eagent = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_year = case when '#non' = [10] then '' else [10] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmpa(
+	noa nvarchar(50), 
+	no2 nvarchar(30),
+	mon nvarchar(10),
+	agentno nvarchar(50),
+	payterms  nvarchar(50),
+	mount float,
+	price float,
+	cost float,
+	total float,
+	profit float,
+	profitm float,
+	comm float,
+	commm float,
+	insur float,
+	insurm float
+)
+
+insert #tmpa
+select a.noa,b.no2,left(a.odate,@t_len+3),a.agentno,b.payterms,b.mount,b.price,b.sprice,b.total
+,b.profit,0,b.commission,0,b.insurance,0
+from view_orde a left join view_ordes b on a.noa=b.noa
+where left(a.odate,@t_len)=@t_year and isnull(b.payterms,'')!='' and (a.stype='3' or a.stype='4')
+
+--(成本/(1-P)+F)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='C＆F'
+
+--(成本/(1-P)+F)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round(((cost/(1-(profit/100)))/(1-(comm/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+,insurm=0 where payterms='C＆F＆C'
+
+--成本/(1-P)/(1-I)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+where payterms='C＆I'
+
+--成本/(1-P)/(1-I)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round((((cost/(1-(profit/100)))/(1-(insur/100)))/(1-(comm/100)))-(cost+round((cost/(1-(profit/100)))-cost,2)+round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)),2)
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+where payterms='C＆I＆C'
+
+--(成本/(1-P)+F)/(1-I)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2) 
+where payterms='CIF'
+
+--(成本/(1-P)+F)/(1-I)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round((((cost/(1-(profit/100)))/(1-(insur/100)))/(1-(comm/100)))-(cost+round((cost/(1-(profit/100)))-cost,2)+round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)),2)
+,insurm=round(((cost/(1-(profit/100)))/(1-(insur/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+where payterms='CIF＆C'
+
+--成本/(1-P)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='EXW'
+
+--成本/(1-P)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2),commm=0,insurm=0 where payterms='FOB'
+
+--成本/(1-P)/(1-C)
+update #tmpa set profitm=round((cost/(1-(profit/100)))-cost,2)
+,commm=round(((cost/(1-(profit/100)))/(1-(comm/100)))-(cost+(round((cost/(1-(profit/100)))-cost,2))),2)
+,insurm=0 where payterms='FOB＆C'
+
+update #tmpa
+set profitm=round(profitm*mount,0),commm=round(commm*mount,0),insurm=round(insurm*mount,0)
+
+create table #tmp(
+	gno nvarchar(1), 
+	recno int,
+	agentno nvarchar(200),
+	comp nvarchar(200),
+	tit nvarchar(200), 
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float,
+	mount07 float,
+	mount08 float,
+	mount09 float,
+	mount10 float,
+	mount11 float,
+	mount12 float
+) 
+
+insert #tmp (gno,agentno,recno,tit)
+select '0',agentno,1,'數量' from #tmpa group by agentno
+union all
+select '0',agentno,2,'銷收金額' from #tmpa group by agentno
+union all
+select '0',agentno,3,'平均單價' from #tmpa group by agentno
+union all
+select '0',agentno,4,'佣金%' from #tmpa group by agentno
+union all
+select '0',agentno,5,'佣金' from #tmpa group by agentno
+union all
+select '0',agentno,6,'毛利%' from #tmpa group by agentno
+union all
+select '0',agentno,7,'毛利' from #tmpa group by agentno
+
+declare @moncount int
+set @moncount=1
+declare @t_mons nvarchar(10)
+declare @t_n nvarchar(10)
+
+while(@moncount<=12)
+begin
+	set @t_mons=@t_year+'/'+right('0'+cast(@moncount as nvarchar(10)),2)	
+	set @t_n=right('0'+cast(@moncount as nvarchar(10)),2)
+	
+	EXEC("
+		update a
+		set mount"+@t_n+" = case 
+		when recno=1 then b.mount 
+		when recno=2 then b.total
+		when recno=3 then case when b.mount!=0 then round(b.total/b.mount,2) else 0 end
+		when recno=4 then case when b.commc!=0 then round(b.comm/b.commc,2) else 0 end
+		when recno=5 then b.commm
+		when recno=6 then case when b.profitc!=0 then round(b.profit/b.profitc,2) else 0 end
+		when recno=7 then b.profitm else 0 end
+		from #tmp a outer apply (select sum(mount)mount,sum(cost)cost,sum(total)total
+		,sum(profit)profit,sum(profitm)profitm,sum(case when profitm!=0 then 1 else 0 end)profitc
+		,sum(comm)comm,sum(commm)commm,sum(case when commm!=0 then 1 else 0 end)commc
+		,sum(insur)insur,sum(insurm)insurm,sum(case when insurm!=0 then 1 else 0 end)insurc
+		from #tmpa where agentno=a.agentno and mon='"+@t_mons+"')b
+	")
+	set @moncount=@moncount+1
+end
+
+update a 
+set comp=b.comp
+from #tmp a left join cust b on a.agentno=b.noa
+
+insert #tmp (gno,recno,agentno)
+select '1',8,agentno from #tmp group by agentno
+
+select 
+dbo.getComma(isnull(mount01,0),-1)mount01,
+dbo.getComma(isnull(mount02,0),-1)mount02,
+dbo.getComma(isnull(mount03,0),-1)mount03,
+dbo.getComma(isnull(mount04,0),-1)mount04,
+dbo.getComma(isnull(mount05,0),-1)mount05,
+dbo.getComma(isnull(mount06,0),-1)mount06,
+dbo.getComma(isnull(mount07,0),-1)mount07,
+dbo.getComma(isnull(mount08,0),-1)mount08,
+dbo.getComma(isnull(mount09,0),-1)mount09,
+dbo.getComma(isnull(mount10,0),-1)mount10,
+dbo.getComma(isnull(mount11,0),-1)mount11,
+dbo.getComma(isnull(mount12,0),-1)mount12,
+* from #tmp order by agentno,gno,recno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+;
+--****************************************************************************************************
+z_orde_r05:--z_orde_r05
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_order nvarchar(50)
+
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_order = case when '#non' = [22] then '' else [22] end
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salgrp nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	custorde nvarchar(50),
+	mount float,
+	vmount float,
+	umount float,
+	datea nvarchar(50),
+	week nvarchar(50),
+	mon nvarchar(50),
+	cldate nvarchar(50),
+	vcceno nvarchar(50),
+	odate nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(250),
+	spec nvarchar(100),
+	trantype nvarchar(50),
+	ordcno nvarchar(50),
+	rc2no nvarchar(50),
+	pmount float,
+	pweight float,
+	pgweight float,
+	pcuft float,
+	tmount float,
+	tweight float,
+	tgweight float,
+	tcuft float,
+	memo nvarchar(MAX),
+	cubno nvarchar(100)
+) 
+insert @result
+select '0',a.noa,b.no2,a.custno,a.comp,a.salesno,a.sales,c.salesgroup
+,a.agentno,a.agent,a.custorde,b.mount
+,ISNULL((select SUM(mount) from view_vccs where ordeno=a.noa and no2=b.no2),0)
+,b.mount-ISNULL((select SUM(mount) from view_vccs where ordeno=a.noa and no2=b.no2),0)
+,b.datea,DATEPART(ISO_WEEK,case when len(b.datea)=9 then dbo.ChineseEraName2AD(b.datea) else b.datea end)
+,a.mon,isnull((select top 1 vb.cldate from view_vcces va left join boaj vb on va.noa=vb.noa where va.ordeno=a.noa and va.no2=b.no2),'')
+,isnull((select top 1 va.noa from view_vcces va where va.ordeno=a.noa and va.no2=b.no2),'')
+,a.odate,b.productno,b.product,b.spec,a.trantype
+,isnull((select top 1 db.noa from view_ordbs da left join view_ordcs db on da.noa=db.ordbno and da.no3=db.no3 where da.ordeno=a.noa and da.no2=b.no2),'')
+,isnull((select top 1 dc.noa from view_ordbs da left join view_ordcs db on da.noa=db.ordbno and da.no3=db.no3 left join view_rc2s dc on db.noa=dc.ordeno and db.no2=dc.no2 where da.ordeno=a.noa and da.no2=b.no2),'')
+,d.inmount*d.outmount,d.weight,d.gweight,d.cuft
+,ceiling(b.mount/nullif((d.inmount*d.outmount),0))
+,d.uweight*b.mount/nullif((d.inmount*d.outmount),0)
+,(floor(b.mount/nullif((d.inmount*d.outmount),0))*d.gweight) --整箱 --散裝
++(b.mount-(floor(b.mount/nullif((d.inmount*d.outmount),0))*(d.inmount*d.outmount)))*d.uweight --散裝淨重
++case when (b.mount-(floor(b.mount/nullif((d.inmount*d.outmount),0))*(d.inmount*d.outmount)))>0 then d.outweight else 0 end --外包裝重
++case when (b.mount-(floor(b.mount/nullif((d.inmount*d.outmount),0))*(d.inmount*d.outmount)))>0 then ceiling((b.mount-(floor(b.mount/nullif((d.inmount*d.outmount),0))*(d.inmount*d.outmount)))/d.inmount)*d.inweight else 0 end --內包裝重
+,ceiling(b.mount/nullif((d.inmount*d.outmount),0))*d.cuft
+,b.memo,isnull((select top 1 noa from view_cub where productno=b.productno),'')
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join sss c on a.salesno=c.noa
+left join pack2s d on b.productno=d.noa and b.packwayno=d.packway
+where a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+and b.productno between @t_bpno and @t_epno
+and a.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+and (a.stype='3' or a.stype='4')
+
+if(@t_order='odate')
+begin
+	select 
+	dbo.getComma(mount,-1)mount,
+	dbo.getComma(vmount,-1)vmount,
+	dbo.getComma(umount,-1)umount,
+	dbo.getComma(pmount,-1)pmount,
+	dbo.getComma(pweight,-1)pweight,
+	dbo.getComma(pgweight,-1)pgweight,
+	dbo.getComma(pcuft,-1)pcuft,
+	dbo.getComma(tmount,-1)tmount,
+	dbo.getComma(tweight,-1)tweight,
+	dbo.getComma(tgweight,-1)tgweight,
+	dbo.getComma(tcuft,-1)tcuft,
+	* from @result order by odate,ordeno,no2
+end
+else if(@t_order='unvcc')
+begin
+	select 
+	dbo.getComma(mount,-1)mount,
+	dbo.getComma(vmount,-1)vmount,
+	dbo.getComma(umount,-1)umount,
+	dbo.getComma(pmount,-1)pmount,
+	dbo.getComma(pweight,-1)pweight,
+	dbo.getComma(pgweight,-1)pgweight,
+	dbo.getComma(pcuft,-1)pcuft,
+	dbo.getComma(tmount,-1)tmount,
+	dbo.getComma(tweight,-1)tweight,
+	dbo.getComma(tgweight,-1)tgweight,
+	dbo.getComma(tcuft,-1)tcuft,
+	dbo.getComma(vmount,-1)xvmount,
+	* from @result order by xvmount,odate,ordeno,no2
+end
+else
+begin
+	select 
+	dbo.getComma(mount,-1)mount,
+	dbo.getComma(vmount,-1)vmount,
+	dbo.getComma(umount,-1)umount,
+	dbo.getComma(pmount,-1)pmount,
+	dbo.getComma(pweight,-1)pweight,
+	dbo.getComma(pgweight,-1)pgweight,
+	dbo.getComma(pcuft,-1)pcuft,
+	dbo.getComma(tmount,-1)tmount,
+	dbo.getComma(tweight,-1)tweight,
+	dbo.getComma(tgweight,-1)tgweight,
+	dbo.getComma(tcuft,-1)tcuft,
+	* from @result order by custno,odate,ordeno,no2
+end
+;
+--****************************************************************************************************
+z_orde_r06:--z_orde_r06
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bmon nvarchar(10) 
+declare @t_emon nvarchar(10) 
+declare @t_bweek nvarchar(10) 
+declare @t_eweek nvarchar(10) 
+declare @t_year nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bfact nvarchar(100) 
+declare @t_efact nvarchar(100)
+declare @t_groupano nvarchar(100)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bmon = case when '#non' = [6] then '' else [6] end
+set @t_emon = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bweek = case when '#non' = [8] then '' else [8] end
+set @t_eweek = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_year = case when '#non' = [10] then '' else [10] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bfact = case when '#non' = [17] then '' else [17] end
+set @t_efact = case when '#non' = [18] then CHAR(255) else [18] end
+set @t_groupano = case when '#non' = [28] then '' else [28] end
+
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @now_date=replace(dbo.ChineseEraName2AD(@now_date),'-','/')
+	set @t_lenm='7'
+end 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+
+--周數
+create table #tmp(
+	week01 nvarchar(10),bdate01 nvarchar(10),edate01 nvarchar(10),
+	week02 nvarchar(10),bdate02 nvarchar(10),edate02 nvarchar(10),
+	week03 nvarchar(10),bdate03 nvarchar(10),edate03 nvarchar(10),
+	week04 nvarchar(10),bdate04 nvarchar(10),edate04 nvarchar(10),
+	week05 nvarchar(10),bdate05 nvarchar(10),edate05 nvarchar(10),
+	week06 nvarchar(10),bdate06 nvarchar(10),edate06 nvarchar(10),
+	week07 nvarchar(10),bdate07 nvarchar(10),edate07 nvarchar(10),
+	week08 nvarchar(10),bdate08 nvarchar(10),edate08 nvarchar(10),
+	week09 nvarchar(10),bdate09 nvarchar(10),edate09 nvarchar(10)
+)
+--月份用
+if(@t_len='3')
+begin
+	if(len(@t_bmon)=0)
+		set @t_year=cast(left(@now_date,@t_len)as int)+1911
+	else
+		set @t_year=cast(left(@t_bmon,@t_len)as int)+1911
+end
+else 
+begin
+	if(len(@t_bmon)=0)
+		set @t_year=left(@now_date,@t_len)
+	else
+		set @t_year=left(@t_bmon,@t_len)
+end
+
+if(len(@t_bmon)=0)
+begin
+	set @t_bmon=@t_year+'/01'
+end
+
+if(@t_emon=CHAR(255))
+begin
+	set @t_emon=@t_year+'/12'
+end
+
+if(@t_len='3')
+begin
+	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,2)+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,2)+'/31')
+end
+else 
+begin
+	set @t_bweek=DATEPART(ISO_WEEK,@t_bmon+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_emon+'/31')
+end
+
+if(right(@t_bmon,2)='01' and @t_bweek!='1')
+	set @t_bweek='1'
+
+--周數用
+/*if(len(@t_bweek)=0)
+begin
+	set @t_bweek='1'
+end
+
+if(len(@t_year)=0)
+begin
+	set @t_year=left(@now_date,@t_len)
+end
+
+if(@t_len='3')
+begin
+	set @t_year=cast(CAST(@t_year as int)+1911 as nvarchar(10))
+end*/
+
+---------------------------------------------------------------
+declare @t_bdate nvarchar(10)='' --周別起始日
+declare @t_edate nvarchar(10)='' --周別迄止日
+declare @tt_bdate nvarchar(10)='' --暫存周別起始日
+declare @tt_edate nvarchar(10)='' --暫存周別迄止日
+declare @f_datea nvarchar(10)=@t_year+'-01-01' --1月1號
+declare @f_week int=DATEPART(ISO_WEEK,@f_datea) --1月1號 周別
+declare @x_week int =0
+
+while (@x_week=0 or @f_week=@x_week)
+begin
+	set @f_datea=dbo.q_cdn(@f_datea,1)
+	set @x_week=DATEPART(ISO_WEEK,@f_datea)
+end
+
+if(@t_len='3')
+begin
+	set @f_datea=dbo.AD2ChineseEraName(@f_datea)
+end
+
+set @t_bdate=dbo.q_cdn(@f_datea,(@t_bweek-@x_week)*7)
+set @t_edate=dbo.q_cdn(@t_bdate,6)
+
+set @tt_bdate=@t_bdate
+set @tt_edate=@t_edate
+------------------------------------------------
+declare @weekcount int=1
+declare @tmp_week nvarchar(10)=@t_bweek
+declare @tmp_weekcol1 nvarchar(50)
+declare @tmp_weekcol2 nvarchar(50)
+declare @tmp_weekcol3 nvarchar(50)
+while(cast(@tmp_week as int)<=cast(@t_eweek as int) and @weekcount<=9)
+begin
+	set @tmp_weekcol1='week'+right('00'+cast(@weekcount as nvarchar(10)),2)
+	set @tmp_weekcol2='bdate'+right('00'+cast(@weekcount as nvarchar(10)),2)
+	set @tmp_weekcol3='edate'+right('00'+cast(@weekcount as nvarchar(10)),2)
+		
+	if(@weekcount=1)
+		exec(" insert #tmp ("+@tmp_weekcol1+","+@tmp_weekcol2+","+@tmp_weekcol3+") 
+		select '"+@tmp_week+"','"+@t_bdate+"','"+@t_edate+"'")
+	else
+		exec(" update #tmp set "+@tmp_weekcol1+"='"+@tmp_week+"'
+		,"+@tmp_weekcol2+"='"+@t_bdate+"'
+		,"+@tmp_weekcol3+"='"+@t_edate+"'")
+	
+	set @tmp_week=cast(cast(@tmp_week as int)+1 as nvarchar(10))
+	set @t_bdate=dbo.q_cdn(@t_bdate,7)
+	set @t_edate=dbo.q_cdn(@t_edate,7)
+	
+	set @weekcount=@weekcount+1
+end
+
+create table #tmp2(
+	gno nvarchar(1), 
+	recno int,
+	tit nvarchar(200), 
+	mount01 float,
+	mount02 float,
+	mount03 float,
+	mount04 float,
+	mount05 float,
+	mount06 float,
+	mount07 float,
+	mount08 float,
+	mount09 float
+) 
+
+set @t_bdate=@tt_bdate
+set @t_edate=@tt_edate
+set @weekcount=1
+set @tmp_week=@t_bweek
+while(cast(@tmp_week as int)<=cast(@t_eweek as int) and @weekcount<=9)
+begin
+	set @tmp_weekcol1='mount'+right('00'+cast(@weekcount as nvarchar(10)),2)
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',1,'產能',sum(a.mount)mount
+	from supforecasts a left join supforecast b on a.noa=b.noa 
+	left join uca c on a.productno=c.noa
+	where a.datea between '"+@t_bdate+"' and '"+@t_edate+"'
+	and b.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	 ")
+
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',5,'已入庫量',sum(wb.mount)mount
+	from view_workb wa left join view_workbs wb on wa.noa=wb.noa left join uca c on wb.productno=c.noa
+	outer apply(select noa from view_ordes where noa+'-'+no2=wb.ordeno)d
+	outer apply(select custno,gdate factno from view_orde where noa=d.noa)e
+	where isnull(wb.ordeno,'')!='' and wa.datea between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(c.typea,'')='2' 
+	and e.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and e.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',6,'出貨量',sum(vb.mount)mount
+	from view_vcc va left join view_vccs vb on va.noa=vb.noa left join uca c on vb.productno=c.noa
+	outer apply(select noa from view_ordes where noa=vb.ordeno and no2=vb.no2)d
+	outer apply(select custno,gdate factno from view_orde where noa=d.noa)e
+	where va.datea between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(c.typea,'')='2' 
+	and e.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and e.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',8,'已完工量',sum(wb.mount)mount
+	from view_workb wa left join view_workbs wb on wa.noa=wb.noa left join uca c on wb.productno=c.noa
+	outer apply(select noa from view_ordes where noa+'-'+no2=wb.ordeno)d
+	outer apply(select custno,gdate factno from view_orde where noa=d.noa)e
+	where wa.datea between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(c.typea,'')='2'
+	and e.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and e.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',9,'未完工量',sum(isnull(wa.mount,0)-isnull(wa.inmount,0))mount
+	from view_work wa left join uca b on wa.productno=b.noa
+	outer apply(select noa from view_ordes where noa+'-'+no2=wa.ordeno)d
+	outer apply(select custno,gdate factno from view_orde where noa=d.noa)e
+	where wa.cuadate between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(b.typea,'')='2' --and wa.noa like 'W[0-9]%' 
+	and e.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and e.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(b.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+	
+	--105/05/25 用排產週
+	--a.odate between '"+@t_bdate+"' and '"+@t_edate+"' 
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',4,'訂單數量',sum(isnull(b.mount,0))mount
+	from view_orde a left join view_ordes b on a.noa=b.noa left join uca c on b.productno=c.noa
+	where a.date3='"+@tmp_week+"'
+	and isnull(c.typea,'')='2'  
+	and (a.stype='3' or a.stype='4')
+	and a.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and a.gdate between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',2,'製令數量',sum(isnull(wa.mount,0))mount
+	from view_work wa left join uca b on wa.productno=b.noa
+	outer apply(select noa from view_ordes where noa+'-'+no2=wa.ordeno)d
+	outer apply(select custno,gdate factno from view_orde where noa=d.noa)e
+	where wa.cuadate between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(b.typea,'')='2' --and wa.noa like 'W[0-9]%' 
+	and e.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and e.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(b.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+	
+	exec(" insert #tmp2 (gno,recno,tit,"+@tmp_weekcol1+") 
+	select '9',7,'訂單已入庫未出量',sum(wb.mount-isnull(d.mount,0))
+	from view_workb wa left join view_workbs wb on wa.noa=wb.noa left join uca c on wb.productno=c.noa
+	outer apply (select sum(mount)mount from view_vccs where ordeno+'-'+no2=isnull(wb.ordeno,''))d
+	outer apply(select noa from view_ordes where noa+'-'+no2=wb.ordeno)e
+	outer apply(select custno,gdate factno from view_orde where noa=e.noa)f
+	where isnull(wb.ordeno,'')!='' and wa.datea between '"+@t_bdate+"' and '"+@t_edate+"' and isnull(c.typea,'')='2' 
+	and f.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+	and f.factno between '"+@t_bfact+"' and '"+@t_efact+"'
+	and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+	")
+
+	set @tmp_week=cast(cast(@tmp_week as int)+1 as nvarchar(10))
+	set @t_bdate=dbo.q_cdn(@t_bdate,7)
+	set @t_edate=dbo.q_cdn(@t_edate,7)
+	set @weekcount=@weekcount+1
+end
+
+insert #tmp2
+select '0',recno,tit
+,SUM(mount01),SUM(mount02),SUM(mount03),SUM(mount04),SUM(mount05),SUM(mount06)
+,SUM(mount07),SUM(mount08),SUM(mount09)
+from #tmp2 group by recno,tit
+
+delete #tmp2 where gno='9'
+
+--插入不在的標題
+
+insert #tmp2(gno,recno,tit)
+select '0',1,'產能' from #tmp2 a
+where not exists (select * from #tmp2 where recno=1)
+
+insert #tmp2(gno,recno,tit)
+select '0',5,'已入庫量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=5)
+
+insert #tmp2(gno,recno,tit)
+select '0',6,'出貨量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=6)
+
+insert #tmp2(gno,recno,tit)
+select '0',8,'已完工量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=8)
+
+insert #tmp2(gno,recno,tit)
+select '0',9,'未完工量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=9)
+
+insert #tmp2(gno,recno,tit)
+select '0',4,'訂單數量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=4)
+
+insert #tmp2(gno,recno,tit)
+select '0',2,'製令數量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=2)
+
+insert #tmp2(gno,recno,tit)
+select '0',7,'訂單已入庫未出量' from #tmp2 a
+where not exists (select * from #tmp2 where recno=7)
+
+insert #tmp2(gno,recno,tit,mount01,mount02,mount03,mount04,mount05,mount06,mount07,mount08,mount09)
+select '0',3,'剩餘產能'
+,sum(case when recno=1 then 1 else -1 end*mount01)
+,sum(case when recno=1 then 1 else -1 end*mount02)
+,sum(case when recno=1 then 1 else -1 end*mount03)
+,sum(case when recno=1 then 1 else -1 end*mount04)
+,sum(case when recno=1 then 1 else -1 end*mount05)
+,sum(case when recno=1 then 1 else -1 end*mount06)
+,sum(case when recno=1 then 1 else -1 end*mount07)
+,sum(case when recno=1 then 1 else -1 end*mount08)
+,sum(case when recno=1 then 1 else -1 end*mount09)
+from #tmp2 a where recno=1 or recno=2
+
+insert #tmp2(gno,recno)
+select '1',0
+
+insert #tmp2(gno,recno)
+select '3',10
+
+select gno,recno,tit,
+dbo.getComma(mount01,-1)m01,
+dbo.getComma(mount02,-1)m02,
+dbo.getComma(mount03,-1)m03,
+dbo.getComma(mount04,-1)m04,
+dbo.getComma(mount05,-1)m05,
+dbo.getComma(mount06,-1)m06,
+dbo.getComma(mount07,-1)m07,
+dbo.getComma(mount08,-1)m08,
+dbo.getComma(mount09,-1)m09,
+case when len(week01)>0 then left(bdate01,@t_lenm)+'<BR>W' else '' end+week01 w01,
+case when len(week02)>0 then left(bdate02,@t_lenm)+'<BR>W' else '' end+week02 w02,
+case when len(week03)>0 then left(bdate03,@t_lenm)+'<BR>W' else '' end+week03 w03,
+case when len(week04)>0 then left(bdate04,@t_lenm)+'<BR>W' else '' end+week04 w04,
+case when len(week05)>0 then left(bdate05,@t_lenm)+'<BR>W' else '' end+week05 w05,
+case when len(week06)>0 then left(bdate06,@t_lenm)+'<BR>W' else '' end+week06 w06,
+case when len(week07)>0 then left(bdate07,@t_lenm)+'<BR>W' else '' end+week07 w07,
+case when len(week08)>0 then left(bdate08,@t_lenm)+'<BR>W' else '' end+week08 w08,
+case when len(week09)>0 then left(bdate09,@t_lenm)+'<BR>W' else '' end+week09 w09
+from #tmp2,#tmp order by recno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+IF OBJECT_ID('tempdb..#tmp2')is not null
+BEGIN
+	set @cmd = 'drop table #tmp2'
+	EXECUTE sp_executesql @cmd
+END
+;
+--****************************************************************************************************
+z_orde_r07:--z_orde_r07
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_order nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_order = case when '#non' = [23] then '' else [23] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	noa nvarchar(50),
+	noq nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	mon nvarchar(50),
+	datea nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salgrp nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	invono nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(250),
+	mount float,
+	total float,
+	paytype nvarchar(100),
+	pdate nvarchar(50),
+	udate nvarchar(50),
+	umoney float,
+	unmoney float,
+	memo nvarchar(MAX)
+) 
+insert @result
+select '0',a.noa,b.no2,a.custno,a.comp,left(a.odate,@t_lenm),a.odate,a.salesno,a.sales,c.salesgroup
+,a.agentno,a.agent,(select top 1 noa from invo where ordeno=a.noa)
+,b.productno,b.product,b.mount,b.total,a.paytype
+,case when patindex('%[0-9]%',a.paytype) > 0 then SUBSTRING(SUBSTRING(a.paytype,patindex('%[0-9]%',a.paytype),len(a.paytype)),0,8)else '' end
+,f.datea
+,round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
+,b.total-round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
+,b.memo
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join sss c on a.salesno=c.noa
+left join cust d on a.custno=d.noa
+left join view_ordei e on a.noa=e.noa 
+outer apply (select MIN(datea)datea,SUM(money)money from lcv where lcno=e.lcno)f
+where a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+and b.productno between @t_bpno and @t_epno
+and a.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+and isnull(b.total,0)!=0 and (a.stype='3' or a.stype='4')
+
+update @result
+set pdate=case when charindex('天',pdate)>0 then LEFT(pdate,patindex('%[^0-9]%',pdate)-1)
+when charindex('月',pdate)>0 then cast(LEFT(pdate,patindex('%[^0-9]%',pdate)-1) as int)*30
+else '' end
+
+update @result
+set pdate=dbo.q_cdn(datea,CAST(pdate as int))
+
+if(@t_order='sales')
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	dbo.getComma(total,-1) total,
+	dbo.getComma(umoney,-1) umoney,
+	dbo.getComma(unmoney,-1) unmoney,
+	* 	from @result order by salesno,datea,noa,noq
+end
+else if(@t_order='custno')
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	dbo.getComma(total,-1) total,
+	dbo.getComma(umoney,-1) umoney,
+	dbo.getComma(unmoney,-1) unmoney,
+	* 	from @result order by custno,datea,noa,noq
+end
+else if(@t_order='pno')
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	dbo.getComma(total,-1) total,
+	dbo.getComma(umoney,-1) umoney,
+	dbo.getComma(unmoney,-1) unmoney,
+	* 	from @result order by pno,datea,noa,noq
+end
+else
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	dbo.getComma(total,-1) total,
+	dbo.getComma(umoney,-1) umoney,
+	dbo.getComma(unmoney,-1) unmoney,
+	* 	from @result order by salgrp,salesno,datea,noa,noq
+end
+;
+--****************************************************************************************************
+z_orde_r08:--z_orde_r08
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_order nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_order = case when '#non' = [23] then '' else [23] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	pageno int,
+	rr int,
+	noa nvarchar(50),
+	noq nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	mon nvarchar(50),
+	datea nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salgrp nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	invono nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(250),
+	mount float,
+	total float,
+	paytype nvarchar(100),
+	pdate nvarchar(50),
+	udate nvarchar(50),
+	umoney float,
+	unmoney float,
+	memo nvarchar(MAX)
+) 
+
+insert @result
+select '0',0,0,a.noa,b.no2,a.custno,a.comp,a.mon,a.odate,a.salesno,a.sales,c.salesgroup
+,a.agentno,a.agent,(select top 1 noa from invo where ordeno=a.noa)
+,b.productno,b.product,b.mount,b.total,a.paytype
+,case when patindex('%[0-9]%',a.paytype) > 0 then SUBSTRING(SUBSTRING(a.paytype,patindex('%[0-9]%',a.paytype),len(a.paytype)),0,8)else '' end
+,f.datea
+,round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
+,b.total-round(isnull(f.money,0)*(b.total/case when a.taxtype='3' then a.total else a.money end),2)
+,b.memo
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join sss c on a.salesno=c.noa
+left join cust d on a.custno=d.noa
+left join view_ordei e on a.noa=e.noa 
+outer apply (select MIN(datea)datea,SUM(money)money from lcv where lcno=e.lcno)f
+where a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+and b.productno between @t_bpno and @t_epno
+and a.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+and isnull(b.total,0)!=0 and (a.stype='3' or a.stype='4')
+
+update @result
+set pdate=case when charindex('天',pdate)>0 then LEFT(pdate,patindex('%[^0-9]%',pdate)-1)
+when charindex('月',pdate)>0 then cast(LEFT(pdate,patindex('%[^0-9]%',pdate)-1) as int)*30
+else '' end
+
+declare @t_pageline int=40
+
+if(@t_order='sales')
+begin
+	insert @result(gno,rr,salesno,sales,total,umoney,unmoney)
+	select '4',ROW_NUMBER()over (order by salesno,sales),salesno,sales
+	,SUM(total),SUM(umoney),SUM(unmoney)
+	from @result group by salesno,sales
+end
+else if(@t_order='custno')
+begin
+	insert @result(gno,rr,custno,comp,total,umoney,unmoney)
+	select '6',ROW_NUMBER()over (order by custno,comp),custno,comp
+	,SUM(total),SUM(umoney),SUM(unmoney)
+	from @result group by custno,comp
+end
+else if(@t_order='pno')
+begin
+	insert @result(gno,rr,pno,product,mount,total,umoney,unmoney)
+	select '8',ROW_NUMBER()over (order by pno,product),pno,product
+	,SUM(mount),SUM(total),SUM(umoney),SUM(unmoney)
+	from @result group by pno,product
+end
+else
+begin
+	insert @result(gno,rr,salgrp,total,umoney,unmoney)
+	select '2',ROW_NUMBER()over (order by salgrp),salgrp
+	,SUM(total),SUM(umoney),SUM(unmoney)
+	from @result group by salgrp
+end
+
+delete @result where gno='0'
+
+update @result set pageno=ceiling(cast(rr as float)/@t_pageline)
+
+insert @result(gno,pageno,rr)
+select cast(gno as int)-1 ,pageno,MIN(rr) from @result group by gno,pageno
+
+insert @result(gno,pageno,rr)
+select '9',pageno,MAX(rr) from @result group by pageno
+
+select 
+dbo.getComma(mount,-1) mount,
+dbo.getComma(total,-1) total,
+dbo.getComma(umoney,-1) umoney,
+dbo.getComma(unmoney,-1) unmoney,
+* from @result order by pageno,gno,rr
+;
+--****************************************************************************************************
+z_orde_r09:--z_orde_r09
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+declare @t_bfact nvarchar(100) 
+declare @t_efact nvarchar(100)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_order nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+set @t_bfact = case when '#non' = [17] then '' else [17] end
+set @t_efact = case when '#non' = [18] then CHAR(255) else [18] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_order = case when '#non' = [24] then '' else [24] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	factno nvarchar(50),
+	fact nvarchar(100),
+	datea nvarchar(50),
+	workbno nvarchar(50),
+	noq nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salgrp nvarchar(50),
+	ordeno nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	agentno nvarchar(50),
+	agent nvarchar(200),
+	workno nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(250),
+	mount float,
+	memo nvarchar(MAX)
+) 
+insert @result
+select '0',g.factno,g.fact,a.datea,a.noa,b.noq,c.salesno,c.sales,d.salesgroup
+,c.noa,c.custno,c.comp,c.agentno,c.agent,b.workno,b.productno,b.product,b.mount,b.memo
+from view_workb a left join view_workbs b on a.noa=b.noa
+left join view_orde c on b.ordeno like c.noa+'%'
+left join sss d on c.salesno=d.noa
+left join view_work f on b.workno=f.noa
+left join view_workg g on f.cuano=g.noa
+left join uca h on b.productno=h.noa
+where a.datea between @t_bdate and @t_edate
+and c.custno between @t_bcust and @t_ecust
+and b.productno between @t_bpno and @t_epno
+and c.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or d.salesgroup=@t_salgrp)
+and isnull(h.noa,'')!='' and isnull(h.typea,'')='2'  and (c.stype='3' or c.stype='4')
+
+if(@t_order='custno')
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	* 	from @result order by custno,datea,workbno,noq
+end
+else if(@t_order='salgrp')
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	* 	from @result order by salgrp,datea,workbno,noq
+end
+else if(@t_order='sales')
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	* 	from @result order by salesno,datea,workbno,noq
+end
+else
+begin
+	select 
+	dbo.getComma(mount,-1) mount,
+	* 	from @result order by factno,datea,workbno,noq
+end
+;
+--****************************************************************************************************
+z_orde_r10:--z_orde_r10
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bpno nvarchar(100) 
+declare @t_epno nvarchar(100)
+declare @t_bfact nvarchar(100) 
+declare @t_efact nvarchar(100)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_order nvarchar(50)
+declare @t_groupano nvarchar(100)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bpno = case when '#non' = [15] then '' else [15] end
+set @t_epno = case when '#non' = [16] then CHAR(255) else [16] end
+set @t_bfact = case when '#non' = [17] then '' else [17] end
+set @t_efact = case when '#non' = [18] then CHAR(255) else [18] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_order = case when '#non' = [24] then '' else [24] end
+set @t_groupano = case when '#non' = [28] then '' else [28] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	pageno int,
+	rr int,
+	factno nvarchar(50),
+	fact nvarchar(100),
+	datea nvarchar(50),
+	workbno nvarchar(50),
+	noq nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salgrp nvarchar(50),
+	ordeno nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	workno nvarchar(50),
+	pno nvarchar(50),
+	product nvarchar(250),
+	mount float,
+	memo nvarchar(MAX)
+) 
+
+insert @result
+select '0',0,0,g.factno,g.fact,a.datea,a.noa,b.noq,c.salesno,c.sales,d.salesgroup
+,c.noa,c.custno,c.comp,b.workno,b.productno,b.product,b.mount,b.memo
+from view_workb a left join view_workbs b on a.noa=b.noa
+left join view_orde c on b.ordeno like c.noa+'%'
+left join sss d on c.salesno=d.noa
+left join view_work f on b.workno=f.noa
+left join view_workg g on f.cuano=g.noa
+left join uca h on b.productno=h.noa
+where a.datea between @t_bdate and @t_edate
+and c.custno between @t_bcust and @t_ecust
+and b.productno between @t_bpno and @t_epno
+and c.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or d.salesgroup=@t_salgrp)
+and isnull(h.noa,'')!='' and isnull(h.typea,'')='2'  and (c.stype='3' or c.stype='4')
+and (isnull(h.groupano,'')=@t_groupano or len(@t_groupano)=0)
+
+declare @t_pageline int=40
+
+if(@t_order='custno')
+begin
+	insert @result(gno,rr,custno,comp,mount)
+	select '4',ROW_NUMBER()over (order by custno,comp),custno,comp,SUM(mount)
+	from @result group by custno,comp
+end
+else if(@t_order='salgrp')
+begin
+	insert @result(gno,rr,salgrp,mount)
+	select '6',ROW_NUMBER()over (order by salgrp),salgrp,SUM(mount)
+	from @result group by salgrp
+	
+end
+else if(@t_order='sales')
+begin
+	insert @result(gno,rr,salesno,sales,mount)
+	select '8',ROW_NUMBER()over (order by salesno,sales),salesno,sales,SUM(mount)
+	from @result group by salesno,sales
+end
+else
+begin
+	insert @result(gno,rr,factno,fact,mount)
+	select '2',ROW_NUMBER()over (order by factno,fact),factno,fact,SUM(mount)
+	from @result group by factno,fact
+end
+
+delete @result where gno='0'
+
+update @result set pageno=ceiling(cast(rr as float)/@t_pageline)
+
+insert @result(gno,pageno,rr)
+select cast(gno as int)-1 ,pageno,MIN(rr) from @result group by gno,pageno
+
+insert @result(gno,pageno,rr)
+select '9',pageno,MAX(rr) from @result group by pageno
+
+select 
+dbo.getComma(mount,-1) mount,
+* from @result order by pageno,gno,rr
+;
+--****************************************************************************************************
+z_orde_r11:--z_orde_r11
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bagent = case when '#non' = [13] then '' else [13] end
+set @t_eagent = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	ordeno nvarchar(50),
+	years nvarchar(50),
+	mon nvarchar(100),
+	salgrp nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	datea nvarchar(50),
+	invo nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	total float,
+	paytype nvarchar(100),
+	indate nvarchar(50),
+	cldate nvarchar(50),
+	payed float,
+	unpay float,
+	memo nvarchar(MAX)
+) 
+
+insert @result
+select '0',a.noa,left(a.odate,@t_len),RIGHT(LEFT(a.odate,@t_lenm),2)
+,d.salesgroup,a.salesno,a.sales,a.agentno,a.agent,a.odate,e.noa,a.custno,a.comp
+,a.total,a.paytype,c.edate,g.cldate
+,isnull((select SUM(money) from lcv where lcno=c.lcno),0) 
+,a.total-isnull((select SUM(money) from lcv where lcno=c.lcno),0) ,''
+from view_orde a left join view_ordei b on a.noa=b.noa 
+left join lcu c on b.lcno=c.lcno
+left join sss d on a.salesno=d.noa
+outer apply (select top 1 noa from invo where ordeno=a.noa)e
+outer apply (select top 1 noa from view_vcces where ordeno=a.noa)f 
+outer apply (select top 1 cldate from boaj where noa=f.noa)g 
+where (a.stype='3' or a.stype='4')
+and a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+and isnull(a.agentno,'') between @t_bagent and @t_eagent
+and a.salesno between @t_bsales and @t_esales
+and (len(@t_salgrp)=0 or d.salesgroup=@t_salgrp)
+
+select 
+dbo.getComma(total,-1) total,
+dbo.getComma(payed,-1) payed,
+dbo.getComma(unpay,-1) unpay,
+* from @result order by salgrp,datea,invo
+;
+--****************************************************************************************************
+z_orde_r12:--z_orde_r12
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_byear nvarchar(10) 
+declare @t_eyear nvarchar(10) 
+declare @t_show nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_byear = case when '#non' = [25] then '' else [25] end
+set @t_eyear = case when '#non' = [26] then CHAR(255) else [26] end
+set @t_show = case when '#non' = [27] then '' else [27] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+create table #tmp(
+	gno nvarchar(10),
+	tit nvarchar(100),
+	years nvarchar(10),
+	m01 float,
+	m02 float,
+	m03 float,
+	m04 float,
+	m05 float,
+	m06 float,
+	m07 float,
+	m08 float,
+	m09 float,
+	m10 float,
+	m11 float,
+	m12 float,
+	total float
+)
+
+if(len(@t_byear)!=@t_len and LEN(@t_eyear)!=@t_len)
+begin
+	if(@t_len=3)
+		set @t_eyear=LEFT(dbo.AD2ChineseEraName(CONVERT (nvarchar(10),GETDATE(),20)),@t_len)
+	else
+		set @t_eyear=LEFT(CONVERT (nvarchar(10),GETDATE(),20),@t_len)
+		
+	set @t_byear=right('0000'+CAST(CAST(@t_eyear as int)-5 as nvarchar(10)),@t_len)
+end
+else if (LEN(@t_eyear)!=@t_len)
+begin
+	set @t_eyear=right('0000'+CAST(CAST(@t_byear as int)+5 as nvarchar(10)),@t_len)
+end
+else if (LEN(@t_byear)!=@t_len)
+begin
+	set @t_byear=right('0000'+CAST(CAST(@t_eyear as int)-5 as nvarchar(10)),@t_len)
+end
+
+declare @t_showtxt nvarchar(10)=case when @t_show='mount' then '數量' when @t_show='profit' then 'PF' else '金額' end
+
+declare @t_year nvarchar(10)=@t_byear
+declare @t_edyear nvarchar(10)
+declare @t_mon int=1 
+declare @t_moncol nvarchar(10)
+declare @t_montcol nvarchar(100)
+declare @t_pyear nvarchar(10)
+declare @t_count int=1 
+
+while(@t_year<=@t_eyear and @t_count<=10)
+begin
+	set @t_mon=1
+	set @t_pyear=right('0000'+CAST(CAST(@t_year as int)-1 as nvarchar(10)),@t_len)
+	
+	insert #tmp(gno,tit,years)
+	select '0',@t_year,@t_year
+	
+	if(@t_count>1)
+	begin
+		insert #tmp(gno,tit,years)
+		select '1',"月同期比"+right(@t_year,2)+"'與"+right(@t_pyear,2)+"'",@t_year
+		
+		insert #tmp(gno,tit,years)
+		select '2',right(@t_year,2)+"'累積出貨"+@t_showtxt,@t_year
+		
+		if(@t_count>2)
+		begin
+			insert #tmp(gno,tit,years)
+			select '3',"累積同期比("+@t_year+"-"+@t_pyear+")",@t_year
+		end
+	end
+	
+	set @t_montcol='0'
+	
+	while (@t_mon<=12)
+	begin
+		set @t_moncol=right('00'+CAST(@t_mon as nvarchar(10)),2)
+		set @t_montcol=@t_montcol+"+m"+@t_moncol
+		
+		if(@t_show='mount')
+		begin
+			EXEC("update #tmp
+			set m"+@t_moncol+"=isnull((select SUM(b.mount) 
+			from view_orde a left join view_ordes b on a.noa=b.noa where (a.stype='3' or a.stype='4')
+			and left(a.odate,"+@t_lenm+")='"+@t_year+"/"+@t_moncol+"'),0)
+			where gno='0' and years='"+@t_year+"' ")
+		end
+		else if(@t_show='profit')
+		begin
+			EXEC("update #tmp
+			set m"+@t_moncol+"=isnull((select SUM(b.benifit) 
+			from view_orde a left join view_ordes b on a.noa=b.noa where (a.stype='3' or a.stype='4')
+			and left(a.odate,"+@t_lenm+")='"+@t_year+"/"+@t_moncol+"'),0)
+			where gno='0' and years='"+@t_year+"' ")
+		end
+		else
+		begin
+			EXEC("update #tmp
+			set m"+@t_moncol+"=isnull((select SUM(total) 
+			from view_orde where (stype='3' or stype='4')
+			and left(odate,"+@t_lenm+")='"+@t_year+"/"+@t_moncol+"'),0)
+			where gno='0' and years='"+@t_year+"' ")
+		end
+		
+		if(@t_count>1)
+		begin
+		
+			EXEC("update a
+			set m"+@t_moncol+"=case when c.money=0 then 0 else round((b.money-c.money)/c.money*100,0) end
+			from #tmp a
+			outer apply (select m"+@t_moncol+" money from #tmp where gno='0' and years='"+@t_year+"') b
+			outer apply (select m"+@t_moncol+" money from #tmp where gno='0' and years='"+@t_pyear+"') c
+			where gno='1' and years='"+@t_year+"'")
+			
+			EXEC("update a
+			set m"+@t_moncol+"=b.money
+			from #tmp a
+			outer apply (select "+@t_montcol+" money from #tmp where gno='0' and years='"+@t_year+"') b
+			where gno='2' and years='"+@t_year+"'")
+			
+			if(@t_count>2)
+			begin
+				EXEC("update a
+				set m"+@t_moncol+"=b.money-c.money
+				from #tmp a
+				outer apply (select m"+@t_moncol+" money from #tmp where gno='2' and years='"+@t_year+"') b
+				outer apply (select m"+@t_moncol+" money from #tmp where gno='2' and years='"+@t_pyear+"') c
+				where gno='3' and years='"+@t_year+"'")
+			end
+		end
+		
+		set @t_mon=@t_mon+1
+	end
+	
+	update #tmp 
+	set total=m01+m02+m03+m04+m05+m06+m07+m08+m09+m10+m11+m12
+	where gno='0' and years=@t_year
+	
+	if(@t_count>1)
+	begin
+		update a
+		set total=case when c.money=0 then 0 else round((b.money-c.money)/c.money*100,0) end
+		from #tmp a
+		outer apply (select total money from #tmp where gno='0' and years=@t_year) b
+		outer apply (select total money from #tmp where gno='0' and years=@t_pyear) c
+		where gno='1' and years=@t_year
+		
+		update #tmp set total=m12 where gno='2' and years=@t_year
+		
+		if(@t_count>2)
+		begin
+			update a
+			set total=b.money-c.money
+			from #tmp a
+			outer apply (select total money from #tmp where gno='2' and years=@t_year) b
+			outer apply (select total money from #tmp where gno='2' and years=@t_pyear) c
+			where gno='3' and years=@t_year
+		end
+	end
+	
+	set @t_edyear=@t_year
+	set @t_year=right('0000'+CAST(CAST(@t_year as int)+1 as nvarchar(10)),@t_len)
+	set @t_count=@t_count+1
+end
+
+insert #tmp(gno,tit,years)
+select '4',"累積"+@t_showtxt+"成長/衰退",''
+
+set @t_mon=1
+while (@t_mon<=12)
+begin
+	set @t_moncol=right('00'+CAST(@t_mon as nvarchar(10)),2)
+	set @t_montcol=@t_montcol+"+M"+@t_moncol
+	
+	EXEC("update a
+	set m"+@t_moncol+"=case when c.money=0 then 0 else b.money/c.money*100 end
+	from #tmp a
+	outer apply (select m"+@t_moncol+" money from #tmp where gno='3' and years='"+@t_edyear+"') b
+	outer apply (select m"+@t_moncol+" money from #tmp where gno='2' and years='"+@t_edyear+"') c
+	where gno='4' ")
+	
+	set @t_mon=@t_mon+1
+end
+
+update a
+set total=case when c.money=0 then 0 else b.money/c.money*100 end
+from #tmp a
+outer apply (select total money from #tmp where gno='3' and years=@t_edyear) b
+outer apply (select total money from #tmp where gno='2' and years=@t_edyear) c
+where gno='4'
+
+select 
+dbo.getComma(m01,-1) m01,
+dbo.getComma(m02,-1) m02,
+dbo.getComma(m03,-1) m03,
+dbo.getComma(m04,-1) m04,
+dbo.getComma(m05,-1) m05,
+dbo.getComma(m06,-1) m06,
+dbo.getComma(m07,-1) m07,
+dbo.getComma(m08,-1) m08,
+dbo.getComma(m09,-1) m09,
+dbo.getComma(m10,-1) m10,
+dbo.getComma(m11,-1) m11,
+dbo.getComma(m12,-1) m12,
+dbo.getComma(total,-1) total,
+* from #tmp order by gno,years
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
+--****************************************************************************************************
+z_orde_r13:--z_orde_r13
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	noa nvarchar(50),
+	no2 nvarchar(50),
+	odate nvarchar(50),
+	datea nvarchar(50),
+	mon nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	agentno nvarchar(50),
+	agent nvarchar(200),
+	
+	pno nvarchar(100),
+	product nvarchar(300),  
+	custpno nvarchar(100), --客戶產品編號
+	ucano nvarchar(100), --件號
+	payterms nvarchar(100),--交易條件
+	oprice float, --訂單單價
+	price1 float, --FOB
+	price2 float, --FOB&C
+	total float,--小計 應付帳款
+	ptotal1 float,--FOB 小計
+	ptotal2 float,--FOB&C 小計
+	mount float,--數量
+	cost float,--成本 採購單價
+	ctotal float ,--成本小計
+	profitp float,--PF%
+	profitm float,--PF金額
+	commission float, --佣金 %
+	commmoney float--應付佣金
+) 
+
+insert @result
+select '0',a.noa,b.no2,a.odate,b.datea,'',a.custno,a.comp,a.agentno,a.agent
+,b.productno,b.product
+,isnull((select productno from ucccust where custno=a.custno and noa=b.productno),'')
+,isnull((select case when len(ucano)>0 then ucano else uccno end from ucx where noa=b.productno),'')
+,isnull(b.payterms,''),isnull(b.price,0),0,0,b.total,0,0,isnull(b.mount,0)
+,isnull(b.sprice,0),isnull(b.mount,0)*isnull(b.sprice,0),isnull(b.profit,0),0,isnull(b.commission,0),0
+from view_orde a left join view_ordes b on a.noa=b.noa
+where isnull(b.payterms,'')!=''
+and isnull(a.odate,'') between @t_bdate and @t_edate
+and isnull(a.custno,'') between @t_bcust and @t_ecust
+
+update @result
+set price1=round(case when payterms='FOB' then oprice else case when (1.00-(profitp/100))=0 then 0 else cost/(1.00-(profitp/100)) end end,3)
+,price2=case when payterms='FOB＆C' then oprice else 0 end
+
+update @result
+set price2=round(case when (1.00-(commission/100))=0 then 0 else price1/(1.00-(commission/100)) end,3)
+where payterms!='FOB＆C'
+
+update @result
+set ptotal1=round(price1*mount,3),ptotal2=round(price2*mount,3)
+,profitm=round((price1*mount)-(cost*mount),3)
+,commmoney=round((price2*mount)-(price1*mount),3)
+
+update a
+set datea=b.datea,mon=RIGHT(LEFT(b.datea,@t_lenm),2)
+from @result a
+outer apply (select MAX(datea)datea from @result where noa=a.noa) b
+
+insert @result (gno,noa,odate,datea,mon,custno,comp,agentno,agent,ptotal1,ptotal2,mount)
+select '1',noa,odate,datea,mon,custno,comp,agentno,agent,sum(ptotal1),sum(ptotal2),sum(mount)
+from @result where gno='0'
+group by noa,odate,datea,mon,custno,comp,agentno,agent
+
+insert @result (gno,noa,odate,datea,mon,custno,comp,agentno,agent,profitp,profitm,commmoney,ctotal)
+select '2',noa,odate,datea,mon,custno,comp,agentno,agent
+,round((1-case when sum(ptotal1)=0 then 0 else sum(ctotal)/sum(ptotal1) end)*100,2)
+,sum(profitm),sum(commmoney),sum(ctotal)
+from @result where gno='0'
+group by noa,odate,datea,mon,custno,comp,agentno,agent
+
+update a
+set commmoney=(select top 1 commmoney from @result where noa=a.noa and gno='2')
+from @result a where gno!='2'
+
+select 
+dbo.getComma(oprice,-1) oprice,
+dbo.getComma(price1,-1) price1,
+dbo.getComma(price2,-1) price2,
+--dbo.getComma(total,-1) total,
+dbo.getComma(ptotal1,1) ptotal1,
+dbo.getComma(ptotal2,-1) ptotal2,
+dbo.getComma(mount,-1) mount,
+dbo.getComma(cost,-1) cost,
+dbo.getComma(ctotal,-1) ctotal,
+
+dbo.getComma(profitp,-1)+'%' profitp,
+dbo.getComma(profitm,-1) profitm,
+dbo.getComma(commission,-1)+'%' commission,
+dbo.getComma(commmoney,-1) commmoney,
+* from @result order by noa,gno,no2
+;
+--****************************************************************************************************
+z_orde_r14:--z_orde_r14
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_year nvarchar(10) 
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bfact nvarchar(100) 
+declare @t_efact nvarchar(100)
+declare @t_groupano nvarchar(100)
+declare @t_xmonweek nvarchar(100)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bfact = case when '#non' = [17] then '' else [17] end
+set @t_efact = case when '#non' = [18] then CHAR(255) else [18] end
+set @t_groupano = case when '#non' = [28] then '' else [28] end
+set @t_xmonweek = case when '#non' = [29] then '' else [29] end
+
+---*********************************************************************
+declare @now_date nvarchar(10)--現在日期 
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @now_date=replace(dbo.ChineseEraName2AD(@now_date),'-','/')
+	set @t_lenm='7'
+end 
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+
+set @t_year=LEFT(@now_date,@t_len)
+
+if(LEN(@t_bdate)=0)
+begin
+	set @t_bdate=@t_year+'/01/01'
+end
+else
+begin
+	set @t_year=LEFT(@t_bdate,@t_len)
+end
+
+create table #tmp(
+	gno nvarchar(1), 
+	salgrp nvarchar(50), 
+	mon01 nvarchar(50),
+	mon02 nvarchar(50),
+	mon03 nvarchar(50),
+	mon04 nvarchar(50),
+	mon05 nvarchar(50),
+	mon06 nvarchar(50),
+	mon07 nvarchar(50),
+	mon08 nvarchar(50),
+	mon09 nvarchar(50),
+	mon10 nvarchar(50),
+	mon11 nvarchar(50),
+	mon12 nvarchar(50),
+	m01 float,
+	m02 float,
+	m03 float,
+	m04 float,
+	m05 float,
+	m06 float,
+	m07 float,
+	m08 float,
+	m09 float,
+	m10 float,
+	m11 float,
+	m12 float,
+	mt float, 
+	v01 float,
+	v02 float,
+	v03 float,
+	v04 float,
+	v05 float,
+	v06 float,
+	v07 float,
+	v08 float,
+	v09 float,
+	v10 float,
+	v11 float,
+	v12 float,
+	vt float, 
+	u01 float,
+	u02 float,
+	u03 float,
+	u04 float,
+	u05 float,
+	u06 float,
+	u07 float,
+	u08 float,
+	u09 float,
+	u10 float,
+	u11 float,
+	u12 float,
+	ut float,
+	p01 float,
+	p02 float,
+	p03 float,
+	p04 float,
+	p05 float,
+	p06 float,
+	p07 float,
+	p08 float,
+	p09 float,
+	p10 float,
+	p11 float,
+	p12 float,
+	pt float
+) 
+
+declare @moncount int=1
+declare @tmp_mon nvarchar(10)
+declare @tmp_mcol nvarchar(50)
+declare @tmp_moncol nvarchar(50)
+if(@t_xmonweek='mon')
+begin
+	set @tmp_mon=left(@t_bdate,@t_lenm)
+	
+	while(@tmp_mon<=left(@t_edate,@t_lenm) and @moncount<=12)
+	begin
+		set @tmp_mcol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+		set @tmp_moncol='m'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+		EXEC("
+		insert #tmp(gno,"+@tmp_mcol+")
+		select '8','"+@tmp_mon+"'
+		")
+		
+		--訂單
+		EXEC("
+			insert #tmp(gno,salgrp,"+@tmp_mcol+","+@tmp_moncol+")
+			select '9',isnull(d.salesgroup,''),'"+@tmp_mon+"',sum(b.total)
+			from view_orde a left join view_ordes b on a.noa=b.noa
+			left join ucx c on b.productno=c.noa
+			left join sss d on a.salesno=d.noa
+			where left(a.odate,'"+@t_lenm+"')='"+@tmp_mon+"' and a.odate between '"+@t_bdate+"' and '"+@t_edate+"'
+			and a.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+			and isnull(a.gdate,'') between '"+@t_bfact+"' and '"+@t_efact+"'
+			and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+			group by isnull(d.salesgroup,'')
+		")
+		
+		set @tmp_moncol='v'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+		--已出貨
+		EXEC("
+			insert #tmp(gno,salgrp,"+@tmp_mcol+","+@tmp_moncol+")
+			select '9',isnull(d.salesgroup,''),'"+@tmp_mon+"',sum(e.vtotal)
+			from view_orde a left join view_ordes b on a.noa=b.noa
+			left join ucx c on b.productno=c.noa
+			left join sss d on a.salesno=d.noa
+			outer apply (select sum(case when typea='2' then -1 else 1 end*total)vtotal from view_vccs where ordeno=a.noa and no2=b.no2)e
+			where left(a.odate,'"+@t_lenm+"')='"+@tmp_mon+"' and a.odate between '"+@t_bdate+"' and '"+@t_edate+"'
+			and a.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+			and isnull(a.gdate,'') between '"+@t_bfact+"' and '"+@t_efact+"'
+			and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+			group by isnull(d.salesgroup,'')
+		")
+			
+		set @tmp_mon=left(dbo.q_cdn(@tmp_mon+'/01',45),@t_lenm)
+		set @moncount=@moncount+1
+	end
+end
+if(@t_xmonweek='week')
+begin --week
+	declare @t_bwdate nvarchar(10)='' --周別起始日
+	declare @t_ewdate nvarchar(10)='' --周別迄止日
+	declare @f_datea nvarchar(10)=@t_year+'-01-01' --1月1號
+	declare @f_week int=DATEPART(ISO_WEEK,@f_datea) --1月1號 周別
+	declare @x_week int =0
+	declare @t_bweek int =1
+	
+	if(@t_len='3')
+	begin
+		set @f_datea=REPLACE(dbo.ChineseEraName2AD(@f_datea),'-','/')
+	end
+	
+	while (@x_week=0 or @f_week=@x_week)
+	begin
+		set @f_datea=dbo.q_cdn(@f_datea,1)
+		set @x_week=DATEPART(ISO_WEEK,@f_datea)
+	end
+
+	if(@t_len='3')
+	begin
+		set @f_datea=dbo.AD2ChineseEraName(@f_datea)
+	end
+	
+	set @t_bwdate=dbo.q_cdn(@f_datea,(@t_bweek-@x_week)*7)
+	set @t_ewdate=dbo.q_cdn(@t_bwdate,6)
+	
+	while ((@t_bwdate not between @t_bdate and @t_edate and @t_ewdate not between @t_bdate and @t_edate) or @t_bwdate>@t_bdate)
+	begin
+		if(@t_bwdate>@t_bdate)
+		begin
+			set @t_bwdate=dbo.q_cdn(@t_bwdate,-7)
+			set @t_ewdate=dbo.q_cdn(@t_bwdate,6)
+			set @t_bweek=@t_bweek-1
+		end
+		else
+		begin
+			set @t_bwdate=dbo.q_cdn(@t_bwdate,7)
+			set @t_ewdate=dbo.q_cdn(@t_bwdate,6)
+			set @t_bweek=@t_bweek+1
+		end
+	end
+	
+	set @tmp_mon=@t_bwdate
+	while(@tmp_mon<=@t_edate and @moncount<=12)
+	begin
+		set @tmp_mcol='mon'+right('00'+cast(@moncount as nvarchar(10)),2)
+		set @tmp_moncol='m'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+		if(@t_len='3')
+		begin
+			EXEC("
+			insert #tmp(gno,"+@tmp_mcol+")
+			select '8',left('"+@tmp_mon+"','"+@t_lenm+"')+' W'+cast(DATEPART(ISO_WEEK,dbo.ChineseEraName2AD('"+@tmp_mon+"')) as nvarchar(10))
+			")
+		end
+		else
+		begin
+			EXEC("
+			insert #tmp(gno,"+@tmp_mcol+")
+			select '8',left('"+@tmp_mon+"','"+@t_lenm+"')+' W'+cast(DATEPART(ISO_WEEK,'"+@tmp_mon+"') as nvarchar(10))
+			")
+		end
+			
+		--訂單
+		EXEC("
+			insert #tmp(gno,salgrp,"+@tmp_mcol+","+@tmp_moncol+")
+			select '9',isnull(d.salesgroup,''),'"+@tmp_mon+"',sum(b.total)
+			from view_orde a left join view_ordes b on a.noa=b.noa
+			left join ucx c on b.productno=c.noa
+			left join sss d on a.salesno=d.noa
+			where a.odate between '"+@t_bdate+"' and '"+@t_edate+"'
+			and a.odate between '"+@t_bwdate+"' and '"+@t_ewdate+"'
+			and a.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+			and isnull(a.gdate,'') between '"+@t_bfact+"' and '"+@t_efact+"'
+			and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+			group by isnull(d.salesgroup,'')
+		")
+		
+		set @tmp_moncol='v'+right('00'+cast(@moncount as nvarchar(10)),2)
+		
+		--已出貨
+		EXEC("
+			insert #tmp(gno,salgrp,"+@tmp_mcol+","+@tmp_moncol+")
+			select '9',isnull(d.salesgroup,''),'"+@tmp_mon+"',sum(e.vtotal)
+			from view_orde a left join view_ordes b on a.noa=b.noa
+			left join ucx c on b.productno=c.noa
+			left join sss d on a.salesno=d.noa
+			outer apply (select sum(case when typea='2' then -1 else 1 end*total)vtotal from view_vccs where ordeno=a.noa and no2=b.no2)e
+			where a.odate between '"+@t_bdate+"' and '"+@t_edate+"'
+			and a.odate between '"+@t_bwdate+"' and '"+@t_ewdate+"'
+			and a.custno between '"+@t_bcust+"' and '"+@t_ecust+"'
+			and isnull(a.gdate,'') between '"+@t_bfact+"' and '"+@t_efact+"'
+			and (isnull(c.groupano,'')='"+@t_groupano+"' or len('"+@t_groupano+"')=0)
+			group by isnull(d.salesgroup,'')
+		")
+		
+		set @t_bwdate=dbo.q_cdn(@t_bwdate,7)
+		set @t_ewdate=dbo.q_cdn(@t_bwdate,6)
+		set @tmp_mon=@t_bwdate
+		set @moncount=@moncount+1
+	end
+
+end
+
+insert #tmp (gno,salgrp,m01,m02,m03,m04,m05,m06,m07,m08,m09,m10,m11,m12
+,v01,v02,v03,v04,v05,v06,v07,v08,v09,v10,v11,v12
+,u01,u02,u03,u04,u05,u06,u07,u08,u09,u10,u11,u12
+,mon01,mon02,mon03,mon04,mon05,mon06,mon07,mon08,mon09,mon10,mon11,mon12)
+select '0',salgrp,SUM(m01),SUM(m02),SUM(m03),SUM(m04),SUM(m05),SUM(m06)
+,SUM(m07),SUM(m08),SUM(m09),SUM(m10),SUM(m11),SUM(m12)
+,SUM(v01),SUM(v02),SUM(v03),SUM(v04),SUM(v05),SUM(v06)
+,SUM(v07),SUM(v08),SUM(v09),SUM(v10),SUM(v11),SUM(v12)
+,SUM(isnull(m01,0)-isnull(v01,0)),SUM(isnull(m02,0)-isnull(v02,0)),SUM(isnull(m03,0)-isnull(v03,0))
+,SUM(isnull(m04,0)-isnull(v04,0)),SUM(isnull(m05,0)-isnull(v05,0)),SUM(isnull(m06,0)-isnull(v06,0))
+,SUM(isnull(m07,0)-isnull(v07,0)),SUM(isnull(m08,0)-isnull(v08,0)),SUM(isnull(m09,0)-isnull(v09,0))
+,SUM(isnull(m10,0)-isnull(v10,0)),SUM(isnull(m11,0)-isnull(v11,0)),SUM(isnull(m12,0)-isnull(v12,0))
+,MAX(b.mon01),MAX(b.mon02),MAX(b.mon03),MAX(b.mon04),MAX(b.mon05),MAX(b.mon06)
+,MAX(b.mon07),MAX(b.mon08),MAX(b.mon09),MAX(b.mon10),MAX(b.mon11),MAX(b.mon12)
+from #tmp a 
+outer apply (select MAX(mon01)mon01,MAX(mon02)mon02,MAX(mon03)mon03,MAX(mon04)mon04,MAX(mon05)mon05,MAX(mon06)mon06
+,MAX(mon07)mon07,MAX(mon08)mon08,MAX(mon09)mon09,MAX(mon10)mon10,MAX(mon11)mon11,MAX(mon12)mon12 from #tmp where gno='8')b
+where gno='9' 
+group by salgrp
+
+delete #tmp where gno='9' or gno='8'
+
+update #tmp
+set mt=isnull(m01,0)+isnull(m02,0)+isnull(m03,0)+isnull(m04,0)+isnull(m05,0)+isnull(m06,0)
++isnull(m07,0)+isnull(m08,0)+isnull(m09,0)+isnull(m10,0)+isnull(m11,0)+isnull(m12,0)
+,vt=isnull(v01,0)+isnull(v02,0)+isnull(v03,0)+isnull(v04,0)+isnull(v05,0)+isnull(v06,0)
++isnull(v07,0)+isnull(v08,0)+isnull(v09,0)+isnull(v10,0)+isnull(v11,0)+isnull(v12,0)
+,ut=isnull(u01,0)+isnull(u02,0)+isnull(u03,0)+isnull(u04,0)+isnull(u05,0)+isnull(u06,0)
++isnull(u07,0)+isnull(u08,0)+isnull(u09,0)+isnull(u10,0)+isnull(u11,0)+isnull(u12,0)
+
+if((select count(*) from #tmp)>0)
+begin
+	insert #tmp(gno,salgrp,m01,m02,m03,m04,m05,m06,m07,m08,m09,m10,m11,m12,mt
+	,v01,v02,v03,v04,v05,v06,v07,v08,v09,v10,v11,v12,vt
+	,u01,u02,u03,u04,u05,u06,u07,u08,u09,u10,u11,u12,ut
+	,mon01,mon02,mon03,mon04,mon05,mon06,mon07,mon08,mon09,mon10,mon11,mon12)
+	select '1',char(255)
+	,SUM(m01),SUM(m02),SUM(m03),SUM(m04),SUM(m05),SUM(m06)
+	,SUM(m07),SUM(m08),SUM(m09),SUM(m10),SUM(m11),SUM(m12),SUM(mt)
+	,SUM(v01),SUM(v02),SUM(v03),SUM(v04),SUM(v05),SUM(v06)
+	,SUM(v07),SUM(v08),SUM(v09),SUM(v10),SUM(v11),SUM(v12),SUM(vt)
+	,SUM(u01),SUM(u02),SUM(u03),SUM(u04),SUM(u05),SUM(u06)
+	,SUM(u07),SUM(u08),SUM(u09),SUM(u10),SUM(u11),SUM(u12),SUM(ut)
+	,MAX(mon01),MAX(mon02),MAX(mon03),MAX(mon04),MAX(mon05),MAX(mon06)
+	,MAX(mon07),MAX(mon08),MAX(mon09),MAX(mon10),MAX(mon11),MAX(mon12)
+	from #tmp 
+end
+
+update #tmp
+set p01=case when isnull(m01,0)=0 then 0 else round(isnull(v01,0)/isnull(m01,0)*100,2) end
+,p02=case when isnull(m02,0)=0 then 0 else round(isnull(v02,0)/isnull(m02,0)*100,2) end
+,p03=case when isnull(m03,0)=0 then 0 else round(isnull(v03,0)/isnull(m03,0)*100,2) end
+,p04=case when isnull(m04,0)=0 then 0 else round(isnull(v04,0)/isnull(m04,0)*100,2) end
+,p05=case when isnull(m05,0)=0 then 0 else round(isnull(v05,0)/isnull(m05,0)*100,2) end
+,p06=case when isnull(m06,0)=0 then 0 else round(isnull(v06,0)/isnull(m06,0)*100,2) end
+,p07=case when isnull(m07,0)=0 then 0 else round(isnull(v07,0)/isnull(m07,0)*100,2) end
+,p08=case when isnull(m08,0)=0 then 0 else round(isnull(v08,0)/isnull(m08,0)*100,2) end
+,p09=case when isnull(m09,0)=0 then 0 else round(isnull(v09,0)/isnull(m09,0)*100,2) end
+,p10=case when isnull(m10,0)=0 then 0 else round(isnull(v10,0)/isnull(m10,0)*100,2) end
+,p11=case when isnull(m11,0)=0 then 0 else round(isnull(v11,0)/isnull(m11,0)*100,2) end
+,p12=case when isnull(m12,0)=0 then 0 else round(isnull(v12,0)/isnull(m12,0)*100,2) end
+,pt=case when isnull(mt,0)=0 then 0 else round(isnull(vt,0)/isnull(mt,0)*100,2) end
+
+select 
+gno,salgrp,mon01,mon02,mon03,mon04,mon05,mon06,mon07,mon08,mon09,mon10,mon11,mon12
+,dbo.getComma(m01,-1)m01
+,dbo.getComma(m02,-1)m02
+,dbo.getComma(m03,-1)m03
+,dbo.getComma(m04,-1)m04
+,dbo.getComma(m05,-1)m05
+,dbo.getComma(m06,-1)m06
+,dbo.getComma(m07,-1)m07
+,dbo.getComma(m08,-1)m08
+,dbo.getComma(m09,-1)m09
+,dbo.getComma(m10,-1)m10
+,dbo.getComma(m11,-1)m11
+,dbo.getComma(m12,-1)m12
+,dbo.getComma(mt,-1)mt
+,dbo.getComma(v01,-1)v01
+,dbo.getComma(v02,-1)v02
+,dbo.getComma(v03,-1)v03
+,dbo.getComma(v04,-1)v04
+,dbo.getComma(v05,-1)v05
+,dbo.getComma(v06,-1)v06
+,dbo.getComma(v07,-1)v07
+,dbo.getComma(v08,-1)v08
+,dbo.getComma(v09,-1)v09
+,dbo.getComma(v10,-1)v10
+,dbo.getComma(v11,-1)v11
+,dbo.getComma(v12,-1)v12
+,dbo.getComma(vt,-1)vt
+,dbo.getComma(case when u01=0 and m01 is null and v01 is null then null else u01 end,-1)u01
+,dbo.getComma(case when u02=0 and m02 is null and v02 is null then null else u02 end,-1)u02
+,dbo.getComma(case when u03=0 and m03 is null and v03 is null then null else u03 end,-1)u03
+,dbo.getComma(case when u04=0 and m04 is null and v04 is null then null else u04 end,-1)u04
+,dbo.getComma(case when u05=0 and m05 is null and v05 is null then null else u05 end,-1)u05
+,dbo.getComma(case when u06=0 and m06 is null and v06 is null then null else u06 end,-1)u06
+,dbo.getComma(case when u07=0 and m07 is null and v07 is null then null else u07 end,-1)u07
+,dbo.getComma(case when u08=0 and m08 is null and v08 is null then null else u08 end,-1)u08
+,dbo.getComma(case when u09=0 and m09 is null and v09 is null then null else u09 end,-1)u09
+,dbo.getComma(case when u10=0 and m10 is null and v10 is null then null else u10 end,-1)u10
+,dbo.getComma(case when u11=0 and m11 is null and v11 is null then null else u11 end,-1)u11
+,dbo.getComma(case when u12=0 and m12 is null and v12 is null then null else u12 end,-1)u12
+,dbo.getComma(ut,-1)ut
+,dbo.getComma(case when p01=0 and m01 is null and v01 is null then null else p01 end,-1)p01
+,dbo.getComma(case when p02=0 and m02 is null and v02 is null then null else p02 end,-1)p02
+,dbo.getComma(case when p03=0 and m03 is null and v03 is null then null else p03 end,-1)p03
+,dbo.getComma(case when p04=0 and m04 is null and v04 is null then null else p04 end,-1)p04
+,dbo.getComma(case when p05=0 and m05 is null and v05 is null then null else p05 end,-1)p05
+,dbo.getComma(case when p06=0 and m06 is null and v06 is null then null else p06 end,-1)p06
+,dbo.getComma(case when p07=0 and m07 is null and v07 is null then null else p07 end,-1)p07
+,dbo.getComma(case when p08=0 and m08 is null and v08 is null then null else p08 end,-1)p08
+,dbo.getComma(case when p09=0 and m09 is null and v09 is null then null else p09 end,-1)p09
+,dbo.getComma(case when p10=0 and m10 is null and v10 is null then null else p10 end,-1)p10
+,dbo.getComma(case when p11=0 and m11 is null and v11 is null then null else p11 end,-1)p11
+,dbo.getComma(case when p12=0 and m12 is null and v12 is null then null else p12 end,-1)p12
+,dbo.getComma(pt,-1)pt
+from #tmp order by gno,salgrp
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	set @cmd = 'drop table #tmp'
+	EXECUTE sp_executesql @cmd
+END
+;
+--****************************************************************************************************
+z_orde_r15:--z_orde_r15
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	noa nvarchar(50),
+	odate nvarchar(50),
+	invo nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(200),
+	amount float,
+	udate nvarchar(100),
+	commission float,
+	bcomm float,
+	ecomm float,
+	commp nvarchar(100),
+	memo nvarchar(MAX)
+) 
+
+insert @result
+select '0',a.noa,a.odate,b.noa,a.custno,a.comp,b.amount,d.datea,e.commission,e.bcomm,e.ecomm
+,case when e.bcomm=e.ecomm then cast(e.bcomm as nvarchar(20))+' %' else cast(e.bcomm as nvarchar(20))+'~'+cast(e.ecomm as nvarchar(20))+' %'  end,''
+from view_orde a
+outer apply (select top 1 * from invo where ordeno=a.noa)b
+outer apply (select top 1 noa from view_vccs where ordeno=a.noa)c
+outer apply (select top 1 datea from umms where vccno=c.noa)d
+outer apply (select SUM(total*commission/100)commission,MAX(commission) bcomm,Min(commission)ecomm from view_ordes where noa=a.noa)e
+where a.odate between @t_bdate and @t_edate
+and a.custno between @t_bcust and @t_ecust
+
+select 
+dbo.getComma(amount,-1) amount,
+dbo.getComma(commission,-1) commission,
+* from @result order by odate,invo,custno
+;
+--****************************************************************************************************
+z_orde_r16:--z_orde_r16
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_bcust nvarchar(50) 
+declare @t_ecust nvarchar(50)
+declare @t_bagent nvarchar(50) 
+declare @t_eagent nvarchar(50)
+declare @t_bfact nvarchar(100) 
+declare @t_efact nvarchar(100)
+declare @t_bsales nvarchar(50) 
+declare @t_esales nvarchar(50)
+declare @t_salgrp nvarchar(50) 
+declare @t_len nvarchar(10) 
+declare @t_lenm nvarchar(10) 
+
+set @t_len='[3]'
+set @t_bdate = case when '#non' = [4] then '' else [4] end
+set @t_edate = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_bcust = case when '#non' = [11] then '' else [11] end
+set @t_ecust = case when '#non' = [12] then CHAR(255) else [12] end
+set @t_bagent = case when '#non' = [13] then '' else [13] end
+set @t_eagent = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_bfact = case when '#non' = [17] then '' else [17] end
+set @t_efact = case when '#non' = [18] then CHAR(255) else [18] end
+set @t_bsales = case when '#non' = [19] then '' else [19] end
+set @t_esales = case when '#non' = [20] then CHAR(255) else [20] end
+set @t_salgrp = case when '#non' = [21] then '' else [21] end
+set @t_lenm='6'
+
+if(@t_len='4')
+begin
+	set @t_lenm='7'
+end 
+--------------------------------------------------------------------------------------------
+declare @result table( 
+	gno nvarchar(1), 
+	noa nvarchar(50),
+	factno nvarchar(50),
+	fact nvarchar(100),
+	datea nvarchar(50),
+	mon nvarchar(50),
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salgrp nvarchar(50),
+	agentno nvarchar(50),
+	agent nvarchar(100),
+	invono nvarchar(100),
+	custno nvarchar(50),
+	comp nvarchar(150),
+	mount float,
+	total float,
+	paytype nvarchar(100),
+	paydate nvarchar(20),
+	ordctotal float,
+	cp float, --佣金費率
+	cm float, --佣金金額
+	benifit float, --毛利
+	pf float,--PF%
+	memo nvarchar(MAX)
+) 
+insert @result
+select '9',a.noa,c.gdate,c.gtime,a.datea,RIGHT(LEFT(a.datea,@t_lenm),2)
+,a.salesno,a.sales,isnull(d.salesgroup,''),c.agentno,c.agent,a.invo,a.custno,a.comp
+,b.mount,b.total,a.paytype,case when patindex('%[0-9]%',a.paytype) > 0 then SUBSTRING(SUBSTRING(a.paytype,patindex('%[0-9]%',a.paytype),len(a.paytype)),0,8)else '' end
+,isnull(e.total,0),case when RIGHT(f.payterms,2)!='＆C' then 0 else f.commission end
+,0,0,0,a.memo
+from view_vcc a left join view_vccs b on a.noa=b.noa
+outer apply (select * from view_orde where noa=b.ordeno)c
+outer apply (select * from sss where noa=a.salesno)d
+outer apply (select SUM(cb.total)total from view_ordc ca left join view_ordcs cb on ca.noa=cb.noa where ca.quatno=b.ordeno and cb.productno=b.productno )e
+outer apply (select * from view_ordes where noa=b.ordeno and no2=b.no2)f
+where --(a.stype='3' or a.stype='4') and 
+isnull(a.datea,'') between @t_bdate and @t_edate
+and isnull(a.custno,'') between @t_bcust and @t_ecust
+and isnull(c.agentno,'') between @t_bagent and @t_eagent
+and isnull(c.gdate,'') between @t_bfact and @t_efact
+and isnull(a.salesno,'') between @t_bsales and @t_esales
+and (isnull(d.salesgroup,'') =@t_salgrp or len(@t_salgrp)=0)
+
+update @result
+set cm=case when cp>0 then round(total*cp/100,2) else 0 end
+,benifit=total-ordctotal
+,pf=case when total=0 then 0 else round(((total-ordctotal)/total)*100,2)end
+,paydate=case when charindex('天',paydate)>0 then LEFT(paydate,patindex('%[^0-9]%',paydate)-1)
+when charindex('月',paydate)>0 then cast(LEFT(paydate,patindex('%[^0-9]%',paydate)-1) as int)*30
+else '' end
+
+update @result
+set paydate=dbo.q_cdn(datea,CAST(paydate as int))
+
+insert @result(gno,noa,factno,fact,datea,mon,salesno,sales,salgrp,agentno,agent,custno,comp,paytype,paydate,invono,memo
+,mount,total,ordctotal,cm,benifit)
+select '0',noa,factno,fact,datea,mon,salesno,sales,salgrp,agentno,agent,custno,comp,paytype,paydate,invono,memo
+,SUM(mount),SUM(total),SUM(ordctotal),SUM(cm),SUM(benifit)
+from @result group by noa,factno,fact,datea,mon,salesno,sales,salgrp,agentno,agent,custno,comp,paytype,paydate,invono,memo
+
+update @result
+set cp=case when total=0 then 0 else round(cm/total*100,2) end
+,pf=case when total=0 then 0 else round(benifit/total*100,2)  end
+where gno='0'
+
+delete @result where gno='9'
+
+select 
+dbo.getComma(mount,-1) mount,
+dbo.getComma(total,-1) total,
+dbo.getComma(ordctotal,-1) ordctotal,
+dbo.getComma(cm,-1) cm,
+dbo.getComma(benifit,-1) benifit,
+dbo.getComma(cp,-1)+' %' cp,
+dbo.getComma(pf,-1)+' %' pf,
+* from @result order by gno,mon,datea
+;
+--****************************************************************************************************

@@ -1,0 +1,242 @@
+z_ucca7r1:--z_ucca7r1
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_stype nvarchar(MAX)
+declare @t_kind nvarchar(50)
+declare @t_bcust nvarchar(50)
+declare @t_ecust nvarchar(50)
+declare @t_bdate nvarchar(50)
+declare @t_edate nvarchar(50)
+declare @t_rate nvarchar(50)
+
+set @t_stype = case when '#non' = '[4]' then '' else '[4]' end
+set @t_kind = case when '#non' = [5] then '' else [5] end
+set @t_bcust = case when '#non' = [6] then '' else [6] end
+set @t_ecust = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bdate = case when '#non' = [8] then '' else [8] end
+set @t_edate = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_rate = case when '#non' = [10] then '0' else [10] end
+--**************************************************************
+	declare @string nvarchar(max)
+	declare @n int
+	--解析要計算的種類
+	IF OBJECT_ID('tempdb..#stype')is not null
+	BEGIN
+		set @cmd = 'drop table #stype'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #stype(
+		noa nvarchar(20),
+		stype nvarchar(20)
+	)
+	set @string = @t_stype
+	while(1=1)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #stype select left(@string,charindex('@',@string)-1),right(@string,len(@string)-charindex('@',@string))
+			end
+			break
+		end
+		insert into #stype select left(@string,charindex('@',@string)-1),substring(@string,charindex('@',@string)+1,charindex(',',@string)-charindex('@',@string)-1)
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+--------------------------------------------------------------------------------------------------------------------
+declare @tmpv table( 
+	datea nvarchar(50),
+	noa nvarchar(50),
+	noq nvarchar(50),
+	kind nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(100),
+	tranprice float,
+	salesno nvarchar(50),
+	sales nvarchar(50),
+	salesgroup nvarchar(50),
+	productno nvarchar(100),
+	products nvarchar(200),
+	spec nvarchar(200),
+	size nvarchar(200),
+	uno nvarchar(50),
+	mount float,
+	weight float,
+	price float,
+	total float,
+	wprice float,
+	usage nvarchar(50),
+	paytype nvarchar(100),
+	payday nvarchar(50),
+	paydate nvarchar(50)
+)
+
+	insert @tmpv
+	select a.datea,a.noa,b.noq,a.kind,a.custno,left(a.comp,10),a.price,a.salesno,a.sales,c.salesgroup
+	,b.productno,b.product,b.spec,b.size,b.uno,b.mount,b.weight,b.price,b.total
+	,isnull((select top 1 wprice from view_cuts where bno=b.uno),0),isnull((select top 1 usage from view_ordem om where om.noa=b.ordeno and om.no2=b.no2),'')
+	,a.paytype,(select case when PATINDEX('%[0-9]%',paytype)>0 then substring(paytype,PATINDEX('%[0-9]%',paytype),len(paytype)-PATINDEX('%[0-9]%',paytype)) else 0 end from view_vcc where noa=a.noa),''
+	from view_vcc a left join view_vccs b on a.noa=b.noa left join #stype s on a.stype=s.noa
+	left join sss c on a.salesno=c.noa left join style d on b.style=d.noa
+	where (a.datea between @t_bdate and @t_edate) and (a.custno between @t_bcust and @t_ecust) 
+	and (len(@t_kind)=0 or isnull(a.kind,'')=@t_kind) and isnull(s.stype,'')!='代工' and a.typea='1'
+	and charindex('#',b.product)=0 --祥興  替售物品的不算
+	and isnull(d.product,'')!='邊料' and isnull(d.product,'')!='雜級管' and isnull(d.product,'')!='雜鐵' --祥興
+	and b.productno!='' and isnull(b.uno,'')!=''
+	
+	--捲C 11、帶B 14、片S 16、管T 17
+	
+declare @tmpr table( 
+	uno nvarchar(50),
+	datea nvarchar(50),
+	sprice float,
+	rtranprice float,
+	disc1 float,
+	disc2 float,
+	disc3 float,
+	disc4 float,
+	disc5 float,
+	descr nvarchar(50)
+)
+--入庫日沒去抓uccb入庫日 有需要在抓
+
+insert @tmpr
+select v.uno,a.datea,(case when UPPER(b.unit)!='KG' then nullif(b.total/b.weight,0) else b.price end) 
+,a.price,c.disc1,c.disc2,c.disc3
+,case when b.datea between d.bdate and d.edate then c.disc4 else 0 end
+,case when (isnull(c.bmount,0)!=0 or isnull(c.emount,0)!=0) 
+then (case when (isnull(c.bmount,0)=0 and b.weight<=isnull(c.emount,0))
+or (isnull(c.bmount,0)>0 and isnull(c.emount,0)=0 and isnull(c.bmount,0)<=b.weight)
+or (isnull(c.bmount,0)>0 and isnull(c.emount,0)>0 and (b.weight between isnull(c.bmount,0) and isnull(c.emount,0)))
+then c.disc5 else 0 end) else 0 end
+,case when b.datea between d.bdate and d.edate then b.descr else LEFT(b.descr,6) end
+from @tmpv v left join view_rc2s b 
+on ((left(v.uno,10)+'A'=b.uno) or (left(v.uno,13)+'A'=b.uno) or (left(v.uno,15)+'A'=b.uno) or (left(v.uno,16)+'A'=b.uno))
+left join view_rc2 a on b.noa=a.noa 
+left join disc2s c on b.descr=c.contract and b.productno=c.productno
+left join disc3s d on b.descr=d.contract and b.productno=c.productno
+where isnull(b.uno,'')!=''
+union
+select v.uno,a.datea,
+case when charindex('退貨',a.typea)>0 and (select COUNT(*) from view_vccds aa LEFT join view_ordes bb on aa.ordeno=bb.noa and aa.no2=bb.no2 where aa.uno=b.uno)>0
+then (select top 1 (case when UPPER(bb.unit)='KG' then bb.price else nullif(bb.price*bb.mount/bb.weight,0) end)price from view_vccds aa LEFT join view_ordes bb on aa.ordeno=bb.noa and aa.no2=bb.no2 where aa.uno=b.uno)
+else b.price end,a.price,0,0,0,0,0,''
+from @tmpv v left join view_inas b 
+on ((left(v.uno,10)+'A'=b.uno) or (left(v.uno,13)+'A'=b.uno) or (left(v.uno,15)+'A'=b.uno) or (left(v.uno,16)+'A'=b.uno))
+left join view_ina a on b.noa=a.noa
+where isnull(b.uno,'')!=''
+
+update @tmpv
+set paydate=(case when charindex('月結',paytype)>0 then 
+dbo.q_cdn((LEFT(datea,7)+dbo.q_lastday(datea)),cast(payday as int)) 
+else dbo.q_cdn(datea,cast(payday as int)) end)
+
+declare @tmp table( 
+	gno nvarchar(10), 
+	datea nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(100),
+	productno nvarchar(100),
+	products nvarchar(200),
+	spec nvarchar(200),
+	size nvarchar(200),
+	uno nvarchar(50),
+	mount float,
+	weight float,
+	price float,
+	total float,
+	descr nvarchar(50),--進貨合約編號
+	rdate nvarchar(50),
+	sprice float,
+	rtranprice float,--進貨運費
+	disc1 float,--履約折扣
+	disc5 float,--數量折扣
+	disc4 float,--追朔降價
+	stpeice float,--進貨成本均價
+	cost float,--進貨成本
+	tranprice float,--銷售運費
+	wprice float,--委外加工
+	molis float,
+	molirate float,
+	sales nvarchar(50),
+	profit float,
+	ttotal float,
+	wtotal float
+)
+
+insert @tmp
+select '0',a.datea,a.custno,a.comp,a.productno,a.products,a.spec,a.size,a.uno,a.mount,a.weight,a.price,a.total
+,b.descr,b.datea,b.sprice,b.rtranprice,b.disc1,b.disc5,b.disc4
+,b.sprice+b.rtranprice-b.disc1-b.disc5-b.disc4 stpeice
+,a.weight*(isnull(b.sprice,0)+isnull(b.rtranprice,0)-isnull(disc1,0)-isnull(disc4,0)-isnull(disc5,0)) cost 
+,a.tranprice,a.wprice
+,a.total-(a.weight*(isnull(b.sprice,0)+isnull(b.rtranprice,0)-isnull(disc1,0)-isnull(disc4,0)-isnull(disc5,0)))
+-(dbo.q_cdd(a.paydate,a.datea)*cast(@t_rate as float)*(a.weight*(isnull(b.sprice,0)+isnull(b.rtranprice,0)-isnull(disc1,0)-isnull(disc4,0)-isnull(disc5,0)))/365)
+-round(a.wprice*a.weight,0)-ROUND(a.tranprice*a.weight,0) molis
+,round((a.total-(a.weight*(isnull(b.sprice,0)+isnull(b.rtranprice,0)-isnull(disc1,0)-isnull(disc4,0)-isnull(disc5,0)))
+-(dbo.q_cdd(a.paydate,a.datea)*cast(@t_rate as float)*(a.weight*(isnull(b.sprice,0)+isnull(b.rtranprice,0)-isnull(disc1,0)-isnull(disc4,0)-isnull(disc5,0)))/365)
+-round(a.wprice*a.weight,0)-ROUND(a.tranprice*a.weight,0))/nullif(a.total,0)*100,2) molirate 
+,a.sales
+,(dbo.q_cdd(a.paydate,a.datea)*cast(@t_rate as float)*(a.weight*(isnull(b.sprice,0)+isnull(b.rtranprice,0)-isnull(disc1,0)-isnull(disc4,0)-isnull(disc5,0)))/365) profit
+,a.wprice*a.weight wtotal	--c加工
+,a.tranprice*weight ttotal	--v運費
+from @tmpv a left join @tmpr b on a.uno=b.uno
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+declare @tmpa table( 
+	gno nvarchar(10), 
+	idno int,
+	custno nvarchar(50),
+	comp nvarchar(100),
+	weight float,
+	total float,
+	tax float,
+	mtotal float,
+	per float,
+	molis float,
+	molirate float,
+	cost float, --進貨成本
+	ttotal float, --銷貨運費
+	wtotal float --委外加工
+)
+
+declare @vcca21 nvarchar(max)=isnull((select top 1 stype from #stype where noa=@t_kind),'')
+set @vcca21=(case when charindex('管',@vcca21)>0 then '管' when charindex('板',@vcca21)>0 then '捲板' else '' end)
+
+insert @tmpa
+select '0',ROW_NUMBER() over (order by sum(total) desc)
+,custno,MAX(comp),sum(weight),sum(total)
+,(select sum(tax) from vcca where custno=a.custno and (datea between @t_bdate and @t_edate) 
+-- and ??=@vcca21 --等經理確定
+),sum(total)+(select sum(tax) from vcca where custno=a.custno and (datea between @t_bdate and @t_edate) 
+-- and ??=@vcca21 --等經理確定
+),round(sum(total)/(select sum(total) from @tmp)*100,2)
+,sum(molis),0,sum(cost),sum(ttotal),sum(wtotal)
+from @tmp a group by custno
+
+
+if((select count(*) from @tmpa)>0)
+begin
+	insert @tmpa(gno,weight,total,cost,ttotal,wtotal,molis,molirate)
+	select '1',SUM(weight),SUM(total),SUM(cost),SUM(ttotal),SUM(wtotal),SUM(molis),0
+	from @tmpa
+end
+
+update @tmpa
+set molirate=round(molis/total*100,2)
+--where gno='1'
+
+select 
+dbo.getComma(weight,[2]) weight,
+dbo.getComma(total,0) total,
+dbo.getComma(cost,0) cost,
+dbo.getComma(molis,0) molis,
+dbo.getComma(molirate,2) molirate,
+dbo.getComma(per,2) per,
+dbo.getComma(ttotal,0) ttotal,
+dbo.getComma(wtotal,0) wtotal,
+*
+from @tmpa order by gno,idno
+;
+--**********************************************************************************

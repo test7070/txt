@@ -1,0 +1,795 @@
+﻿z_bank02:--z_bank02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	--declare @t_accy nvarchar(20) = [1]
+	declare @t_bdate nvarchar(10) = case when '#non'=[2] then '' else [2] end 
+	declare @t_edate nvarchar(10) = case when '#non'=[3] then char(255) else [3] end 
+	declare @t_baccno nvarchar(25) = case when '#non'=[4] then '' else [4] end 
+	declare @t_eaccno nvarchar(25) = case when '#non'=[5] then char(255) else [5] end 
+	--======================================================================================================
+	--======================================================================================================
+	IF OBJECT_ID('tempdb..#z_bank02')is not null
+	BEGIN
+		drop table #z_bank02
+	END
+	create table #z_bank02(
+		sel int identity(1,1)
+		,color nvarchar(20)
+		,gno nvarchar(10)
+		,pno int
+		,recno int
+		,accy nvarchar(10)
+		,acc1 nvarchar(20)
+		,acc2 nvarchar(50)
+		,account nvarchar(50)
+		,datea nvarchar(20)
+		,accc3 nvarchar(20)
+		,[begin] float --昨日餘額
+		,dmoney float --存入金額
+		,cmoney float --提領金額
+		,result float --本日結餘
+		,[end] nvarchar(max) --可用餘額(依銀行電子資料)
+		,memo nvarchar(max)
+	)
+		
+	declare @accy nvarchar(10)
+	declare @acc nvarchar(20)
+	declare @accc nvarchar(20)
+	declare @acccs nvarchar(20)
+	
+	declare cursor_table cursor for
+	
+	select  right(left(a.[name],7),3),a.[name],b.[name],c.[name]
+	from sys.tables a
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acccs[0-9][0-9][0-9][_]%') b on RIGHT(a.[name],5)=b.accy
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acc[0-9][0-9][0-9][_]%') c on RIGHT(a.[name],5)=c.accy
+	where a.[name] like 'accc[0-9][0-9][0-9][_]%'
+	and b.[name] is not null
+	and right(left(a.[name],7),3) between left(@t_bdate,3) and left(@t_edate,3)
+	order by RIGHT(a.[name],5)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc,@acccs,@acc
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		--前期
+		set @cmd = "
+		select '1',1,@accy
+			,a.accc5
+			,ISNULL(d.bank,'')
+			,isnull(d.account,'')
+			,@accy
+			,sum(ISNULL(a.dmoney,0)-ISNULL(a.cmoney,0))
+			,0
+			,'前期'
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		left join "+@acc+" c on a.accc5=c.acc1
+		outer apply(select top 1 * from bank where acc1=a.accc5) d
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') < @t_bdate 
+		and a.accc5 between @t_baccno and @t_eaccno 
+		group by a.accc5,ISNULL(d.bank,''),isnull(d.account,'')"
+		insert into #z_bank02(gno,pno,accy,acc1,acc2,account,datea,dmoney,cmoney,memo)
+		execute sp_executesql @cmd,N'@accc nvarchar(20),@accy nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20),@t_baccno nvarchar(20),@t_eaccno nvarchar(20)'
+			,@accc=@accc,@accy=@accy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_baccno=@t_baccno,@t_eaccno=@t_eaccno
+			
+		--本期
+		set @cmd = "
+		select '2',2,@accy
+			,a.accc5
+			,ISNULL(d.bank,'')
+			,isnull(d.account,'')
+			,@accy+'/'+isnull(b.accc2,'')
+			,ISNULL(a.dmoney,0)
+			,ISNULL(a.cmoney,0)
+			,a.accc7
+			,a.accc3
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		left join "+@acc+" c on a.accc5=c.acc1
+		outer apply(select top 1 * from bank where acc1=a.accc5) d
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') between @t_bdate and @t_edate
+		and a.accc5 between @t_baccno and @t_eaccno 
+		order by a.accc5,b.accc2,a.accc3"
+		insert into #z_bank02(gno,pno,accy,acc1,acc2,account,datea,dmoney,cmoney,memo,accc3)
+		execute sp_executesql @cmd,N'@accc nvarchar(20),@accy nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20),@t_baccno nvarchar(20),@t_eaccno nvarchar(20)'
+			,@accc=@accc,@accy=@accy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_baccno=@t_baccno,@t_eaccno=@t_eaccno
+		
+		fetch next from cursor_table
+		into @accy,@accc,@acccs,@acc
+	end
+	close cursor_table
+	deallocate cursor_table
+	---------------------------------------------------------
+	--沒異動明細的,期初也不需顯示
+	delete #z_bank02 
+	from #z_bank02 a
+	where not exists(select * from #z_bank02 where pno='2' and accy=a.accy and acc1=a.acc1) 
+	---------------------------------------------------------
+	update #z_bank02 set recno=b.recno
+	from #z_bank02 a
+	left join (select sel,ROW_NUMBER()over(partition by accy,acc1 order by pno,datea,sel) recno from #z_bank02) b on a.sel=b.sel
+	
+	update #z_bank02 set result=b.result
+	from #z_bank02 a
+	outer apply(select SUM(dmoney-cmoney) result from #z_bank02 where accy=a.accy and acc1=a.acc1 and recno<=a.recno) b
+	
+	update #z_bank02 set [begin]=c.result
+	from #z_bank02 a
+	left join (select sel,ROW_NUMBER()over(partition by accy,acc1,datea order by recno) xx from #z_bank02 ) b on a.sel=b.sel
+	outer apply(select top 1 * from #z_bank02 where accy=a.accy and acc1=a.acc1 and recno<a.recno order by recno desc) c
+	where b.xx = 1
+	--
+	update #z_bank02 set [end]= dbo.getComma(cast(ISNULL(c.money4,0) as decimal(16,4)),-1)  
+	from #z_bank02 a
+	left join (select sel,ROW_NUMBER()over(partition by accy,acc1,datea order by recno desc) xx from #z_bank02 ) b on a.sel=b.sel
+	outer apply(select top 1 x.money4
+		from banktmps x
+		left join banktmp y on x.noa=y.noa
+		where y.bankno=replace(a.acc1,'.','') and x.datea=a.datea
+		order by x.noa desc,x.noq desc) c
+	where b.xx = 1
+	
+	---------------------------------------------------------
+	--期初不需顯示
+	delete #z_bank02 where gno='1'
+	---------------------------------------------------------
+	insert into #z_bank02(gno,pno,accy,acc1,dmoney,cmoney,memo)
+	select '3',3,CHAR(255),CHAR(255),SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),'結餘'
+	from #z_bank02
+
+
+	--空白行
+	/*declare @t_pagecount int = 28
+	declare @n int
+	
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @account nvarchar(50)
+	declare @datea nvarchar(20)
+	
+	declare cursor_table cursor for
+	select accy,acc1,acc2,account,count(1) from #z_bank02 group by accy,acc1,acc2,account
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@acc1,@acc2,@account,@n
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		while @n%@t_pagecount!=0
+		begin
+			insert into #z_bank02(gno,pno,accy,acc1,acc2,account)
+			select '4',4,@accy,@acc1,@acc2,@account
+			
+			set @n = @n + 1
+		end
+	
+		fetch next from cursor_table
+		into @accy,@acc1,@acc2,@account,@n
+	end
+	close cursor_table
+	deallocate cursor_table*/
+	
+	update #z_bank02 set color = case when ([end] is not null and dbo.getComma([result],-1)!=[end]) then 'red' else 'black' end
+
+	select gno
+		,'<a style="color:'+color+'">'+cast(recno as nvarchar)+'</a>' rr
+		,'<a style="color:'+color+'">'+acc2+'</a>' a01
+		,'<a style="color:'+color+'">'+account+'</a>' a02
+		,'<a style="color:'+color+'">'+datea+'</a>' b00
+		,'<a style="color:'+color+'">'+accc3+'</a>' b01
+		,'<a style="color:'+color+'">'+dbo.getComma([begin],-1)+'</a>' b02
+		,'<a style="color:'+color+'">'+dbo.getComma(dmoney,-1)+'</a>' b03
+		,'<a style="color:'+color+'">'+dbo.getComma(cmoney,-1)+'</a>' b04
+		,'<a style="color:'+color+'">'+dbo.getComma(result,-1)+'</a>' b05
+		--,dbo.getComma([end],-1) b06
+		,'<a style="color:'+color+'">'+[end]+'</a>' b06
+		,'<a style="color:'+color+'">'+memo+'</a>' b07
+	from #z_bank02	
+	order by accy,acc1,pno,recno
+	drop table #z_bank02;
+
+
+z_bank01:--z_bank01
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	
+	--declare @t_accy nvarchar(20) = [1]
+	declare @t_bdate nvarchar(10) = case when '#non'=[2] then '' else [2] end 
+	declare @t_edate nvarchar(10) = case when '#non'=[3] then char(255) else [3] end 
+	declare @t_baccno nvarchar(25) = case when '#non'=[4] then '' else [4] end 
+	declare @t_eaccno nvarchar(25) = case when '#non'=[5] then char(255) else [5] end 
+-------------------------------------------------------------------------
+	declare @tmp table(
+		sel int identity(1,1)
+		,gno nvarchar(10)
+		,tablea nvarchar(20)
+		,acc1 nvarchar(20)
+		,acc2 nvarchar(50)
+		,atitle nvarchar(20)
+		,btitle nvarchar(20)
+		,account nvarchar(50)
+		,dmoney1 float
+		,cmoney1 float
+		,dmoney2 float
+		,cmoney2 float
+		,dmoney3 float
+		,cmoney3 float
+		,[begin] float
+		,[current] float
+		,[end] float
+	)
+	declare @accy nvarchar(10)
+	declare @acc nvarchar(20)
+	declare @accc nvarchar(20)
+	declare @acccs nvarchar(20)
+	
+	declare cursor_table cursor for
+	
+	select  right(left(a.[name],7),3),a.[name],b.[name],c.[name]
+	from sys.tables a
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acccs[0-9][0-9][0-9][_]%') b on RIGHT(a.[name],5)=b.accy
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acc[0-9][0-9][0-9][_]%') c on RIGHT(a.[name],5)=c.accy
+	where a.[name] like 'accc[0-9][0-9][0-9][_]%'
+	and b.[name] is not null
+	
+	order by RIGHT(a.[name],5)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc,@acccs,@acc
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		set @cmd = "select @accc,a.accc5
+			,ISNULL(d.bank,'')
+			,isnull(d.account,'')
+			,SUM(case when @accy+'/'+isnull(b.accc2,'') < @t_bdate then ISNULL(a.dmoney,0) else 0 end)
+			,SUM(case when @accy+'/'+isnull(b.accc2,'') < @t_bdate then ISNULL(a.cmoney,0) else 0 end)
+			,SUM(case when @accy+'/'+isnull(b.accc2,'') between @t_bdate and @t_edate then ISNULL(a.dmoney,0) else 0 end)
+			,SUM(case when @accy+'/'+isnull(b.accc2,'') between @t_bdate and @t_edate then ISNULL(a.cmoney,0) else 0 end)
+			,SUM(case when @accy+'/'+isnull(b.accc2,'') <= @t_edate then ISNULL(a.dmoney,0) else 0 end)
+			,SUM(case when @accy+'/'+isnull(b.accc2,'') <= @t_edate then ISNULL(a.cmoney,0) else 0 end)
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		left join "+@acc+" c on a.accc5=c.acc1
+		outer apply(select top 1 * from bank where acc1=a.accc5) d
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') <= @t_edate
+		and a.accc5 between @t_baccno and @t_eaccno 
+		group by a.accc5,ISNULL(d.bank,''),isnull(d.account,'')"
+	
+		if @accy between LEFT(@t_bdate,3) and LEFT(@t_edate,3)
+			insert into @tmp(tablea,acc1,acc2,account,dmoney1,cmoney1,dmoney2,cmoney2,dmoney3,cmoney3)
+			execute sp_executesql @cmd,N'@accc nvarchar(20),@accy nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20),@t_baccno nvarchar(20),@t_eaccno nvarchar(20)'
+			,@accc=@accc,@accy=@accy,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_baccno=@t_baccno,@t_eaccno=@t_eaccno
+	
+		fetch next from cursor_table
+		into @accy,@accc,@acccs,@acc
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update @tmp set gno='1' 
+		,[begin] = ISNULL(dmoney1,0)-ISNULL(cmoney1,0)
+		,[current] = ISNULL(dmoney2,0)-ISNULL(cmoney2,0)
+		,[end] = ISNULL(dmoney3,0)-ISNULL(cmoney3,0)
+------------------------------------------------------------------------------
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @atitle nvarchar(50)
+	declare @btitle nvarchar(50)
+	
+	declare cursor_table cursor for 
+	select acc1,acc2 from @tmp 
+	open cursor_table
+	fetch next from cursor_table
+	into @acc1,@acc2
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+		
+		set @btitle = case when Len(@acc2)=0 then '' else SUBSTRING(@acc2,CHARINDEX('-',@acc2)+1,len(@acc2)) end
+		if PATINDEX('%-%',@acc2)<1
+		begin
+			set @atitle = ''
+		end
+		else
+		begin
+			set @atitle = left(@acc2,PATINDEX('%-%',@acc2)-1) 
+		end
+		update @tmp set atitle = case when (PATINDEX('%甲存%',@acc2)>0)then '甲存' else '活存' end
+			,btitle = @btitle
+		where acc1 = @acc1
+
+		fetch next from cursor_table
+		into @acc1,@acc2
+	end 
+	close cursor_table
+	deallocate cursor_table
+	
+	if((select count(*) from @tmp)>0)
+	begin
+		insert @tmp(gno,atitle,[begin],[dmoney2],[cmoney2],[end])
+		select '2',atitle,SUM([begin]),SUM([dmoney2]),SUM([cmoney2]),SUM([end])
+		from @tmp where gno='1'
+		group by atitle
+		
+		insert @tmp(gno,atitle,[begin],[dmoney2],[cmoney2],[end])
+		select '3',CHAR(255),SUM([begin]),SUM([dmoney2]),SUM([cmoney2]),SUM([end])
+		from @tmp where gno='1'
+	end
+
+	select gno
+		,acc2 a01
+		,account a02
+		,dbo.getComma([begin],-1) a03
+		,dbo.getComma([dmoney2],-1) a04
+		,dbo.getComma([cmoney2],-1) a05
+		,dbo.getComma([end],-1) a06
+		,'' a07
+		,dbo.getComma([end],-1) a08
+		,atitle
+	from @tmp 
+	order by gno,acc1,atitle;
+--------------------------------------------------------------------------------------------------------------------------------------
+z_bank1:--z_bank1
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @t_accy nvarchar(20) 
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10) 
+declare @t_baccno nvarchar(25) 
+declare @t_eaccno nvarchar(25) 
+declare @t_xsort1 nvarchar(25) 
+set @t_accy ='[1]'
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_baccno = case when '#non'=[4] then '' else [4] end
+set @t_eaccno = case when '#non'=[5] then char(255) else [5] end
+set @t_xsort1 = case when '#non'=[6] then '' else [6] end 
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+
+-------------銀行調節明細---------
+create table #tmpa(
+		gno nvarchar(1),
+		accc5 nvarchar(30),
+		saccc5 nvarchar(50),
+		dmoney float,
+		cmoney float,
+		smoney float
+)
+
+insert into #tmpa
+exec("select '0' gno,s1.accc5,substring((SUBSTRING(s1.accc5,1,9)+'.'+SUBSTRING(s1.accc5,10,13)),6,14),s1.dmoney,s1.cmoney,s1.money
+from( 
+	select '0' gno, accc5,SUM(dmoney) dmoney, SUM(cmoney) cmoney, SUM((dmoney-Cmoney)*n) money 
+	from( 
+		select accc5,dmoney,cmoney,case when LEFT(b.accc5,4)='1117' then 1 else -1 end n  
+		from acccs"+@t_accy+" b where (b.accc2 between "+@t_bdate+" and "+@t_edate+") and LEFT(b.accc5,4)='1117') as R1 
+		group by accc5 
+		) AS s1 
+	left join acc"+@t_accy+" acc on acc.acc1=s1.accc5 
+	left join 
+		(select accc5,SUM(dmoney) dmoney, SUM(cmoney) cmoney,SUM((dmoney-Cmoney)*n) money  
+		from 
+			(select accc5,dmoney,cmoney,case when LEFT(b.accc5,4)='1117' then 1 else -1 end n  
+		from acccs"+@t_accy+" b where b.accc2<"+@t_bdate+" and LEFT(b.accc5,4)='1117') as R1 
+		group by accc5  
+			)as S2 
+			on s1.accc5 = S2.accc5")
+
+declare @tmp table( 
+		gno nvarchar(1), 
+		accc5 nvarchar(20),------會計編號 
+		dmoney int, -------借方金額
+		cmoney int, -------貸方金額
+		[money] int, 
+		acc2 nvarchar(50), ------會科名稱
+		account nvarchar(50), -----帳號
+		beginmoney int, -----------期初金額
+		lastmoney int,------------本期結餘/本日結餘
+		ctmoney int,-----銀行調節
+		 ttmoney int,-------可用餘額
+		title nvarchar(20), ------顯示 本期結餘/本日結餘
+		atitle nvarchar(50), -----顯示 甲存/活存
+		btitle nvarchar(50), -----顯示 戶名
+		ctitle nvarchar(50) ------顯示 銀行名稱
+)	
+insert into @tmp 
+exec("
+select S1.gno,s1.accc5,s1.dmoney,s1.cmoney,s1.money,case when PATINDEX('%[0-9]%',acc.acc2) = 0 then acc.acc2 else left(acc.acc2,PATINDEX('%[0-9]%',acc.acc2)-1) end,(case when PATINDEX('%[0-9]%',acc.acc2)=0 then '' else substring(acc.acc2,PATINDEX('%[0-9]%',acc.acc2),len(acc.acc2))end), isNull(acc.beginmoney,0) + isNull(s2.money,0) as beginMoney,
+ isNull(acc.beginmoney,0) + isNull(s1.money,0) + isNull(s2.money,0) as lastMoney 
+,0,isNull(acc.beginmoney,0) + isNull(s1.money,0) + isNull(s2.money,0),'','','','' 
+from( 
+	select '0' gno, accc5,SUM(dmoney) dmoney, SUM(cmoney) cmoney, SUM((dmoney-Cmoney)*n) money 
+	from( 
+		select b.* , 
+		case when LEFT(b.accc5,4)='1112' then 1 else -1 end n 
+		from acccs106_1 b where (b.accc5 between '"+@t_baccno+"' and '"+@t_eaccno+"') and (b.accc2 between '"+@t_bdate+"' and '"+@t_edate+"') and LEFT(b.accc5,4)='1112') as R1 
+		group by accc5 
+		) AS s1 
+	left join acc106_1 acc on acc.acc1=s1.accc5
+	left join 
+		(select accc5,SUM(dmoney) dmoney, SUM(cmoney) cmoney, SUM((dmoney-Cmoney)*n) money 
+		from 
+			(select b.* , 
+			case when LEFT(b.accc5,4)='1112' then 1 else -1 end n 
+			from acccs106_1 b where (b.accc5 between '"+@t_baccno+"' and '"+@t_eaccno+"') and b.accc2< '"+@t_bdate+"' and LEFT(b.accc5,4)='1112') as R2 
+			group by accc5 
+			)as S2 
+			on s1.accc5 = S2.accc5")
+			
+--------------------更新@tmp資料-------------
+declare @saccc5 nvarchar(20)
+declare @smoney float
+
+
+
+--------補齊日期區間沒有值的--------------
+declare @accc5 nvarchar(35) 
+declare @acc2 nvarchar(50) 
+declare @account nvarchar(50) 
+declare @dmoney float 
+declare @cmoney float 
+declare @total float 
+declare @ctmoney float 
+declare @ttotal float 
+set @accc5 = '' 
+set @acc2 = '' 
+set @account = '' 
+set @dmoney = 0 
+set @cmoney = 0 
+set @total = 0
+set @ctmoney = 0
+set @ttotal = 0
+
+declare @tmpb table(
+	accc5 nvarchar(50),
+	acc2 nvarchar(50),
+	account float,
+	dmoney float,
+	cmoney float
+)
+insert @tmpb
+exec("select distinct(a.accc5), 
+case when PATINDEX('%[0-9]%',b.acc2) = 0 then b.acc2 else left(b.acc2,PATINDEX('%[0-9]%',b.acc2)-1) end, 
+(case when PATINDEX('%[0-9]%',b.acc2)=0 then '' else substring(b.acc2,PATINDEX('%[0-9]%',b.acc2),len(b.acc2))end), 
+sum(a.dmoney),sum(a.cmoney) from acccs"+@t_accy+" a left join acc"+@t_accy+" b on a.accc5 = b.acc1
+left join #tmpa c on a.accc5 = c.saccc5 
+where accc2 < '"+@t_bdate+"' and LEFT(a.accc5,4)='1112' 
+and (a.accc5 between '"+@t_baccno+"' and '"+@t_eaccno+"') 
+group by a.accc5,b.acc2")
+
+declare cursor_table cursor for 
+select accc5,acc2,account,dmoney,cmoney
+from @tmpb
+open cursor_table 
+fetch next from cursor_table 
+into @accc5,@acc2,@account,@dmoney,@cmoney
+while(@@FETCH_STATUS <> -1) 
+begin 
+	if((select COUNT(accc5) from @tmp where accc5 = @accc5) = 0) 
+	begin 
+		set @total = @dmoney - @cmoney 
+		insert into @tmp(gno,accc5,acc2,account,beginmoney,dmoney,cmoney,lastmoney,ctmoney,ttmoney,title,atitle,btitle,ctitle) 
+		select 0,@accc5,@acc2,@account,@total,0,0,@total,0,@total,'','','',''
+	end 
+fetch next from cursor_table 
+into @accc5,@acc2,@account,@dmoney,@cmoney
+end 
+close cursor_table 
+deallocate cursor_table	
+
+declare cursor_table2 cursor for 
+select saccc5,smoney from #tmpa  
+open cursor_table2 
+fetch next from cursor_table2
+into @saccc5,@smoney
+while(@@FETCH_STATUS <> -1) 
+begin 
+	update @tmp set ctmoney = @smoney,ttmoney = lastmoney+@smoney where accc5 = @saccc5
+fetch next from cursor_table2
+into @saccc5,@smoney
+end 
+close cursor_table2
+deallocate cursor_table2	
+
+delete @tmp where account = ''
+
+declare @tacc2 nvarchar(50)
+declare @taccc5 nvarchar(20)
+
+declare cursor_table3 cursor for 
+select accc5,acc2 from @tmp 
+open cursor_table3 
+fetch next from cursor_table3
+into @taccc5,@tacc2
+while(@@FETCH_STATUS <> -1) 
+begin 
+	update @tmp set atitle = case when (PATINDEX('%甲存%',@tacc2)>0)then '甲存' else '活存' end,
+btitle = SUBSTRING(@tacc2,CHARINDEX('-',acc2)+1,len(@tacc2)),
+ctitle = left(@tacc2,PATINDEX('%-%',@tacc2)-1) where accc5 = @taccc5
+
+fetch next from cursor_table3
+into @taccc5,@tacc2
+end 
+close cursor_table3
+deallocate cursor_table3
+
+------↓執行此行可能造成與異動表存入與領用金額不相等但結餘相等情況--------
+------delete @tmp where lastmoney = 0 and ttmoney = 0
+
+insert into @tmp 
+select '1' gno,CHAR(255),SUM(dmoney),SUM(cmoney),SUM(money),CHAR(255),CHAR(255),SUM(beginmoney),SUM(lastmoney),SUM(ctmoney),SUM(ttmoney),'',atitle,CHAR(255),CHAR(255) 
+from @tmp 
+group by atitle 
+
+insert into @tmp 
+select '2' gno,char(255),sum(dmoney),sum(cmoney),sum(money),CHAR(255),CHAR(255),sum(beginmoney),sum(lastmoney),SUM(ctmoney),SUM(ttmoney),'',CHAR(255),CHAR(255),CHAR(255) 
+from @tmp 
+where gno != 1 
+
+if @t_xsort1 = 'acc1'
+begin
+	if @t_bdate = @t_edate 
+	begin 
+		select gno,accc5, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,dmoney),1)),4,12)) dmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) cmoney, 
+		acc2,account,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,beginmoney),1)),4,12)) beginmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) lastmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ctmoney),1)),4,12)) ctmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttmoney),1)),4,12)) ttmoney,
+		'本日結餘' title,atitle ,btitle,ctitle
+		from @tmp 
+		order by gno,accc5
+	end 
+	else 
+	begin 
+		select gno,accc5, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,dmoney),1)),4,12)) dmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) cmoney, 
+		acc2,account,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,beginmoney),1)),4,12)) beginmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) lastmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ctmoney),1)),4,12)) ctmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttmoney),1)),4,12)) ttmoney,
+		'本期結餘' title,atitle ,btitle,ctitle
+		from @tmp 
+		order by gno,accc5
+	end 
+end
+else if @t_xsort1 = 'acc2'
+begin
+	if @t_bdate = @t_edate 
+	begin 
+		select gno,accc5, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,dmoney),1)),4,12)) dmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) cmoney, 
+		acc2,account,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,beginmoney),1)),4,12)) beginmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) lastmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ctmoney),1)),4,12)) ctmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttmoney),1)),4,12)) ttmoney,
+		'本日結餘' title,atitle ,btitle,ctitle
+		from @tmp 
+		order by gno,atitle,btitle,ctitle
+	end 
+	else 
+	begin 
+		select gno,accc5, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,dmoney),1)),4,12)) dmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,cmoney),1)),4,12)) cmoney, 
+		acc2,account,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,beginmoney),1)),4,12)) beginmoney, 
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) lastmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ctmoney),1)),4,12)) ctmoney,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttmoney),1)),4,12)) ttmoney,
+		'本期結餘' title,atitle ,btitle,ctitle
+		from @tmp 
+		order by gno,atitle,btitle,ctitle
+	end 
+end
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	set @cmd = 'drop table #tmpa'
+	EXECUTE sp_executesql @cmd
+END
+;
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+z_bank2:--z_bank2
+declare @t_accy nvarchar(20)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_baccno nvarchar(25)
+declare @t_eaccno nvarchar(25)
+declare @title nvarchar(200)
+set @t_accy = '105_1'
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_baccno = case when '#non'=[4] then '' else [4] end
+set @t_eaccno = case when '#non'=[5] then char(255) else [5] end
+set @title = '銀行存款異動明細' + (case when @t_bdate = @t_edate then '日報表' else '月報表' end)
+
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	accuname nvarchar(90),
+	account nvarchar(50),
+	datea nvarchar(10),
+	lastmoney float,
+	inmoney float,
+	outmoney float,
+	todaytotal float,
+	memo nvarchar(200),
+	ctmoney int,-----銀行調節
+	ttmoney int-------可用餘額
+)
+declare @tmpb table(
+	gno nvarchar(1),
+	idno int identity(0,1),
+	accuname nvarchar(90),
+	account nvarchar(50),
+	datea nvarchar(10),
+	lastmoney float,
+	inmoney float,
+	outmoney float,
+	todaytotal float,
+	memo nvarchar(max),
+	ctmoney int,-----銀行調節
+	ttmoney int-------可用餘額
+)
+declare @tmpa table(  -----放置搜尋日期區間內有的帳戶
+	wacc1 nvarchar(50),
+	wacc2 nvarchar(50),
+	accuname nvarchar(200),
+	account nvarchar(50),
+	lastmoney float
+)
+insert into @tmpa(wacc1,accuname,account)
+	select 
+		distinct a.accc5,b.bank,b.account
+	from acccs105_1 a
+	left join bank b on (left(a.accc5,4) + substring(a.accc5,6,len(a.accc5)-4) = b.noa)
+	where
+	(LEFT(accc5,4) = '1112') and
+	(accc2 <= @t_edate) and
+	(accc5 between @t_baccno and @t_eaccno)
+	order by accc5
+update @tmpa set lastmoney = isnull((select sum(dmoney-cmoney) from acccs105_1 where (accc2 < @t_bdate) and wacc1 = accc5),0)
+---update @tmpa set lastmoney = (select (SUM(ISNULL(dmoney,0)) - SUM(ISNULL(cmoney,0))) from acccs105_1 where (accc2 < @t_bdate) and right(accc6,len(account)) = account)
+insert into @tmpb
+	select
+		'0',
+		isnull(b.accuname,case when len(a.accc5) > 99 then (select accuname from @tmpa where wacc1 = left(substring(a.accc5,6,len(a.accc5)-5),4) + '.' + right(substring(a.accc5,6,len(a.accc5)-5),len(substring(a.accc5,6,len(a.accc5)-5))-4)) end) ,
+		isnull(b.account,case when len(a.accc5) > 99 then (select account from @tmpa where wacc1 = left(substring(a.accc5,6,len(a.accc5)-5),4) + '.' + right(substring(a.accc5,6,len(a.accc5)-5),len(substring(a.accc5,6,len(a.accc5)-5))-4)) end) ,
+		accc2,
+		0,
+		case when LEFT(accc5,4) = '1112' then dmoney else 0 end,
+		case when LEFT(accc5,4) = '1112' then cmoney else 0 end,0,accc7,
+		case when LEFT(accc5,4) = '1117' then 
+			case when dmoney >0 then dmoney
+			when cmoney > 0 then cmoney*(-1) end
+		else 0 end,
+		0
+	from acccs105_1 a
+	left join @tmpa b on a.accc5 =  b.wacc1
+	where ((LEFT(accc5,4) = '1112') or (LEFT(accc5,4) = '1117')) and 
+		  (accc2 between @t_bdate and @t_edate) and
+		  ((accc5 between @t_baccno and @t_eaccno) or LEFT(accc5,4) = '1117' )
+	order by accuname,account,accc2,cmoney,dmoney
+insert into @tmp
+	select gno,accuname,account,datea,lastmoney,inmoney,outmoney,todaytotal,memo,ctmoney,ttmoney from @tmpb order by accuname,account
+
+
+declare @account nvarchar(50)
+declare @last_account nvarchar(50)
+declare @datea nvarchar(10)
+declare @last_datea nvarchar(10)
+declare @inmoney float
+declare @outmoney float
+declare @lastmoney float
+declare @idno int
+declare @ctmoney int
+set @last_account = ''
+set @last_datea = ''
+set @lastmoney = 0
+set @ctmoney = 0
+declare cursor_table cursor for
+	select idno,account,datea,inmoney,outmoney,ctmoney from @tmp
+open cursor_table
+fetch next from cursor_table
+into @idno,@account,@datea,@inmoney,@outmoney,@ctmoney
+while(@@FETCH_STATUS <> -1)
+begin
+	if(@account = @last_account and @datea = @last_datea)
+	begin
+		set @lastmoney = (@lastmoney + @inmoney) - @outmoney + @ctmoney
+	end
+	else if(@account != @last_account)
+	begin
+		if(@last_account != '' and @last_datea != '')
+			update @tmp set todaytotal = @lastmoney where idno = @idno-1
+		select @lastmoney = lastmoney from @tmpa where account = @account
+		update @tmp set lastmoney = @lastmoney where idno = @idno
+		if((select count(account) from @tmp where account = @account and datea = @datea) = 1)
+			update @tmp set todaytotal = (lastmoney + inmoney) - outmoney where idno = @idno
+		set @last_account = @account
+		set @last_datea = @datea
+		set @lastmoney = (@lastmoney + @inmoney) - @outmoney/* + @ctmoney*/
+	end
+	else if(@account = @last_account and @datea != @last_datea)
+	begin
+		update @tmp set todaytotal = @lastmoney where idno = @idno-1
+		update @tmp set lastmoney = @lastmoney where idno = @idno
+		if((select count(account) from @tmp where account = @account and datea = @datea) = 1)
+			update @tmp set todaytotal = (lastmoney + inmoney) - outmoney where idno = @idno
+		set @last_datea = @datea
+		set @lastmoney = (@lastmoney + @inmoney) - @outmoney + @ctmoney
+	end
+	if((select max(idno) from @tmp) = @idno)
+		update @tmp set todaytotal = @lastmoney where idno = @idno	
+	fetch next from cursor_table
+	into @idno,@account,@datea,@inmoney,@outmoney,@ctmoney
+end
+close cursor_table
+deallocate cursor_table
+update @tmp set todaytotal = todaytotal - ctmoney where todaytotal != 0
+update @tmp set ttmoney = 
+		case when todaytotal = 0 and inmoney = 0 and outmoney = 0 then lastmoney + ctmoney 
+		else todaytotal + ctmoney end
+--暫時不要顯示
+-------將本期無紀錄但有結餘的帳戶列出
+--insert into @tmp(account,gno,accuname,datea,lastmoney,inmoney,outmoney,todaytotal,ctmoney,ttmoney,memo)
+--	select account,'0',accuname,'',lastmoney,0,0,lastmoney,0,lastmoney,'' from @tmpa where lastmoney != 0
+--	except
+--	select distinct account,'0',accuname,'',lastmoney,0,0,lastmoney,0,lastmoney,'' from @tmp where lastmoney != 0
+-------計算本日結餘
+declare @totalmoney int
+set @totalmoney = 0
+declare cursor_table cursor for 
+	select distinct account,max(idno) from @tmp 
+	group by account
+open cursor_table 
+fetch next from cursor_table 
+into @account,@idno
+while(@@FETCH_STATUS <> -1) 
+begin 
+	set @totalmoney += (select todaytotal from @tmp where account = @account and idno = @idno)
+	fetch next from cursor_table 
+	into @account,@idno
+end 
+close cursor_table 
+deallocate cursor_table
+
+insert into @tmp(gno,inmoney,outmoney,todaytotal,ctmoney,ttmoney) 
+	select '1',SUM(inmoney),SUM(outmoney),@totalmoney,sum(ctmoney),(@totalmoney+sum(ctmoney))
+	from @tmp 
+	
+select
+	gno,accuname,account,datea,
+	case when lastmoney = 0 then '' else 
+		(case when lastmoney < 0 then '(' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,(lastmoney*-1)),1)),4,12)) + ')'
+			else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,lastmoney),1)),4,12)) end)
+		end lastmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmoney),1)),4,12)) inmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmoney),1)),4,12)) outmoney,
+	case when todaytotal = 0 then '' else 
+		(case when todaytotal < 0 then '(' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,(todaytotal*-1)),1)),4,12)) + ')'
+			else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,todaytotal),1)),4,12)) end)
+		end todaytotal,
+	case when ctmoney = 0 then '' else 
+		(case when ctmoney < 0 then '(' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,(ctmoney*-1)),1)),4,12)) + ')'
+			else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ctmoney),1)),4,12)) end)
+		end ctmoney,
+	case when ttmoney = 0 then '' else 
+		(case when ttmoney < 0 then '(' + reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,(ttmoney*-1)),1)),4,12)) + ')'
+			else reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,ttmoney),1)),4,12)) end)
+		end ttmoney,
+	memo,@title title
+from @tmp;

@@ -1,0 +1,172 @@
+tmp2tran:--tmp2tran	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_date nvarchar(10)
+	set @t_date = [1] 
+	----------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#tmp2tran')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp2tran'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #tmp2tran(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		accy nvarchar(10),
+		tranno nvarchar(20),
+		trannoq nvarchar(10),
+		datea nvarchar(10),
+		trandate nvarchar(10),
+		mon	nvarchar(10),
+		mon2 nvarchar(10),
+		carno nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		custno nvarchar(10),
+		comp nvarchar(50),
+		nick nvarchar(20),
+		calctype nvarchar(20),
+		carteamno nvarchar(20),
+		straddrno nvarchar(20),
+		straddr nvarchar(40),
+		uccno nvarchar(20),
+		product nvarchar(40),
+		
+		inmount float,
+		pton float,
+		mount float,	
+		price float,
+		total float,
+		outmount float,
+		pton2 float,
+		mount2 float,
+		price2 float,
+		price3 float,
+		discount float
+		,total2 float,
+		
+		tolls float,
+		reserve float,
+		gross float,
+		[weight] float,
+		caseno nvarchar(20),
+		caseno2 nvarchar(20),
+		casetype nvarchar(20),
+		po nvarchar(40),
+		custorde nvarchar(40),
+		bmiles float,
+		emiles float,
+		miles float,
+		gps float,
+		salesno nvarchar(20),
+		sales nvarchar(40),
+		memo nvarchar(max),
+		weight2 float,
+		weight3 float
+	)
+	insert into #tmp2tran(noa,noq,accy,tranno,trannoq,datea,trandate,mon,mon2
+		,carno,driverno,driver,custno,comp,nick,calctype,carteamno,straddrno,straddr
+		,uccno,product,inmount,pton,mount,price,total
+		,outmount,pton2,mount2,price2,price3,discount,total2,tolls,reserve
+		,gross,[weight],caseno,caseno2,casetype,po,custorde,bmiles,emiles,miles,gps,salesno,sales,memo
+		,weight2,weight3)
+	select a.noa,a.noq,a.accy,a.tranno,a.trannoq,a.datea,a.trandate,a.mon,a.mon2
+		,a.carno,a.driverno,a.driver,a.custno,a.comp,a.nick,a.calctype,a.carteamno,a.straddrno,a.straddr
+		,a.uccno,a.product,a.inmount,a.pton,a.mount,a.price,a.total
+		,a.outmount,a.pton2,a.mount2,a.price2,a.price3,a.discount,a.total2,a.tolls,a.reserve
+		,a.gross,a.[weight],a.caseno,a.caseno2,a.casetype,a.po,a.custorde
+		,a.bmiles,a.emiles,a.miles,a.gps,a.salesno,a.sales,a.memo 
+		,a.weight2,a.weight3
+	from tmp2trans a
+	left join tmp2tran b on a.noa=b.noa
+	where b.noa is not null
+	and b.datea = @t_date
+	----------------------------------------------------------------------------------------
+	declare @accy nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @t_accy nvarchar(20)
+	declare @tranno nvarchar(20)
+	declare @trannoq nvarchar(10)
+	declare @datea nvarchar(10)
+	declare @string nvarchar(max)
+	set @string = '0123456789ABCDEFGHIJKLMN'
+	declare @num int
+	declare @mm nvarchar(20)
+	
+	declare cursor_table cursor for
+	select noa,noq,datea from #tmp2tran where LEN(isnull(tranno,''))=0 and len(isnull(datea,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@noq,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		set @t_accy = LEFT(@datea,3)
+		set @cmd = 
+		" select @tranno = MAX(noa) "+
+		" from(select noa from view_trans"+@t_accy+" where LEFT(noa,9)='BA'+replace(@datea,'/','')"+
+		" union all"+
+		" select tranno from #tmp2tran where LEFT(tranno,9)='BA'+replace(@datea,'/','')) as a"
+		execute sp_executesql @cmd,N'@datea nvarchar(10),@tranno nvarchar(20) output',@datea=@datea,@tranno=@tranno output	
+		if(LEN(ISNULL(@tranno,''))=0)
+		begin
+			set @mm='001'
+		end
+		else
+		begin
+			set @mm = right(@tranno,3)
+			if(right(@mm,2)='99')
+			begin
+				set @mm = Substring(@string,Charindex(LEFT(@mm,1),@string)+1,1)+'00'
+			end
+			else
+			begin
+				set @mm = LEFT(@mm,1) + right('00'+CAST(CAST(right(@mm,2) as int)+1 as nvarchar),2)
+			end
+		end
+		set @tranno = 'BA'+replace(@datea,'/','')+@mm
+		update #tmp2tran set accy=@t_accy,tranno= @tranno,trannoq='001' where noa=@noa and noq=@noq
+		
+		fetch next from cursor_table
+		into @noa,@noq,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------
+	declare cursor_table cursor for
+	select accy from #tmp2tran group by accy
+	open cursor_table
+	fetch next from cursor_table
+	into @accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @cmd =
+		" insert into trans"+@accy+"(noa,noq)"+
+		" select tranno,trannoq from #tmp2tran a "+
+		" where accy=@accy and (not exists(select noa from trans"+@accy+" where noa=a.tranno and noq=a.trannoq))"
+		execute sp_executesql @cmd,N'@accy nvarchar(10)',@accy=@accy
+		
+		set @cmd =
+		" update trans"+@accy+" set"+
+		" 	ordeno=b.noa+'-'+b.noq ,datea=b.datea,trandate=b.trandate,mon=b.mon,mon2=b.mon2"+
+		" 	,carno=b.carno,driverno=b.driverno,driver=b.driver,custno=b.custno,comp=b.comp,nick=b.nick"+
+		" 	,calctype=b.calctype,carteamno=b.carteamno,straddrno=b.straddrno,straddr=b.straddr"+
+		" 	,uccno=b.uccno,product=b.product,inmount=b.inmount,pton=b.pton,mount=b.mount,price=b.price,total=b.total"+
+		" 	,outmount=b.outmount,pton2=b.pton2,mount2=b.mount2,price2=b.price2,price3=b.price3,discount=b.discount"+
+		" 	,total2=b.total2,tolls=b.tolls,reserve=b.reserve"+
+		" 	,gross=b.gross,[weight]=b.[weight],caseno=b.caseno,caseno2=b.caseno2,casetype=b.casetype"+
+		" 	,po=b.po,custorde=b.custorde,bmiles=b.miles,emiles=b.emiles,miles=b.miles,gps=b.gps"+
+		" 	,salesno=b.salesno,sales=b.sales,memo=b.memo,worker=c.worker,worker2=c.worker2"+
+		" from trans"+@accy+" a"+
+		" inner join #tmp2tran b on b.tranno=a.noa and b.trannoq=a.noq "+
+		" inner join tmp2tran c on b.noa=c.noa"
+		execute sp_executesql @cmd
+		fetch next from cursor_table
+		into @accy
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update tmp2trans set accy=b.accy,tranno=b.tranno,trannoq=b.trannoq
+	from tmp2trans a
+	inner join #tmp2tran b on a.noa=b.noa and a.noq=b.noq;

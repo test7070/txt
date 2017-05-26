@@ -1,0 +1,284 @@
+﻿sign:--work_sign 1040224 改成簽核後才產生調撥單
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(50)=[1]--單據編號[1]
+declare @cmd nvarchar(max)
+declare @accy nvarchar(20)=isnull((select accy from view_workk where noa=@noa),'')
+
+--調撥單號
+declare @cngno nvarchar(50) = isnull((select cngno from view_workk where noa=@noa),'')
+
+--撥料日期
+declare @datea nvarchar(20)
+set @datea=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @datea=left(@datea,3)+'/'+substring(@datea,4,2)+'/'+right(@datea,2)
+--set @datea=(select datea from view_workk where noa=@noa)
+
+--刪除已產生的調撥單(重送簽核)
+if(len(@cngno)>0)
+begin
+	set @accy=(select accy from view_cng where noa=@cngno)
+	--刪除產生的cng
+	set @cmd="delete cng"+@accy+" where noa='"+@cngno+"'"
+	EXECUTE sp_executesql @cmd
+	set @cmd="delete cngs"+@accy+" where noa='"+@cngno+"'"
+	EXECUTE sp_executesql @cmd
+end
+
+--判斷是否已有調撥單號
+if(len(@cngno)=0)
+begin
+	--取得當天最後一個調撥單號
+	select @cngno=MAX(noa) from view_cng where noa like 'X'+REPLACE(@datea,'/','')+'%'
+	--新的調撥單號(後面號碼+1)
+	set @cngno='X'+REPLACE(@datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@cngno,'000'),3) as int)+1 as nvarchar(10)),3)
+end
+
+--產生調撥單
+set @cmd="insert cng"+@accy+" (noa,datea,typea,storeno,store,storeinno,storein,memo,sssno,namea,worker,worker2,workkno)
+select '"+@cngno+"' noa,'"+@datea+"' datea,'1' typea,storeno,store,storeinno,storein,'由撥料作業("+@noa+")轉來 chr(10)'+memo
+,(select noa from sss where namea=(case when worker2 !='' then worker2 else worker end))
+,(case when worker2 !='' then worker2 else worker end),worker,worker2,'"+@noa+"'
+from view_workk where noa='"+@noa+"'"
+EXECUTE sp_executesql @cmd
+	
+set @cmd="insert cngs"+@accy+" (noa,noq,productno,product,unit,mount,memo,uno)
+select '"+@cngno+"' noa,noq,productno,product,unit,mount,memo,uno from view_workks where noa='"+@noa+"'"
+EXECUTE sp_executesql @cmd
+
+--更新workk的cngno,workano
+set @accy=(select accy from view_workk where noa=@noa)
+set @cmd="update workk"+@accy+" set cngno='"+@cngno+"'"
+EXECUTE sp_executesql @cmd
+	
+if(LEN(@cngno)!=0)
+begin
+	--資料寫入dno 避免下次自動產生出現問題
+	insert dno(tablea,noa,usera)
+	select 'cng',@cngno,'z001'
+end
+	
+select @cngno cngno
+;
+---------------------------------------------------------------------------------------------
+post:--workk_post
+--轉出調撥和領料單
+--3/25不產生領料單
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(50)=[2]--單據編號[2]
+declare @year nvarchar(20)=[1]--年度[1]
+declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增[3]
+-----------------------------------------------------------------------
+declare @cmd nvarchar(max)
+declare @accy nvarchar(20) --非workk的單號年度
+--調撥單號
+declare @cngno nvarchar(50) = isnull((select cngno from view_workk where noa=@noa),'')
+--領料單號
+--declare @workano nvarchar(50) = isnull((select workano from view_workk where noa=@noa),'')
+--撥料日期
+declare @datea nvarchar(20)
+
+if(@condition='0')
+begin
+	if(len(@cngno)>0)
+	begin
+		set @accy=(select accy from view_cng where noa=@cngno)
+		--刪除產生的cng
+		set @cmd="delete cng"+@accy+" where noa='"+@cngno+"'"
+		EXECUTE sp_executesql @cmd
+		set @cmd="delete cngs"+@accy+" where noa='"+@cngno+"'"
+		EXECUTE sp_executesql @cmd
+	end
+	else
+	begin
+		declare cursor_table cursor for
+		select accy,noa from view_cng where workkno=@noa
+		open cursor_table
+		fetch next from cursor_table
+		into @accy,@cngno
+		while(@@FETCH_STATUS <> -1)
+		begin
+			--刪除產生的cng
+			set @cmd="delete cng"+@accy+" where noa='"+@cngno+"'"
+			EXECUTE sp_executesql @cmd
+			set @cmd="delete cngs"+@accy+" where noa='"+@cngno+"'"
+			EXECUTE sp_executesql @cmd
+			
+			fetch next from cursor_table
+			into @accy,@cngno
+		end
+		close cursor_table
+		deallocate cursor_table
+	end
+	
+	--if(len(@workano)>0)
+	--begin
+		--set @accy=(select accy from view_worka where noa=@workano)
+		--刪除產生的worka
+		--set @cmd="delete worka"+@accy+" where noa='"+@workano+"'"
+		--EXECUTE sp_executesql @cmd
+		--set @cmd="delete workas"+@accy+" where noa='"+@workano+"'"
+		--EXECUTE sp_executesql @cmd
+	--end
+	--else
+	--begin
+		--declare cursor_table cursor for
+		--select accy,noa from view_worka where workkno=@noa
+		--open cursor_table
+		--fetch next from cursor_table
+		--into @accy,@workano
+		--while(@@FETCH_STATUS <> -1)
+		--begin
+			----刪除產生的worka
+			--set @cmd="delete worka"+@accy+" where noa='"+@workano+"'"
+			--EXECUTE sp_executesql @cmd
+			--set @cmd="delete workas"+@accy+" where noa='"+@workano+"'"
+			--EXECUTE sp_executesql @cmd
+			
+			--fetch next from cursor_table
+			--into @accy,@workano
+		--end
+		--close cursor_table
+		--deallocate cursor_table
+	--end
+end
+
+if(@condition='1')
+begin
+	--取得撥料日期
+	set @datea=(select datea from view_workk where noa=@noa)
+	
+	--判斷是否已有調撥單號
+	if(len(@cngno)=0)
+	begin
+		--產生調撥單號
+		--取得當天最後一個調撥單號
+		select @cngno=MAX(noa) from view_cng where noa like 'X'+REPLACE(@datea,'/','')+'%'
+		--新的調撥單號(後面號碼+1)
+		set @cngno='X'+REPLACE(@datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@cngno,'000'),3) as int)+1 as nvarchar(10)),3)
+	end
+	
+	--產生調撥單
+	set @cmd="insert cng"+@year+" (noa,datea,typea,storeno,store,storeinno,storein,memo,sssno,namea,worker,worker2,workkno)
+	select '"+@cngno+"' noa,'"+@datea+"' datea,'1' typea,storeno,store,storeinno,storein,'由撥料作業("+@noa+")轉來 chr(10)'+memo
+	,(select noa from sss where namea=(case when worker2 !='' then worker2 else worker end))
+	,(case when worker2 !='' then worker2 else worker end),worker,worker2,'"+@noa+"'
+	from view_workk where noa='"+@noa+"'"
+	EXECUTE sp_executesql @cmd
+	
+	set @cmd="insert cngs"+@year+" (noa,noq,productno,product,unit,mount,memo,uno)
+	select '"+@cngno+"' noa,noq,productno,product,unit,mount,memo,uno from view_workks where noa='"+@noa+"'"
+	EXECUTE sp_executesql @cmd
+	
+	----判斷是否已有領料單號
+	--if(len(@workano)=0)
+	--begin
+		----產生領料單號
+		----取得當天最後一個領料單號
+		--select @workano=MAX(noa) from view_worka where noa like 'WA'+REPLACE(@datea,'/','')+'%'
+		--新的領料單號(後面號碼+1)
+		--set @workano='WA'+REPLACE(@datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@workano,'000'),3) as int)+1 as nvarchar(10)),3)
+	--end
+
+	----產生領料單
+	--set @cmd="insert worka"+@year+" (noa,datea,typea,storeno,store,stationno,station,bdate,edate,memo,worker,workkno)
+	--select '"+@workano+"' noa,'"+@datea+"' datea,'1' typea,storeinno,storein,stationno,station
+	--,bdate,edate,'由撥料作業("+@noa+")轉來 '+memo,(case when worker2 !='' then worker2 else worker end),'"+@noa+"'
+	--from view_workk where noa='"+@noa+"'"
+	--EXECUTE sp_executesql @cmd
+	
+	--declare @bdate nvarchar(10)
+	--declare @edate nvarchar(10)
+	--declare @stationno nvarchar(50)
+	--declare @pno nvarchar(50)
+	--declare @product nvarchar(100)
+	--declare @unit nvarchar(50)
+	--declare @mount float
+	--declare @t_mount float
+	--declare @storeinno nvarchar(50)
+	--declare @storein nvarchar(50)
+	--declare @memo nvarchar(max)
+	--declare @workno nvarchar(90)
+	--declare @emount float
+	--declare @t_emount nvarchar(100)
+	--declare @noq nvarchar(10)
+	--set @noq='001'
+	
+	--declare cursor_table cursor for
+	--select  b.bdate,b.edate,b.stationno,a.productno,a.product,a.unit,a.mount,b.storeinno,b.storein,a.memo
+	--from view_workks a left join view_workk b on a.noa=b.noa where a.noa=@noa
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @bdate,@edate,@stationno,@pno,@product,@unit,@mount,@storeinno,@storein,@memo
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+		----帶入要領料的數量
+		--set @t_mount=@mount
+		
+		--if(@t_mount>0)
+		--begin
+			--declare cursor_table2 cursor for
+			--select wks.noa,(wks.mount-wks.gmount) emount from view_works wks left join view_work wk on wks.noa=wk.noa 
+			--where (wk.cuadate between @bdate and @edate) 
+			--and (wks.productno=@pno) and (wk.stationno=@stationno) and (wks.mount-wks.gmount)>0 order by wk.cuadate,wks.noa
+			--open cursor_table2
+			--fetch next from cursor_table2
+			--into @workno,@emount
+			--while(@@FETCH_STATUS <> -1)
+			--begin
+				--set @t_emount=cast((case when @t_mount>=@emount then @emount else @t_mount end)as nvarchar(100))
+				
+				--exec("insert workas"+@year+" (noa,noq,productno,product,unit,mount,storeno,store,memo,workno)
+				--select '"+@workano+"','"+@noq+"','"+@pno+"','"+@product+"','"+@unit+"',"+@t_emount+"
+				--,'"+@storeinno+"','"+@storein+"','"+@memo+"','"+@workno+"'")
+				
+				--set @noq=right('000'+cast(cast (@noq as int) +1 as nvarchar(10)),3)
+				--set @t_mount=@t_mount-@emount
+				
+				--if(@t_mount<0)
+				--begin
+					--break
+				--end
+		
+				--fetch next from cursor_table2
+				--into @workno,@emount
+			--end
+			--close cursor_table2
+			--deallocate cursor_table2
+		--end
+		
+		--fetch next from cursor_table
+		--into @bdate,@edate,@stationno,@pno,@product,@unit,@mount,@storeinno,@storein,@memo
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	--set @cmd="insert workas"+@year+" (noa,noq,productno,product,unit,mount,storeno,store,memo,workno)
+	--select '"+@workano+"' noa,a.noq,a.productno,a.product,a.unit,a.mount,b.storeinno,b.storein,a.memo,c.noa
+	--from view_workks a "+
+	--"left join view_workk b on a.noa=b.noa "+
+	--"outer apply(select wks.noa,wks.emount noa from view_works wks left join view_work wk on wks.noa=wk.noa where (wk.cuadate between b.bdate and (case when b.edate='' then '999/99/99' else b.edate end)) and (a.productno=wks.productno) and wk.stationno=b.stationno ) c"+
+	--" where a.noa='"+@noa+"'"
+	--EXECUTE sp_executesql @cmd
+	
+	--更新workk的cngno,workano
+	set @accy=(select accy from view_workk where noa=@noa)
+	--set @cmd="update workk"+@accy+" set cngno='"+@cngno+"',workano='"+@workano+"' where noa='"+@noa+"'"
+	set @cmd="update workk"+@accy+" set cngno='"+@cngno+"'"
+	EXECUTE sp_executesql @cmd
+	
+	if(LEN(@cngno)!=0)
+	begin
+		--資料寫入dno 避免下次自動產生出現問題
+		insert dno(tablea,noa,usera)
+		select 'cng',@cngno,'z001'
+	end
+	--if(LEN(@workano)!=0)
+	--begin
+		----資料寫入dno 避免下次自動產生出現問題
+		--insert dno(tablea,noa,usera)
+		--select 'worka',@workano,'z001'
+	--end
+	
+	select @cngno cngno--,@workano workano
+	
+end;

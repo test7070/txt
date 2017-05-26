@@ -1,0 +1,174 @@
+zxls_invohf:--zxls_invohf.txt
+SET QUOTED_IDENTIFIER OFF
+declare @cmd nvarchar(max)
+declare @bbsRateDefault int = 0
+declare @custs nvarchar(max)
+declare @worker nvarchar(max)
+declare @typea nvarchar(max) = '1'
+IF OBJECT_ID('tempdb..#vccTmp')is not null
+BEGIN
+	set @cmd = 'drop table #vccTmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#vccTmps')is not null
+BEGIN
+	set @cmd = 'drop table #vccTmps'
+	EXECUTE sp_executesql @cmd
+END
+
+declare @xlsTmp table(
+	noa nvarchar(max),
+	a nvarchar(max),
+	b nvarchar(max),
+	c nvarchar(max),
+	d nvarchar(max),
+	e nvarchar(max),
+	f nvarchar(max),
+	g nvarchar(max),
+	h nvarchar(max),
+	i nvarchar(max),
+	j nvarchar(max)
+)
+
+insert into @xlsTmp
+	select noa,a,b,c,d,e,f,g,h,i,j from ztmpxls order by noa
+create table #vccTmp (
+	typea nvarchar(15),
+	noa nvarchar(max),
+	datea nvarchar(10),
+	mon nvarchar(10),
+	custno nvarchar(max),
+	custs nvarchar(max),
+	custnick nvarchar(max),
+	post2 nvarchar(max),
+	addr2 nvarchar(max),
+	tel nvarchar(max),
+	addr nvarchar(max),
+	money float,
+	tax float,
+	total float,
+	worker nvarchar(max),
+	memo nvarchar(max)
+)
+
+create table #vccTmps (
+	noa nvarchar(max),
+	noq nvarchar(30),
+	productno nvarchar(max),
+	products nvarchar(max),
+	unit nvarchar(max),
+	mount float,
+	price float,
+	total float,
+	memo nvarchar(max)
+)
+declare @s_noa nvarchar(max)
+declare @s_maxnoa nvarchar(max)
+declare @lastnoa nvarchar(max)
+declare @lastdatea nvarchar(max)
+declare @lastcusts nvarchar(max)
+declare @thisnoa nvarchar(max)
+declare @thisdatea nvarchar(max)
+declare @thiscusts nvarchar(max)
+declare @t_noq int = 0
+select @s_maxnoa = max(noa) from @xlsTmp
+select @custs = a from @xlsTmp where cast(noa as int)=2
+select @worker = right(a,len(a)-4) from @xlsTmp where cast(noa as int)=6
+
+declare cursor_table cursor for
+	select noa from @xlsTmp where (cast(noa as int) >= 8) and (cast(noa as int) < (@s_maxnoa-1)) order by noa
+open cursor_table
+fetch next from cursor_table
+into @s_noa
+while(@@FETCH_STATUS <> -1)
+begin
+	if((cast(@s_noa as int) >= 8) and (cast(@s_noa as int) < (@s_maxnoa-1)))
+	begin
+		select @thisnoa = right(b,11) from @xlsTmp where noa=@s_noa
+		if(@thisnoa='') 
+		begin
+			set @thisnoa = @lastnoa 
+			set @t_noq = @t_noq+1
+		end
+		else 
+		begin
+			if(@lastnoa != @thisnoa)
+				set @t_noq = 0
+			set @t_noq = @t_noq+1				
+			set @lastnoa = @thisnoa 
+		end
+		select @thisdatea = right(a,11) from @xlsTmp where noa=@s_noa
+		if(@thisdatea='') set @thisdatea = @lastdatea else set @lastdatea = @thisdatea
+		select @thiscusts = right(c,11) from @xlsTmp where noa=@s_noa
+		if(@thiscusts='') set @thiscusts = @lastcusts else set @lastcusts = @thiscusts
+		if(not exists(select * from #vccTmp where noa=@thisnoa))
+		begin
+			insert into #vccTmp
+				select
+					@typea,@thisnoa,@thisdatea,left(@thisdatea,6),b.noa,@custs,b.nick,c.noa,@thiscusts,
+					c.memo,c.addr,0,0,0,@worker,d.j
+				from @xlsTmp a
+				left join cust b on b.comp=@custs
+				left join addr c on c.caseuse=@thiscusts
+				outer apply(select j from @xlsTmp where (j !=',') and (a.noa=noa)) d
+				where a.noa=@s_noa
+		end 
+		insert into #vccTmps
+			select
+				@thisnoa,RIGHT(REPLICATE('0', 3) + CAST(@t_noq as NVARCHAR), 3),
+				a.d,a.e,b.unit,cast(REPLACE(f,',','') as float),cast(REPLACE(g,',','') as float),
+				cast(REPLACE(h,',','') as float),i
+			from @xlsTmp a
+			left join ucc b on a.d=b.noa
+			where a.noa=@s_noa
+	end
+	fetch next from cursor_table
+	into @s_noa
+end
+close cursor_table
+deallocate cursor_table
+declare @im_year nvarchar(10)
+declare cursor_table cursor for
+	select noa,left(datea,3) from #vccTmp order by noa
+open cursor_table
+fetch next from cursor_table
+into @s_noa,@im_year
+while(@@FETCH_STATUS <> -1)
+begin
+	if(isnull(@s_noa,'') != '')
+	begin
+		set @cmd = "delete vcc"+@im_year+" where noa='" + @s_noa + "'"
+		execute(@cmd)
+		set @cmd = "delete vccs"+@im_year+" where noa='" + @s_noa + "'"
+		execute(@cmd)
+		set @cmd=
+			"insert into vccs"+@im_year+"(noa,noq,productno,product,unit,mount,price,total,memo,radius)"+
+			"select "+
+			"	noa,noq,productno,products,unit,mount,price,total,memo,"+cast(@bbsRateDefault as nvarchar)+
+			" from #vccTmps a where a.noa='" + @s_noa + "'"
+		execute(@cmd)
+		set @cmd=
+		"insert into vcc"+@im_year+"(typea,noa,datea,mon,custno,comp,nick,post2,addr2,tel,addr,money,tax,total,worker,memo)"+
+		"	select "+
+		"		typea,noa,datea,mon,custno,custs,custnick,post2,addr2,tel,addr,isnull(b.total,0),tax,isnull(b.total,0),worker,memo"+
+		"	from #vccTmp a " + 
+		"	outer apply(select sum(total) total from #vccTmps where noa=a.noa) b " + 
+		"	where a.noa='" + @s_noa + "'"
+		execute(@cmd)
+	end
+	fetch next from cursor_table
+	into @s_noa,@im_year
+end
+close cursor_table
+deallocate cursor_table
+IF OBJECT_ID('tempdb..#vccTmp')is not null
+BEGIN
+	set @cmd = 'drop table #vccTmp'
+	EXECUTE sp_executesql @cmd
+END
+IF OBJECT_ID('tempdb..#vccTmps')is not null
+BEGIN
+	set @cmd = 'drop table #vccTmps'
+	EXECUTE sp_executesql @cmd
+END
+;

@@ -1,0 +1,1195 @@
+z_salbb1:--z_salb1
+declare @t_xyears nvarchar(10)
+declare @t_bsno nvarchar(20)
+declare @t_esno nvarchar(20)
+set @t_xyears = case when '#non' = [1] then '' else [1] end
+set @t_bsno = case when '#non' = [5] then '' else [5] end
+set @t_esno = case when '#non' = [6] then CHAR(255) else [6] end
+
+--統一製單編號 故所得資料與媒體產生的暫存檔相同
+declare @tmpa table(
+	ishouse nvarchar(20),--居住*
+	taxport nvarchar(20),--稽徵機關代號*
+	recno nvarchar(10), --1國內 2國外 3股利憑單54C 54F
+	cno nvarchar(10),--公司代號
+	serial nvarchar(50),--統一編號*
+	domestic nvarchar(10), --1國內 2國外
+	personal nvarchar(10), --1個人 2非個人*
+	ttypea nvarchar(10),--所得類別*
+	ttypeb nvarchar(10),--類別區分*
+	typea nvarchar(10),--格式代號
+	typeb nvarchar(10),--所得註記
+	typec nvarchar(10),--項目代號
+	ptype nvarchar(20),--證號別
+	sssno nvarchar(20),--員工
+	id nvarchar(20),--身分證
+	datea nvarchar(20),--支付日期
+	years nvarchar(20),--年份
+	bmon nvarchar(20),--起始月份
+	emon nvarchar(20),--終止日份
+	money decimal(12, 0),--扣繳憑單給付總額、股利憑單股利淨額
+	tax decimal(12, 0),--扣繳稅額或可扣抵稅額
+	taxno nvarchar(20),--扣繳單位稅籍編號
+	houseno nvarchar(50),--申報單位房屋稅籍編號
+	rate nvarchar(50),--稅額扣抵比率
+	distribution float,--分配次數
+	exdate nvarchar(20),--除權（息）日期
+	retire float,--勞退金額
+	tax2 float,--股利或盈餘抵繳稅額
+	smount float,--股數
+	price float,--股價
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	stock float,--股票股利淨額
+	noa nvarchar(50), --編號
+	issued nvarchar(10) --憑單填發方式
+)
+
+insert @tmpa
+select case when isnull(e.ishouse,0)=1 then '1' else '0' end
+,UPPER(isnull(d.taxport,'A03'))
+,(case when a.typea='54' and (a.typeb='C' or a.typeb='F') then '3' when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,a.cno,b.serial
+,(case when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,(case when e.ptype in ('1','4','6','8') then '2' else '1' end)
+,f.typea
+,(case when f.typea='1' and a.typeb in ('C','X','F') then 'C'
+when f.typea='1' and a.typeb in ('Y') then '3'
+when f.typea='1' and a.typeb in ('',' ','A','B','I','J','K','L') then '1'
+when f.typea='1' and a.typeb in ('D','E','G','H','P','W','Q') then '2'
+when f.typea='2' and a.typea='9A' then '1'
+when f.typea='2' and a.typea='9B' then '2'
+when f.typea='5' and a.typea='51' then '1'
+when f.typea='5' and a.typea='53' then '2'
+else ' ' end)
+,a.typea,a.typeb,a.typec
+,e.ptype,a.sssno,isnull(c.id,''),a.datea,a.years
+,case when right(a.bmon,2)='00' then left(a.bmon,3)+'/01' else a.bmon end
+,case when right(a.emon,2)='00' then left(a.bmon,3)+'/12' else a.emon end
+,isnull(a.money,0)
+,isnull(a.tax,0)
+,d.taxno,d.houseno
+,right('0000'+REPLACE(REPLACE(dbo.getComma(a.rate,2),'.',''),',',''),4)
+,isnull(a.distribution,0),isnull(a.exdate,''),isnull(a.retire,0),isnull(a.tax2,0)
+,isnull(a.smount,0),isnull(a.price,0),isnull(a.cash,0),isnull(a.capital,0),isnull(a.stock,0),'',e.issued
+from (select LEFT(mon,3)years,MIN(mon)bmon,MAX(mon) emon
+,cno,sssno,typea,typeb,typec,SUM(money)money,SUM(tax)tax,SUM(tax2)tax2,SUM(retire)retire
+,MAX(distribution)distribution	--分配次數
+,MAX(exdate)exdate	--除權（息）基準年月日
+,SUM(smount)smount	--股數
+,MAX(price)price	--股價
+,SUM(cash)cash		--現金股利淨額
+,SUM(capital)capital--資本公積股利淨額
+,SUM(stock)stock	--股票股利淨額
+,MAX(datea)datea	--支付日期 交付股票日日期
+,MAX(rate)rate		--稅額扣抵比率
+from salbs where LEFT(mon,3)=@t_xyears group by LEFT(mon,3),sssno,typea,typeb,typec,cno) a 
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join acompu d on a.cno=d.noa
+left join sssu e on a.sssno=e.noa
+left join payremark f on a.typea=f.noa and a.typeb=f.inote
+where isnull(a.typea,'')!='' --所得格式
+and isnull(e.ptype,'')!='' --證號別
+and (e.ptype not in ('0','1','3','4','9') or c.id!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and b.serial!=''
+
+update a
+set noa=nownoa
+from (select (case when isnull(a.ishouse,0)=1
+then right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('0000000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno) as nvarchar(10)),6)
+else '00'+right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('00000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno)as nvarchar(10)),4) end )nownoa,* from @tmpa a ) a
+
+declare @tmp table(
+	gno nvarchar(1),
+	cno nvarchar(50),
+	sssno nvarchar(50),
+	years nvarchar(50),
+	mon nvarchar(20),
+	taxno nvarchar(50),
+	addr_rent nvarchar(MAX),
+	serial nvarchar(50),
+	taxport nvarchar(50),
+	wtno nvarchar(50),
+	typea nvarchar(50),
+	typeb nvarchar(50),
+	typec nvarchar(50),
+	id nvarchar(50),
+	passportno nvarchar(50),
+	n1 nvarchar(50),
+	n2 nvarchar(50),
+	y1 nvarchar(50),
+	y2 nvarchar(50),
+	m1 nvarchar(50),
+	m2 nvarchar(50),
+	namea nvarchar(50),
+	addr_home nvarchar(MAX),
+	retire float,
+	total float,
+	rate float,
+	tax float,
+	net float,
+	acomp nvarchar(50),
+	acomp_addr nvarchar(50),
+	boss nvarchar(50),
+	houseno nvarchar(50)
+)
+
+--insert @tmp
+--select '1',b.cno,b.sssno,left(a.mon,3),a.mon,f.taxno,f.addr_rent,d.serial,e.taxport,'',b.typea,b.typeb,b.typec,c.id,c.passportno
+--,(case when isnull(f.ishouse,0)=0 then '' else 'V' end) n1,(case when isnull(f.ishouse,0)=0 then 'V' else '' end) n2,'','','',''
+--,c.namea,c.addr_home,b.retire,b.money total,0,b.tax,b.money-b.tax net,d.acomp,d.addr acomp_addr,d.boss
+--from salb a left join salbs b on a.noa=b.noa left join sss c on b.sssno=c.noa left join acomp d on b.cno=d.noa
+--left join acompu e on b.cno=e.noa left join sssu f on b.sssno=f.noa
+--where (b.sssno between @t_bsno and @t_esno) and (len(@t_xyears)=0 or left(a.mon,3)=@t_xyears)
+--order by b.cno,b.sssno
+
+insert @tmp
+select '0',a.cno,sssno,years,'',a.taxno,e.addr_rent,a.serial,a.taxport,a.noa
+,a.typea,a.typeb,a.typec,a.id,passportno,case when a.ishouse='1' then 'V' else '' end,case when a.ishouse='0' then 'V' else '' end
+,years,years,bmon,emon
+,namea,addr_home,retire,money,rate,tax,money-tax,b.acomp,b.addr_invo,b.boss,e.taxno
+from @tmpa a
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join sssu e on a.sssno=e.noa
+where isnull(a.typea,'')!='' --所得格式
+and isnull(a.ptype,'')!='' --證號別
+and (a.ptype not in ('0','1','3','4','9') or isnull(c.id,'')+isnull(c.passportno,'')!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and a.sssno between @t_bsno and @t_esno and a.serial!=''
+
+--select '0',cno,sssno,MAX(years),'',taxno,addr_rent,serial,taxport,'A01'+MAX(years)+(right('00000'+cast(ROW_NUMBER() over(order by cno,typea,typeb,typec,sssno)as nvarchar(50)),5))--+serial
+--,typea,typeb,typec,id,passportno,n1,n2,MIN(years),MAX(years),MIN(mon),MAX(mon)
+--,namea,addr_home,SUM(retire),SUM(total),round(SUM(tax)/SUM(total)*100,0),SUM(tax),SUM(net),acomp,acomp_addr,boss
+--from @tmp
+--group by cno,sssno,taxno,addr_rent,serial,taxport,typea,typeb,typec,id,passportno,n1,n2,namea,addr_home,acomp,acomp_addr,boss
+
+update @tmp set m1=RIGHT(m1,2),m2=RIGHT(m2,2)
+--update @tmp set m1='01',m2='12'
+
+select 
+case when retire=0 then null else dbo.getComma(retire,0) end retire,
+case when rate=0 then null else dbo.getComma(rate,0)+'%' end rate,
+case when tax=0 then null else dbo.getComma(tax,0) end tax,
+dbo.getComma(total,0) total,
+dbo.getComma(net,0) net,
+* 
+from @tmp where gno='0' order by cno,typea,typeb,typec,sssno
+;
+----------------------------------------------------------------------------------------------------------------------------------------
+z_salbb2:--z_salbb2
+declare @t_xyears nvarchar(10)
+set @t_xyears = case when '#non' = [1] then '' else [1] end
+
+--所得資料暫存
+declare @tmpa table(
+	ishouse nvarchar(20),--居住*
+	taxport nvarchar(20),--稽徵機關代號*
+	recno nvarchar(10), --1國內 2國外 3股利憑單54C 54F
+	cno nvarchar(10),--公司代號
+	serial nvarchar(50),--統一編號*
+	domestic nvarchar(10), --1國內 2國外
+	personal nvarchar(10), --1個人 2非個人*
+	ttypea nvarchar(10),--所得類別*
+	ttypeb nvarchar(10),--類別區分*
+	typea nvarchar(10),--格式代號
+	typeb nvarchar(10),--所得註記
+	typec nvarchar(10),--項目代號
+	ptype nvarchar(20),--證號別
+	sssno nvarchar(20),--員工
+	id nvarchar(20),--身分證
+	datea nvarchar(20),--支付日期
+	years nvarchar(20),--年份
+	bmon nvarchar(20),--起始月份
+	emon nvarchar(20),--終止日份
+	money decimal(12, 0),--扣繳憑單給付總額、股利憑單股利淨額
+	tax decimal(12, 0),--扣繳稅額或可扣抵稅額
+	taxno nvarchar(20),--扣繳單位稅籍編號
+	houseno nvarchar(50),--申報單位房屋稅籍編號
+	rate nvarchar(50),--稅額扣抵比率
+	distribution float,--分配次數
+	exdate nvarchar(20),--除權（息）日期
+	retire float,--勞退金額
+	tax2 float,--股利或盈餘抵繳稅額
+	smount float,--股數
+	price float,--股價
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	stock float,--股票股利淨額
+	noa nvarchar(50), --編號
+	issued nvarchar(10) --憑單填發方式
+)
+
+insert @tmpa
+select case when isnull(e.ishouse,0)=1 then '1' else '0' end
+,UPPER(isnull(d.taxport,'A03'))
+,(case when a.typea='54' and (a.typeb='C' or a.typeb='F') then '3' when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,a.cno,b.serial
+,(case when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,(case when e.ptype in ('1','4','6','8') then '2' else '1' end)
+,f.typea
+,(case when f.typea='1' and a.typeb in ('C','X','F') then 'C'
+when f.typea='1' and a.typeb in ('Y') then '3'
+when f.typea='1' and a.typeb in ('',' ','A','B','I','J','K','L') then '1'
+when f.typea='1' and a.typeb in ('D','E','G','H','P','W','Q') then '2'
+when f.typea='2' and a.typea='9A' then '1'
+when f.typea='2' and a.typea='9B' then '2'
+when f.typea='5' and a.typea='51' then '1'
+when f.typea='5' and a.typea='53' then '2'
+else ' ' end)
+,a.typea,a.typeb,a.typec
+,e.ptype,a.sssno,isnull(c.id,'')+isnull(c.passportno,''),a.datea,a.years
+,case when right(a.bmon,2)='00' then left(a.bmon,3)+'/01' else a.bmon end
+,case when right(a.emon,2)='00' then left(a.bmon,3)+'/12' else a.emon end
+,isnull(a.money,0)
+,isnull(a.tax,0)
+,isnull(d.taxno,''),isnull(d.houseno,'')
+,right('0000'+REPLACE(REPLACE(dbo.getComma(a.rate,2),'.',''),',',''),4)
+,isnull(a.distribution,0),isnull(a.exdate,''),isnull(a.retire,0),isnull(a.tax2,0)
+,isnull(a.smount,0),isnull(a.price,0),isnull(a.cash,0),isnull(a.capital,0),isnull(a.stock,0),'',e.issued
+from (select LEFT(mon,3)years,MIN(mon)bmon,MAX(mon) emon
+,cno,sssno,typea,typeb,typec,SUM(money)money,SUM(tax)tax,SUM(tax2)tax2,SUM(retire)retire
+,MAX(distribution)distribution	--分配次數
+,MAX(exdate)exdate	--除權（息）基準年月日
+,SUM(smount)smount	--股數
+,MAX(price)price	--股價
+,SUM(cash)cash		--現金股利淨額
+,SUM(capital)capital--資本公積股利淨額
+,SUM(stock)stock	--股票股利淨額
+,MAX(datea)datea	--支付日期 交付股票日日期
+,MAX(rate)rate		--稅額扣抵比率
+from salbs where LEFT(mon,3)=@t_xyears group by LEFT(mon,3),sssno,typea,typeb,typec,cno) a 
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join acompu d on a.cno=d.noa
+left join sssu e on a.sssno=e.noa
+left join payremark f on a.typea=f.noa and a.typeb=f.inote
+where isnull(a.typea,'')!='' --所得格式
+and isnull(e.ptype,'')!='' --證號別
+and (e.ptype not in ('0','1','3','4','9') or c.id!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and b.serial!=''
+
+update a
+set noa=nownoa
+from (select (case when isnull(a.ishouse,0)=1
+then right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('0000000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno) as nvarchar(10)),6)
+else '00'+right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('00000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno)as nvarchar(10)),4) end )nownoa,* from @tmpa a ) a
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(50), --檔案編號
+	taxportname nvarchar(MAX),
+	years nvarchar(50),
+	cno nvarchar(50),
+	taxport nvarchar(50),
+	taxno nvarchar(50),
+	houseno nvarchar(50),
+	serial nvarchar(50),
+	acomp nvarchar(50),
+	tel nvarchar(50),
+	acomp_addr nvarchar(50),
+	boss nvarchar(50),
+	aconn nvarchar(50),
+	atel nvarchar(100),
+	c31 float,b31 nvarchar(50),e31 nvarchar(50),m31 float,t31 float,
+	c32 float,b32 nvarchar(50),e32 nvarchar(50),m32 float,t32 float,
+	
+	c211 float,b211 nvarchar(50),e211 nvarchar(50),m211 float,t211 float,
+	c212 float,b212 nvarchar(50),e212 nvarchar(50),m212 float,t212 float,
+	
+	c221 float,b221 nvarchar(50),e221 nvarchar(50),m221 float,t221 float,
+	c222 float,b222 nvarchar(50),e222 nvarchar(50),m222 float,t222 float,
+	
+	c41 float,b41 nvarchar(50),e41 nvarchar(50),m41 float,t41 float,
+	c42 float,b42 nvarchar(50),e42 nvarchar(50),m42 float,t42 float,
+	
+	c511 float,b511 nvarchar(50),e511 nvarchar(50),m511 float,t511 float,
+	c512 float,b512 nvarchar(50),e512 nvarchar(50),m512 float,t512 float,
+	
+	c521 float,b521 nvarchar(50),e521 nvarchar(50),m521 float,t521 float,
+	c522 float,b522 nvarchar(50),e522 nvarchar(50),m522 float,t522 float,
+	
+	c111 float,b111 nvarchar(50),e111 nvarchar(50),m111 float,t111 float,
+	c112 float,b112 nvarchar(50),e112 nvarchar(50),m112 float,t112 float,
+	
+	c121 float,b121 nvarchar(50),e121 nvarchar(50),m121 float,t1211 float,t1212 float,
+	c122 float,b122 nvarchar(50),e122 nvarchar(50),m122 float,t1221 float,t1222 float,
+	
+	c131 float,b131 nvarchar(50),e131 nvarchar(50),m131 float,t131 float,
+	c132 float,	b132 nvarchar(50),e132 nvarchar(50),m132 float,t132 float,
+	
+	c81 float,b81 nvarchar(50),e81 nvarchar(50),m81 float,t81 float,
+	c82 float,b82 nvarchar(50),e82 nvarchar(50),m82 float,t82 float,
+	
+	c91 float,b91 nvarchar(50),e91 nvarchar(50),m91 float,t91 float,
+	c92 float,b92 nvarchar(50),e92 nvarchar(50),m92 float,t92 float,
+	
+	ca1 float,ba1 nvarchar(50),ea1 nvarchar(50),ma1 float,ta1 float,
+	ca2 float,ba2 nvarchar(50),ea2 nvarchar(50),ma2 float,ta2 float,
+	
+	ct1 float,mt1 float,tt11 float,tt12 float,ct2 float,mt2 float,tt21 float,tt22 float,
+	rtotal float,smount float,total float,
+	y1 nvarchar(50),y2 nvarchar(50),y3 nvarchar(50),
+	m1 nvarchar(50),m2 nvarchar(50),m3 nvarchar(50),
+	d1 nvarchar(50),d2 nvarchar(50),d3 nvarchar(50),
+	v1 nvarchar(50),v2 nvarchar(50)
+)
+
+insert @tmp
+select '0','',(select taxport from taxport where noa=a.taxport)
+,a.years,a.cno,a.taxport,a.taxno,a.houseno,a.serial,(select acomp from acomp where noa=a.cno)
+,(select tel from acomp where noa=a.cno),(select addr_invo from acomp where noa=a.cno)
+,(select boss from acomp where noa=a.cno),(select conn from acomp where noa=a.cno),(select tel from acomp where noa=a.cno)
+--薪資
+,(select count(*) from @tmpa where ttypea='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--業務
+,(select count(*) from @tmpa where ttypea='2' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='2' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='2' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='2' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='2' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='2' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='2' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='2' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='2' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='2' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--稿費
+,(select count(*) from @tmpa where ttypea='2' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='2' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='2' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='2' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='2' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='2' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='2' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='2' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='2' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='2' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--利息
+,(select count(*) from @tmpa where ttypea='4' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='4' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='4' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='4' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='4' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='4' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='4' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='4' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='4' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='4' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--租賃
+,(select count(*) from @tmpa where ttypea='5' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='5' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='5' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='5' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='5' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='5' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='5' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='5' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='5' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='5' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--權利金
+,(select count(*) from @tmpa where ttypea='5' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='5' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='5' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='5' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='5' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='5' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='5' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='5' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='5' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='5' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--營利86
+,(select count(*) from @tmpa where ttypea='1' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='1' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='1' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='1' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='1' and ttypeb='1' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='1' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='1' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='1' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='1' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='1' and ttypeb='1' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--營利87
+,(select count(*) from @tmpa where ttypea='1' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='1' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='1' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='1' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='1' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax2) from @tmpa where ttypea='1' and ttypeb='2' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='1' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='1' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='1' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='1' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='1' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax2) from @tmpa where ttypea='1' and ttypeb='2' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--營利其他
+,(select count(*) from @tmpa where ttypea='1' and ttypeb='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='1' and ttypeb='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='1' and ttypeb='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='1' and ttypeb='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='1' and ttypeb='3' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='1' and ttypeb='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='1' and ttypeb='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='1' and ttypeb='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='1' and ttypeb='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='1' and ttypeb='3' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--競技
+,(select count(*) from @tmpa where ttypea='8' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='8' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='8' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='8' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='8' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='8' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='8' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='8' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='8' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='8' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--退職
+,(select count(*) from @tmpa where ttypea='9' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='9' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='9' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='9' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='9' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='9' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='9' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='9' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='9' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='9' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--其他
+,(select count(*) from @tmpa where ttypea='A' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='A' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='A' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='A' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='A' and personal='1' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select count(*) from @tmpa where ttypea='A' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MIN(noa) from @tmpa where ttypea='A' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select MAX(noa) from @tmpa where ttypea='A' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(money) from @tmpa where ttypea='A' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+,(select SUM(tax) from @tmpa where ttypea='A' and personal='2' and a.taxport=taxport and a.ishouse=ishouse and a.recno=recno and a.serial=serial and a.taxno=taxno and a.houseno=houseno)
+--合計
+,0,0,0,0,0,0,0,0
+,SUM(a.retire),SUM(a.smount),SUM(a.price*a.smount)
+,years,years,'',MIN(bmon),MAX(emon),'','01','31',''
+,case when ishouse='1' then '1.&#9745有' else '1.&#9744有' end
+,case when ishouse='2' then '2.&#9745無' else '2.&#9744無' end
+from @tmpa a 
+group by a.taxport,a.ishouse,a.recno,a.ishouse,a.serial,a.personal,a.taxno,a.houseno,a.years,a.cno
+
+delete @tmp where m1='' and m2=''
+
+update @tmp
+set 
+c31=case when c31=0 then null else c31 end
+,c211=case when c211=0 then null else c211 end
+,c221=case when c221=0 then null else c221 end
+,c41=case when c41=0 then null else c41 end
+,c511=case when c511=0 then null else c511 end
+,c521=case when c521=0 then null else c521 end
+,c111=case when c111=0 then null else c111 end
+,c121=case when c121=0 then null else c121 end
+,c131=case when c131=0 then null else c131 end
+,c81=case when c81=0 then null else c81 end
+,c91=case when c91=0 then null else c91 end
+,ca1=case when ca1=0 then null else ca1 end
+,c32=case when c32=0 then null else c32 end
+,c212=case when c212=0 then null else c212 end
+,c222=case when c222=0 then null else c222 end
+,c42=case when c42=0 then null else c42 end
+,c512=case when c512=0 then null else c512 end
+,c522=case when c522=0 then null else c522 end
+,c112=case when c112=0 then null else c112 end
+,c122=case when c122=0 then null else c122 end
+,c132=case when c132=0 then null else c132 end
+,c82=case when c82=0 then null else c82 end
+,c92=case when c92=0 then null else c92 end
+,ca2=case when ca2=0 then null else ca2 end
+
+update @tmp
+set ct1=c31+c211+c221+c41+c511+c521+c111+c121+c131+c81+c91+ca1
+,mt1=m31+m211+m221+m41+m511+m521+m111+m121+m131+m81+m91+ma1
+,tt11=t31+t211+t221+t41+t511+t521+t111+t1211+t131+t81+t91+ta1
+,tt12=t1212
+,ct2=c32+c212+c222+c42+c512+c522+c112+c122+c132+c82+c92+ca2
+,mt2=m32+m212+m222+m42+m512+m522+m112+m122+m132+m82+m92+ma2
+,tt21=t32+t212+t222+t42+t512+t522+t112+t1212+t132+t82+t92+ta2
+,tt22=t1222
+,d2=dbo.q_lastday(m2+'/01')
+,m1=RIGHT(m1,2)
+,m2=RIGHT(m2,2)
+
+select * from @tmp order by cno;
+---------------------------------------------------------------------------------------------------------------------------------------
+z_salbb3:--z_salbb3
+declare @t_xyears nvarchar(10)
+set @t_xyears = case when '#non' = [1] then '' else [1] end
+--統一製單編號 故所得資料與媒體產生的暫存檔相同
+declare @tmpa table(
+	ishouse nvarchar(20),--居住*
+	taxport nvarchar(20),--稽徵機關代號*
+	recno nvarchar(10), --1國內 2國外 3股利憑單54C 54F
+	cno nvarchar(10),--公司代號
+	serial nvarchar(50),--統一編號*
+	domestic nvarchar(10), --1國內 2國外
+	personal nvarchar(10), --1個人 2非個人*
+	ttypea nvarchar(10),--所得類別*
+	ttypeb nvarchar(10),--類別區分*
+	typea nvarchar(10),--格式代號
+	typeb nvarchar(10),--所得註記
+	typec nvarchar(10),--項目代號
+	ptype nvarchar(20),--證號別
+	sssno nvarchar(20),--員工
+	id nvarchar(20),--身分證
+	datea nvarchar(20),--支付日期
+	years nvarchar(20),--年份
+	bmon nvarchar(20),--起始月份
+	emon nvarchar(20),--終止日份
+	money decimal(12, 0),--扣繳憑單給付總額、股利憑單股利淨額
+	tax decimal(12, 0),--扣繳稅額或可扣抵稅額
+	taxno nvarchar(20),--扣繳單位稅籍編號
+	houseno nvarchar(50),--申報單位房屋稅籍編號
+	rate nvarchar(50),--稅額扣抵比率
+	distribution float,--分配次數
+	exdate nvarchar(20),--除權（息）日期
+	retire float,--勞退金額
+	tax2 float,--股利或盈餘抵繳稅額
+	smount float,--股數
+	price float,--股價
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	stock float,--股票股利淨額
+	noa nvarchar(50), --編號
+	issued nvarchar(10) --憑單填發方式
+)
+
+insert @tmpa
+select case when isnull(e.ishouse,0)=1 then '1' else '0' end
+,UPPER(isnull(d.taxport,'A03'))
+,(case when a.typea='54' and (a.typeb='C' or a.typeb='F') then '3' when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,a.cno,b.serial
+,(case when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,(case when e.ptype in ('1','4','6','8') then '2' else '1' end)
+,f.typea
+,(case when f.typea='1' and a.typeb in ('C','X','F') then 'C'
+when f.typea='1' and a.typeb in ('Y') then '3'
+when f.typea='1' and a.typeb in ('',' ','A','B','I','J','K','L') then '1'
+when f.typea='1' and a.typeb in ('D','E','G','H','P','W','Q') then '2'
+when f.typea='2' and a.typea='9A' then '1'
+when f.typea='2' and a.typea='9B' then '2'
+when f.typea='5' and a.typea='51' then '1'
+when f.typea='5' and a.typea='53' then '2'
+else ' ' end)
+,a.typea,a.typeb,a.typec
+,e.ptype,a.sssno,isnull(c.id,''),a.datea,a.years
+,case when right(a.bmon,2)='00' then left(a.bmon,3)+'/01' else a.bmon end
+,case when right(a.emon,2)='00' then left(a.bmon,3)+'/12' else a.emon end
+,isnull(a.money,0)
+,isnull(a.tax,0)
+,d.taxno,d.houseno
+,right('0000'+REPLACE(REPLACE(dbo.getComma(a.rate,2),'.',''),',',''),4)
+,isnull(a.distribution,0),isnull(a.exdate,''),isnull(a.retire,0),isnull(a.tax2,0)
+,isnull(a.smount,0),isnull(a.price,0),isnull(a.cash,0),isnull(a.capital,0),isnull(a.stock,0),'',e.issued
+from (select LEFT(mon,3)years,MIN(mon)bmon,MAX(mon) emon
+,cno,sssno,typea,typeb,typec,SUM(money)money,SUM(tax)tax,SUM(tax2)tax2,SUM(retire)retire
+,MAX(distribution)distribution	--分配次數
+,MAX(exdate)exdate	--除權（息）基準年月日
+,SUM(smount)smount	--股數
+,MAX(price)price	--股價
+,SUM(cash)cash		--現金股利淨額
+,SUM(capital)capital--資本公積股利淨額
+,SUM(stock)stock	--股票股利淨額
+,MAX(datea)datea	--支付日期 交付股票日日期
+,MAX(rate)rate		--稅額扣抵比率
+from salbs where LEFT(mon,3)=@t_xyears group by LEFT(mon,3),sssno,typea,typeb,typec,cno) a 
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join acompu d on a.cno=d.noa
+left join sssu e on a.sssno=e.noa
+left join payremark f on a.typea=f.noa and a.typeb=f.inote
+where isnull(a.typea,'')!='' --所得格式
+and isnull(e.ptype,'')!='' --證號別
+and (e.ptype not in ('0','1','3','4','9') or c.id!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and b.serial!=''
+
+update a
+set noa=nownoa
+from (select (case when isnull(a.ishouse,0)=1
+then right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('0000000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno) as nvarchar(10)),6)
+else '00'+right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('00000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno)as nvarchar(10)),4) end )nownoa,* from @tmpa a ) a
+
+declare @tmp table(
+	gno nvarchar(1),
+	cno nvarchar(50),
+	sssno nvarchar(50),
+	years nvarchar(50),
+	mon nvarchar(20),
+	taxno nvarchar(50),
+	addr_rent nvarchar(MAX),
+	serial nvarchar(50),
+	taxport nvarchar(50),
+	wtno nvarchar(50),
+	typea nvarchar(50),
+	typeb nvarchar(50),
+	typec nvarchar(50),
+	id nvarchar(50),
+	passportno nvarchar(50),
+	n1 nvarchar(50),
+	n2 nvarchar(50),
+	y1 nvarchar(50),
+	y2 nvarchar(50),
+	m1 nvarchar(50),
+	m2 nvarchar(50),
+	namea nvarchar(50),
+	addr_home nvarchar(MAX),
+	retire float,
+	total float,
+	rate float,
+	tax float,
+	net float,
+	acomp nvarchar(50),
+	acomp_addr nvarchar(50),
+	boss nvarchar(50)
+)
+
+--insert @tmp
+--select '1',b.cno,b.sssno,left(a.mon,3),a.mon,f.taxno,f.addr_rent,d.serial,e.taxport,'',b.typea,b.typeb,b.typec,c.id,c.passportno
+--,(case when isnull(f.ishouse,0)=0 then '' else 'V' end) n1,(case when isnull(f.ishouse,0)=0 then 'V' else '' end) n2,'','','',''
+--,c.namea,c.addr_home,b.retire,b.money total,0,b.tax,b.money-b.tax net,d.nick,d.addr acomp_addr,d.boss
+--from salb a left join salbs b on a.noa=b.noa left join sss c on b.sssno=c.noa left join acomp d on b.cno=d.noa
+--left join acompu e on b.cno=e.noa left join sssu f on b.sssno=f.noa
+--where (len(@t_xyears)=0 or left(a.mon,3)=@t_xyears)
+--order by b.cno,b.sssno
+
+insert @tmp
+select '0',a.cno,sssno,years,'',a.taxno,e.addr_rent,a.serial,a.taxport,a.noa
+,a.typea,a.typeb,a.typec,a.id,passportno,case when a.ishouse='1' then 'V' else '' end,case when a.ishouse='0' then 'V' else '' end
+,years,years,bmon,emon
+,namea,addr_home,retire,money,rate,tax,money-tax,b.acomp,b.addr_invo,b.boss
+from @tmpa a
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join sssu e on a.sssno=e.noa
+where isnull(a.typea,'')!='' --所得格式
+and isnull(a.ptype,'')!='' --證號別
+and (a.ptype not in ('0','1','3','4','9') or isnull(c.id,'')+isnull(c.passportno,'')!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and a.serial!=''
+--select '0',cno,sssno,MAX(years),'',taxno,addr_rent,serial,taxport,'A01'+MAX(years)+(right('00000'+cast(ROW_NUMBER() over(order by cno,typea,typeb,typec,sssno)as nvarchar(50)),5))--+serial
+--,typea,typeb,typec,id,passportno,n1,n2,MIN(years),MAX(years),MIN(mon),MAX(mon)
+--,namea,addr_home,SUM(retire),SUM(total),round(SUM(tax)/SUM(total)*100,0),SUM(tax),SUM(net),acomp,acomp_addr,boss
+--from @tmp
+--group by cno,sssno,taxno,addr_rent,serial,taxport,typea,typeb,typec,id,passportno,n1,n2,namea,addr_home,acomp,acomp_addr,boss
+
+select 
+left(acomp,5) acomp,
+case when retire=0 then null else dbo.getComma(retire,0) end retire,
+case when rate=0 then null else dbo.getComma(rate,0)+'%' end rate,
+dbo.getComma(tax,0) tax,
+dbo.getComma(total,0) total,
+dbo.getComma(net,0) net,
+* 
+from @tmp where gno='0' order by cno,typea,typeb,typec,sssno
+;
+----------------------------------------------------------------------------------------------------------------
+z_salbb4:--z_salbb4
+declare @t_xyears nvarchar(10)
+set @t_xyears = case when '#non' = [1] then '' else [1] end
+
+--所得資料暫存
+declare @tmpa table(
+	ishouse nvarchar(20),--居住*
+	taxport nvarchar(20),--稽徵機關代號*
+	recno nvarchar(10), --1國內 2國外 3股利憑單54C 54F
+	cno nvarchar(10),--公司代號
+	serial nvarchar(50),--統一編號*
+	domestic nvarchar(10), --1國內 2國外
+	personal nvarchar(10), --1個人 2非個人*
+	ttypea nvarchar(10),--所得類別*
+	ttypeb nvarchar(10),--類別區分*
+	typea nvarchar(10),--格式代號
+	typeb nvarchar(10),--所得註記
+	typec nvarchar(10),--項目代號
+	ptype nvarchar(20),--證號別
+	sssno nvarchar(20),--員工
+	id nvarchar(20),--身分證
+	datea nvarchar(20),--支付日期
+	years nvarchar(20),--年份
+	bmon nvarchar(20),--起始月份
+	emon nvarchar(20),--終止日份
+	money decimal(12, 0),--扣繳憑單給付總額、股利憑單股利淨額
+	tax decimal(12, 0),--扣繳稅額或可扣抵稅額
+	taxno nvarchar(20),--扣繳單位稅籍編號
+	houseno nvarchar(50),--申報單位房屋稅籍編號
+	rate nvarchar(50),--稅額扣抵比率
+	distribution float,--分配次數
+	exdate nvarchar(20),--除權（息）日期
+	retire float,--勞退金額
+	tax2 float,--股利或盈餘抵繳稅額
+	smount float,--股數
+	price float,--股價
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	stock float,--股票股利淨額
+	noa nvarchar(50), --編號
+	issued nvarchar(10) --憑單填發方式
+)
+
+insert @tmpa
+select case when isnull(e.ishouse,0)=1 then '1' else '0' end
+,UPPER(isnull(d.taxport,'A03'))
+,(case when a.typea='54' and (a.typeb='C' or a.typeb='F') then '3' when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,a.cno,b.serial
+,(case when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,(case when e.ptype in ('1','4','6','8') then '2' else '1' end)
+,f.typea
+,(case when f.typea='1' and a.typeb in ('C','X','F') then 'C'
+when f.typea='1' and a.typeb in ('Y') then '3'
+when f.typea='1' and a.typeb in ('',' ','A','B','I','J','K','L') then '1'
+when f.typea='1' and a.typeb in ('D','E','G','H','P','W','Q') then '2'
+when f.typea='2' and a.typea='9A' then '1'
+when f.typea='2' and a.typea='9B' then '2'
+when f.typea='5' and a.typea='51' then '1'
+when f.typea='5' and a.typea='53' then '2'
+else ' ' end)
+,a.typea,a.typeb,a.typec
+,e.ptype,a.sssno,isnull(c.id,'')+isnull(c.passportno,''),a.datea,a.years
+,case when right(a.bmon,2)='00' then left(a.bmon,3)+'/01' else a.bmon end
+,case when right(a.emon,2)='00' then left(a.bmon,3)+'/12' else a.emon end
+,isnull(a.money,0)
+,isnull(a.tax,0)
+,isnull(d.taxno,''),isnull(d.houseno,'')
+,right('0000'+REPLACE(REPLACE(dbo.getComma(a.rate,2),'.',''),',',''),4)
+,isnull(a.distribution,0),isnull(a.exdate,''),isnull(a.retire,0),isnull(a.tax2,0)
+,isnull(a.smount,0),isnull(a.price,0),isnull(a.cash,0),isnull(a.capital,0),isnull(a.stock,0),'',e.issued
+from (select LEFT(mon,3)years,MIN(mon)bmon,MAX(mon) emon
+,cno,sssno,typea,typeb,typec,SUM(money)money,SUM(tax)tax,SUM(tax2)tax2,SUM(retire)retire
+,MAX(distribution)distribution	--分配次數
+,MAX(exdate)exdate	--除權（息）基準年月日
+,SUM(smount)smount	--股數
+,MAX(price)price	--股價
+,SUM(cash)cash		--現金股利淨額
+,SUM(capital)capital--資本公積股利淨額
+,SUM(stock)stock	--股票股利淨額
+,MAX(datea)datea	--支付日期 交付股票日日期
+,MAX(rate)rate		--稅額扣抵比率
+from salbs where LEFT(mon,3)=@t_xyears group by LEFT(mon,3),sssno,typea,typeb,typec,cno) a 
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join acompu d on a.cno=d.noa
+left join sssu e on a.sssno=e.noa
+left join payremark f on a.typea=f.noa and a.typeb=f.inote
+where isnull(a.typea,'')!='' --所得格式
+and isnull(e.ptype,'')!='' --證號別
+and (e.ptype not in ('0','1','3','4','9') or c.id!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and b.serial!=''
+
+update a
+set noa=nownoa
+from (select (case when isnull(a.ishouse,0)=1
+then right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('0000000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno) as nvarchar(10)),6)
+else '00'+right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('00000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno)as nvarchar(10)),4) end )nownoa,* from @tmpa a ) a
+
+declare @tmp table(
+	gno nvarchar(1),
+	idno int identity(0,1),--項次
+	typea nvarchar(50), --所得類別
+	noa nvarchar(50), --製單單號
+	sssno nvarchar(50),
+	namea nvarchar(50),
+	is183 nvarchar(50),
+	id nvarchar(50),
+	passportno nvarchar(50),
+	taxtreaty nvarchar(50),
+	birthday nvarchar(50),
+	labase nvarchar(50),
+	taxno nvarchar(50),
+	addr_conn nvarchar(MAX),
+	addr_home nvarchar(MAX),
+	addr_rent nvarchar(MAX),
+	typec nvarchar(50),
+	ptype nvarchar(50),
+	errnote nvarchar(50),
+	country nvarchar(50)
+)
+
+insert @tmp
+select '0',a.typea+' '+g.form,a.noa,a.sssno,c.namea
+,case when a.ptype in('0','1','3','4','A') then '' else case when d.is183=1 then 'Y' else 'N' end end
+,c.id,c.passportno,d.taxtreaty,c.birthday
+,case when e.noa IS NULL then '非受僱單位員工或受僱單位員工(非所屬投保單位)' else '受僱單位員工(所屬投保單位)' end
+,d.taxno,c.addr_conn,c.addr_home,d.addr_rent,a.typec+' '+h.mark
+,a.ptype+' '+REPLACE(f.typea,'。',''),d.errnote,d.country
+from @tmpa a 
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join sssu d on a.sssno=d.noa
+left join (select noa from labased where @t_xyears between left(labor_bdate,3) and left(labor_edate,3) group by noa) e on a.sssno=e.noa
+left join paytype f on a.ptype=f.noa
+left join payform g on a.typea=g.noa
+left join paymark h on a.typec=h.noa
+
+select * from @tmp;
+--------------------------------------------------------------------------------------------------------------------------------
+z_salbb5:--z_salb5
+declare @t_xyears nvarchar(10)
+set @t_xyears = case when '#non' = [1] then '' else [1] end
+
+--統一製單編號 故所得資料與媒體產生的暫存檔相同
+declare @tmpa table(
+	ishouse nvarchar(20),--居住*
+	taxport nvarchar(20),--稽徵機關代號*
+	recno nvarchar(10), --1國內 2國外 3股利憑單54C 54F
+	cno nvarchar(10),--公司代號
+	serial nvarchar(50),--統一編號*
+	domestic nvarchar(10), --1國內 2國外
+	personal nvarchar(10), --1個人 2非個人*
+	ttypea nvarchar(10),--所得類別*
+	ttypeb nvarchar(10),--類別區分*
+	typea nvarchar(10),--格式代號
+	typeb nvarchar(10),--所得註記
+	typec nvarchar(10),--項目代號
+	ptype nvarchar(20),--證號別
+	sssno nvarchar(20),--員工
+	id nvarchar(20),--身分證
+	datea nvarchar(20),--支付日期
+	years nvarchar(20),--年份
+	bmon nvarchar(20),--起始月份
+	emon nvarchar(20),--終止日份
+	money decimal(12, 0),--扣繳憑單給付總額、股利憑單股利淨額
+	tax decimal(12, 0),--扣繳稅額或可扣抵稅額
+	taxno nvarchar(20),--扣繳單位稅籍編號
+	houseno nvarchar(50),--申報單位房屋稅籍編號
+	rate nvarchar(50),--稅額扣抵比率
+	distribution float,--分配次數
+	exdate nvarchar(20),--除權（息）日期
+	retire float,--勞退金額
+	tax2 float,--股利或盈餘抵繳稅額
+	smount float,--股數
+	price float,--股價
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	stock float,--股票股利淨額
+	noa nvarchar(50), --編號
+	issued nvarchar(10) --憑單填發方式
+)
+
+insert @tmpa
+select case when isnull(e.ishouse,0)=1 then '1' else '0' end
+,UPPER(isnull(d.taxport,'A03'))
+,(case when a.typea='54' and (a.typeb='C' or a.typeb='F') then '3' when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,a.cno,b.serial
+,(case when e.ptype in ('5','6','7','8','9') then '2' else '1' end)
+,(case when e.ptype in ('1','4','6','8') then '2' else '1' end)
+,f.typea
+,(case when f.typea='1' and a.typeb in ('C','X','F') then 'C'
+when f.typea='1' and a.typeb in ('Y') then '3'
+when f.typea='1' and a.typeb in ('',' ','A','B','I','J','K','L') then '1'
+when f.typea='1' and a.typeb in ('D','E','G','H','P','W','Q') then '2'
+when f.typea='2' and a.typea='9A' then '1'
+when f.typea='2' and a.typea='9B' then '2'
+when f.typea='5' and a.typea='51' then '1'
+when f.typea='5' and a.typea='53' then '2'
+else ' ' end)
+,a.typea,a.typeb,a.typec
+,e.ptype,a.sssno,isnull(c.id,''),a.datea,a.years
+,case when right(a.bmon,2)='00' then left(a.bmon,3)+'/01' else a.bmon end
+,case when right(a.emon,2)='00' then left(a.bmon,3)+'/12' else a.emon end
+,isnull(a.money,0)
+,isnull(a.tax,0)
+,d.taxno,d.houseno
+,right('0000'+REPLACE(REPLACE(dbo.getComma(a.rate,2),'.',''),',',''),4)
+,isnull(a.distribution,0),isnull(a.exdate,''),isnull(a.retire,0),isnull(a.tax2,0)
+,isnull(a.smount,0),isnull(a.price,0),isnull(a.cash,0),isnull(a.capital,0),isnull(a.stock,0),'',e.issued
+from (select LEFT(mon,3)years,MIN(mon)bmon,MAX(mon) emon
+,cno,sssno,typea,typeb,typec,SUM(money)money,SUM(tax)tax,SUM(tax2)tax2,SUM(retire)retire
+,MAX(distribution)distribution	--分配次數
+,MAX(exdate)exdate	--除權（息）基準年月日
+,SUM(smount)smount	--股數
+,MAX(price)price	--股價
+,SUM(cash)cash		--現金股利淨額
+,SUM(capital)capital--資本公積股利淨額
+,SUM(stock)stock	--股票股利淨額
+,MAX(datea)datea	--支付日期 交付股票日日期
+,MAX(rate)rate		--稅額扣抵比率
+from salbs where LEFT(mon,3)=@t_xyears group by LEFT(mon,3),sssno,typea,typeb,typec,cno) a 
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join acompu d on a.cno=d.noa
+left join sssu e on a.sssno=e.noa
+left join payremark f on a.typea=f.noa and a.typeb=f.inote
+where isnull(a.typea,'')!='' --所得格式
+and isnull(e.ptype,'')!='' --證號別
+and (e.ptype not in ('0','1','3','4','9') or c.id!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and b.serial!=''
+
+update a
+set noa=nownoa
+from (select (case when isnull(a.ishouse,0)=1
+then right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('0000000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno) as nvarchar(10)),6)
+else '00'+right('00'+cast(DENSE_RANK() over ( order by a.serial,a.personal,a.ttypea,a.ttypeb)as nvarchar(2)),2)+right('00000'+cast(ROW_NUMBER() over (partition by isnull(a.ishouse,0),a.serial,a.personal,a.ttypea,a.ttypeb order by a.sssno)as nvarchar(10)),4) end )nownoa,* from @tmpa a ) a
+
+declare @tmp table(
+	gno nvarchar(1),
+	cno nvarchar(50),
+	taxportname nvarchar(50),
+	serial nvarchar(50),
+	sssno nvarchar(50),
+	namea nvarchar(50),
+	id nvarchar(50),
+	typea nvarchar(50),
+	typeb nvarchar(50),
+	typec nvarchar(50),
+	noa nvarchar(50),
+	money float,
+	tax1 float,
+	net float,
+	distribution float,--分配次數
+	retire float,--勞退金額
+	smount float,--股數
+	tax2 float,--股利或盈餘抵繳稅額
+	tax3 float,--應扣繳稅
+	stock float,--股票股利淨額
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	exdate nvarchar(20),--除權（息）日期
+	datea nvarchar(20),--支付日期
+	price float,--股價
+	addr_home nvarchar(MAX),
+	addr_rent nvarchar(MAX),
+	passportno nvarchar(50),
+	bmon nvarchar(50),
+	emon nvarchar(50),
+	counts int
+)
+
+insert @tmp
+select '0',a.cno,f.taxportname,a.serial,a.sssno,c.namea,c.id,a.typea,a.typeb,a.typec
+,a.noa,a.money,a.tax,a.money-a.tax,a.distribution,a.retire,a.smount,a.tax2,a.tax+a.tax2
+,a.stock,a.cash,a.capital,a.exdate,a.datea,a.price,c.addr_home,e.addr_rent,c.passportno,a.bmon,a.emon,0
+from @tmpa a
+left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa
+left join sssu e on a.sssno=e.noa
+left join acompu f on a.cno=f.noa
+where isnull(a.typea,'')!='' --所得格式
+and isnull(a.ptype,'')!='' --證號別
+and (a.ptype not in ('0','1','3','4','9') or isnull(c.id,'')+isnull(c.passportno,'')!='') --身份證輸入
+and a.money>=0 and a.tax>=0--給付,稅額不可為負
+and a.serial!=''
+
+--交付日
+update @tmp set exdate=datea where typea='50' and typeb='E'
+
+update @tmp set passportno=sssno where isnull(passportno,'')=''
+
+insert @tmp (gno,cno,sssno,namea,counts,net,retire,tax3,cash,distribution,smount,stock)
+select '1',cno,sssno,namea,count(*),sum(net),sum(retire),sum(tax3),sum(cash),sum(distribution),sum(smount),sum(stock)
+from @tmp group by cno,sssno,namea
+
+select 
+dbo.getComma(net,0)money,
+dbo.getComma(tax1,0)tax1,
+dbo.getComma(net,0)net,
+dbo.getComma(distribution,0)distribution,
+dbo.getComma(retire,0)retire,
+dbo.getComma(smount,0)smount,
+dbo.getComma(tax2,0)tax2,
+dbo.getComma(tax3,0)tax3,
+dbo.getComma(stock,0)stock,
+dbo.getComma(cash,0)cash,
+dbo.getComma(capital,0)capital,
+dbo.getComma(price,2)price,
+* from @tmp order by cno,sssno,gno,typea
+;
+--------------------------------------------------------------------------------------------------------------------------------
+z_salbb6:--z_salb6
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_bdate = case when '#non' = [3] then '' else [3] end
+set @t_edate = case when '#non' = [4] then CHAR(255) else [4] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	cno nvarchar(50),
+	acomp nvarchar(50),
+	serial nvarchar(50),
+	sssno nvarchar(50),
+	namea nvarchar(50),
+	datea nvarchar(20),
+	mon nvarchar(50),
+	typea nvarchar(50),
+	typeb nvarchar(50),
+	typec nvarchar(50),
+	money float,
+	tax1 float,
+	net float,
+	rate float,
+	retire float,--勞退金額
+	stock float,--股票股利淨額
+	cash float,--現金股利淨額
+	capital float,--資本公積股利淨額
+	distribution float,--分配次數
+	smount float,--股數
+	tax2 float,--股利或盈餘抵繳稅額
+	exdate nvarchar(20),--除權（息）日期
+	price float,--股價
+	passportno nvarchar(50),
+	houseno nvarchar(50),
+	counts int
+)
+
+insert @tmp
+select case when a.typea='50' and a.typeb='E' then '2' when a.typea='51' then '3' when a.typea='54' and a.typeb='C' then '4' when a.typea='54' and a.typeb='F' then '5' else '1' end
+,a.cno,b.acomp,b.serial,a.sssno,c.namea,a.datea,a.mon,a.typea,a.typeb,a.typec,a.money,a.tax,a.money-a.tax
+,a.rate,a.retire,a.stock,a.cash,a.capital,a.distribution,a.smount,a.tax2,a.exdate,a.price,c.passportno,d.taxno,0
+from salbs a left join acomp b on a.cno=b.noa
+left join sss c on a.sssno=c.noa left join sssu d on a.sssno=d.noa
+where datea between @t_bdate and @t_edate
+
+update @tmp set passportno=sssno where isnull(passportno,'')=''
+
+insert @tmp(gno,cno,sssno,typea,money,tax1,net,counts)
+select '6',cno,sssno,typea,SUM(money),SUM(tax1),SUM(net),count(*) from @tmp where gno<='5'
+group by cno,sssno,typea
+
+insert @tmp(gno,cno,sssno,typea,money,tax1,net,counts)
+select '7',cno,sssno,CHAR(255),SUM(money),SUM(tax1),SUM(net),count(*) from @tmp where gno<='5'
+group by cno,sssno
+
+insert @tmp(gno,cno,sssno,typea)
+select '8',cno,CHAR(255),CHAR(255) from @tmp where gno<='5'
+group by cno
+
+select 
+dbo.getComma(money,0)money,
+dbo.getComma(tax1,0)tax1,
+dbo.getComma(net,0)net,
+case when isnull(rate,0)=0 then null else dbo.getComma(rate,2)+'%' end rate,
+dbo.getComma(retire,0)retire,
+dbo.getComma(stock,0)stock,
+dbo.getComma(cash,0)cash,
+dbo.getComma(capital,0)capital,
+dbo.getComma(distribution,0)distribution,
+dbo.getComma(smount,0)smount,
+dbo.getComma(tax2,0)tax2,
+dbo.getComma(price,2)price,
+* from @tmp order by cno,sssno,typea,gno,mon,datea;
+--------------------------------------------------------------------------------------------------------------------------------
+z_salbb7:--z_salb7
+declare @t_xyears nvarchar(10)
+set @t_xyears = case when '#non' = [1] then '' else [1] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	sssno nvarchar(50),
+	namea nvarchar(50),
+	tmon nvarchar(20),
+	tmoney float,
+	ttax float,
+	ttotal float,
+	tretire float,
+	smon nvarchar(20),
+	stotal float,
+	stax float,
+	sretire float,
+	total float,
+	tax float,
+	retire float
+)
+
+declare @tmpa table(
+	idno int,
+	sssno nvarchar(50),
+	namea nvarchar(50),
+	tmon nvarchar(20),
+	tmoney float,
+	ttax float,
+	ttotal float,
+	tretire float
+)
+
+declare @tmpb table(
+	idno int,
+	sssno nvarchar(50),
+	namea nvarchar(50),
+	smon nvarchar(20),
+	stotal float,
+	stax float,
+	sretire float
+)
+
+insert @tmpa
+select ROW_NUMBER() over(partition by sssno order by sssno,mon),sssno,MAX(namea),mon,sum(isnull(money,0)),sum(isnull(tax,0)),sum(isnull(money,0)-isnull(tax,0)),sum(isnull(retire,0))
+from salbs where left(mon,3)=@t_xyears
+group by sssno,mon
+
+insert @tmpb
+select ROW_NUMBER() over(partition by sno order by sno,mon),sno,MAX(namea),mon,sum(isnull(total5,0)),sum(isnull(tax,0)+isnull(tax5,0)+isnull(tax6,0)+isnull(tax12,0)+isnull(tax18,0)),sum(isnull(ch_labor_self,0))
+from salarys where left(mon,3)=@t_xyears
+group by sno,mon
+
+
+declare @sssno nvarchar(MAX)
+declare @namea nvarchar(MAX)
+declare cursor_table cursor for
+select sssno,MAX(namea)namea from (select sssno,namea from @tmpa union all select sssno,namea from @tmpb)tmp group by sssno
+open cursor_table
+fetch next from cursor_table
+into @sssno,@namea
+while(@@FETCH_STATUS <> -1)
+begin
+	if((select count(*) from @tmpa where sssno=@sssno)>(select count(*) from @tmpb where sssno=@sssno))
+	begin
+		insert @tmp(gno,sssno,namea,tmon,tmoney,ttax,ttotal,tretire,smon,stotal,stax,sretire)
+		select '0',@sssno,@namea,a.tmon,a.tmoney,a.ttax,a.ttotal,a.tretire,b.smon,b.stotal,b.stax,b.sretire
+		from @tmpa a left join @tmpb b on a.idno=b.idno and a.sssno=b.sssno
+		where a.sssno=@sssno
+	end
+	else 
+	begin
+		insert @tmp(gno,sssno,namea,tmon,tmoney,ttax,ttotal,tretire,smon,stotal,stax,sretire)
+		select '0',@sssno,@namea,a.tmon,a.tmoney,a.ttax,a.ttotal,a.tretire,b.smon,b.stotal,b.stax,b.sretire
+		from @tmpb b left join @tmpa a on a.idno=b.idno and a.sssno=b.sssno
+		where b.sssno=@sssno
+	end
+	fetch next from cursor_table
+	into @sssno,@namea
+end
+close cursor_table
+deallocate cursor_table
+
+insert @tmp(gno,sssno,namea,tmoney,ttax,ttotal,tretire,stotal,stax,sretire)
+select '1',sssno,MAX(namea),sum(tmoney),sum(ttax),sum(ttotal),sum(tretire),sum(stotal),sum(stax),sum(sretire) 
+from @tmp group by sssno
+
+update @tmp
+set total=isnull(stotal,0)-isnull(ttotal,0),tax=isnull(stax,0)-isnull(ttax,0),retire=isnull(sretire,0)-isnull(tretire,0)
+
+select 
+dbo.getComma(tmoney,0)tmoney,
+dbo.getComma(ttax,0)ttax,
+dbo.getComma(ttotal,0)ttotal,
+dbo.getComma(tretire,0)tretire,
+dbo.getComma(stotal,0)stotal,
+dbo.getComma(stax,0)stax,
+dbo.getComma(sretire,0)sretire,
+dbo.getComma(total,0)total,
+dbo.getComma(tax,0)tax,
+dbo.getComma(retire,0)retire,
+* 
+from @tmp order by sssno,gno,tmon,smon
+;
+--------------------------------------------------------------------------------------------------------------------------------

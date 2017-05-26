@@ -1,0 +1,359 @@
+checkuf:--checkuf
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @ufnoa nvarchar(20) = [1]
+	declare @accno nvarchar(20) = ''
+	declare @datea nvarchar(10) = ''
+	
+	if not exists(select * from uf where noa=@ufnoa)
+	begin
+		select '兌現【'+@ufnoa+'】單據不存在。' errmsg
+		return
+	end
+	select @accno=accno,@datea=datea from uf where noa=@ufnoa
+	if LEN(@accno)=0
+	begin
+		select '兌現作業【'+@ufnoa+'】無會計傳票。' errmsg
+		return
+	end
+	else
+	begin
+		declare @tmps table(accc3 nvarchar(20),noq nvarchar(10))
+		set @cmd = "select accc3,noq from acccs"+LEFT(@datea,3)+"_1 where accc3=@accno"
+		insert into @tmps(accc3,noq)
+		execute sp_executesql @cmd,N'@accno nvarchar(20)',@accno=@accno
+		if not exists(select * from @tmps)
+		begin
+			select '會計傳票【'+@accno+'】無資料。' errmsg
+			return
+		end
+	end
+	return;
+
+export:--export
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_bdate nvarchar(20) = [1]
+	declare @t_edate nvarchar(20) = [2]
+	declare @t_userno nvarchar(20) = [3]
+	declare @t_worker nvarchar(20) = [4]
+	-----------------------------------------------------------------------------------
+	declare @tmp table(
+		typea nvarchar(10),
+		bankno nvarchar(20),
+		datea nvarchar(10),
+		checkno nvarchar(30),
+		memo nvarchar(max)
+	)
+	insert into @tmp(typea,bankno,datea,checkno,memo)
+	select c.typea,b.bankno
+	,case when a.memo='代收轉今' or a.memo='次交轉今' then dbo.nextworkday(a.datea) else a.datea end
+	,a.checkno,a.memo
+	from banktmps a
+	right join banktmp b on a.noa=b.noa
+	right join gqb c on a.checkno=c.gqbno
+	left join ufs d on a.checkno=d.checkno
+	where len(a.checkno)>0 
+	and d.noa is null
+	and case when a.memo='代收轉今' or a.memo='次交轉今' then dbo.nextworkday(a.datea) else a.datea end between @t_bdate and @t_edate
+	and (c.typea='1' or c.typea='2')
+	group by c.typea,b.bankno
+	,case when a.memo='代收轉今' or a.memo='次交轉今' then dbo.nextworkday(a.datea) else a.datea end
+	,a.checkno,a.memo
+
+	delete @tmp 
+	from @tmp a
+	where exists(select * from @tmp where checkno=a.checkno and rtrim(ltrim(memo))='退票')
+	---------------------------------------------------------------------------------------------------
+	--現金支沖 等同退票
+	delete @tmp 
+	from @tmp a
+	left join (select checkno from @tmp where rtrim(ltrim(memo))='現金支沖') b on a.checkno=b.checkno
+	where b.checkno is not null
+	---------------------------------------------------------------------------------------------------
+	if exists(select checkno from @tmp group by checkno having COUNT(1)>1)
+	begin
+		select checkno,isnull(checkno,'')+'支票重覆' errmsg from @tmp group by checkno having COUNT(1)>1
+		return
+	end
+	---------------------------------------------------------------------------------------------------
+	declare @uf table(
+		noa nvarchar(20),
+		typea nvarchar(10),
+		bankno nvarchar(30),
+		bank nvarchar(50),
+		datea nvarchar(10),
+		account nvarchar(30),
+		[money] float,
+		worker nvarchar(20)
+		,accno nvarchar(20)
+	)
+	declare @ufs table(
+		recno int identity(1,1),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		sel int,
+		checkno nvarchar(30),
+		bankno nvarchar(20),
+		bank nvarchar(50),
+		account nvarchar(50),
+		datea nvarchar(10),
+		[money] float
+	)
+	IF OBJECT_ID('tempdb..#banktmp_accc')is not null
+	BEGIN
+		drop table #banktmp_accc
+	END
+	create table #banktmp_accc(
+		sel int identity(1,1)
+		,accy nvarchar(20)
+		,accc1 nvarchar(20)
+		,accc2 nvarchar(10)
+		,accc3 nvarchar(20)
+		,zno nvarchar(20)
+		,dmoney float
+		,cmoney float
+		,part nvarchar(20)
+	)
+	IF OBJECT_ID('tempdb..#banktmp_acccs')is not null
+	BEGIN
+		drop table #banktmp_acccs
+	END
+	create table #banktmp_acccs(
+		sel int identity(1,1)
+		,accy nvarchar(20)
+		,accc1 nvarchar(20)
+		,accc2 nvarchar(10)
+		,accc3 nvarchar(20)
+		,accc4 nvarchar(10)
+		,accc5 nvarchar(20)
+		,accc6 nvarchar(50)
+		,accc7 nvarchar(50)
+		,accc8 float
+		,zno nvarchar(50)
+		,noq nvarchar(10)
+		,part nvarchar(20)
+		,dc nvarchar(20)
+		,dmoney float
+		,cmoney float
+		,proj nvarchar(20)
+	)
+	declare @typea nvarchar(10)
+	declare @bankno nvarchar(30)
+	declare @datea nvarchar(20)
+	declare @noa nvarchar(20)
+	
+	declare cursor_table cursor for
+	select typea,bankno,datea from @tmp group by typea,bankno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @typea,@bankno,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select top 1 @noa = a.noa
+		from(
+			select noa from uf where left(noa,9)='HA'+REPLACE(@datea,'/','') 
+			union
+			select noa from @uf where left(noa,9)='HA'+REPLACE(@datea,'/','')  )a
+		order by noa desc
+		if @noa is null
+		begin
+			set @noa= 'HA'+REPLACE(@datea,'/','') + '001'
+		end
+		else
+		begin
+			set @noa = LEFT(@noa,9)+ right('00'+cast(cast(RIGHT(@noa,3)as int)+1 as nvarchar),3)
+		end
+
+		insert into @uf(noa,typea,bankno,bank,datea,account,[money],worker)
+		select @noa,@typea,a.bankno,c.bank,a.datea,c.account,sum(b.[money]),@t_worker
+		from @tmp a
+		right join gqb b on a.checkno=b.gqbno
+		right join bank c on a.bankno=c.noa
+		where a.typea=@typea and a.bankno=@bankno and a.datea = @datea
+		group by a.typea,a.bankno,c.bank,a.datea,c.account
+		
+		insert into @ufs(noa,noq,sel,checkno,bankno,bank,account,datea,[money])
+		select @noa,RIGHT('00'+cast(row_number()over(order by a.checkno) as nvarchar),3)
+			,1,a.checkno,b.bankno,b.bank,b.account,b.indate,b.[money]
+		from @tmp a
+		right join gqb b on a.checkno=b.gqbno
+		where a.typea=@typea and a.bankno=@bankno and a.datea = @datea
+		
+		fetch next from cursor_table
+		into @typea,@bankno,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @accy nvarchar(10)
+	declare @maxno1 nvarchar(20)
+	declare @maxno2 nvarchar(20)
+	declare @accno nvarchar(20)
+	declare @n int
+	declare @recno int
+	declare @checkno nvarchar(20)
+	declare @money float
+	declare @acc1 nvarchar(20)
+	declare @acc2 nvarchar(50)
+	declare @xbankno nvarchar(20)
+
+	declare cursor_table cursor for
+	select datea,noa,bankno from @uf order by datea,noa
+	open cursor_table
+	fetch next from cursor_table
+	into @datea,@noa,@xbankno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @accy = LEFT(@datea,3),@maxno1='',@maxno2=''
+		select top 1 @maxno1 = accc3 from view_accc where accy=@accy and accc3 like replace(RIGHT(@datea,5),'/','')+'[0-9,A-Z][0-9][0-9]' order by accc3 desc
+		select top 1 @maxno2 = accno from @uf where accno like replace(RIGHT(@datea,5),'/','')+'[0-9,A-Z][0-9][0-9]' order by accno desc
+		
+		set @accno = case when @maxno1>@maxno2 then @maxno1 else @maxno2 end
+		if len(@accno)=0
+		begin
+			set @n = 1
+		end
+		else
+		begin
+			set @n = (CHARINDEX( left(right(@accno,3),1),@string)-1)*100 + cast(RIGHT(@accno,2) as int) +1
+		end
+
+		set @accno = replace(RIGHT(@datea,5),'/','')+SUBSTRING(@string,floor(@n/100) + 1,1) + right('00'+CAST(@n%100 as nvarchar),2)
+		update @uf set accno=@accno where noa=@noa
+		
+
+		----ACCCS
+		declare cursor_table2 cursor for
+		select recno,checkno,bankno,[money] from @ufs where noa=@noa order by recno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @recno,@checkno,@bankno,@money
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @typea = '',@acc1='',@acc2=''
+			select @typea=typea from gqb where gqbno=@checkno
+			
+			if @typea='1'
+			begin
+				set @bankno=@xbankno
+			end
+			
+			select @acc1=acc1 from bank where noa=@bankno
+			set @cmd ="select @acc2=acc2 from acc"+@accy+"_1 where acc1=@acc1"
+			execute sp_executesql @cmd,N'@acc1 nvarchar(20),@acc2 nvarchar(50) output',@acc1=@acc1,@acc2=@acc2 output
+			
+			if @typea='1'
+			begin
+				insert into #banktmp_acccs(accy,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8
+					,zno,noq,part,dc,dmoney,cmoney,proj)
+				select @accy,'3',RIGHT(@datea,5),@accno,'借',@acc1,@acc2,@checkno,@money
+					,@noa+'兌現','','','1',@money,0,''
+				insert into #banktmp_acccs(accy,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8
+					,zno,noq,part,dc,dmoney,cmoney,proj)
+				select @accy,'3',RIGHT(@datea,5),@accno,'貸','1121.','應收票據',@checkno,@money
+					,@noa+'兌現','','','2',0,@money,''
+			end
+			else
+			begin
+				insert into #banktmp_acccs(accy,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8
+					,zno,noq,part,dc,dmoney,cmoney,proj)
+				select @accy,'3',RIGHT(@datea,5),@accno,'借','2121.','應付票據',@checkno,@money
+					,@noa+'兌現','','','1',@money,0,''
+				insert into #banktmp_acccs(accy,accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8
+					,zno,noq,part,dc,dmoney,cmoney,proj)
+				select @accy,'3',RIGHT(@datea,5),@accno,'貸',@acc1,@acc2,@checkno,@money
+					,@noa+'兌現','','','2',0,@money,''
+			end
+		
+			fetch next from cursor_table2
+			into @recno,@checkno,@bankno,@money
+		end
+		close cursor_table2
+		deallocate cursor_table2
+	
+		fetch next from cursor_table
+		into @datea,@noa,@xbankno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into #banktmp_accc(accy,accc1,accc2,accc3,zno,dmoney,cmoney,part)
+	select accy,accc1,accc2,accc3,zno,SUM(ISNULL(dmoney,0)),SUM(ISNULL(cmoney,0)),''
+	from #banktmp_acccs
+	group by accy,accc1,accc2,accc3,zno
+	
+	update #banktmp_acccs set noq=RIGHT('000'+CAST(b.rr as nvarchar),3)
+	from #banktmp_acccs a
+	left join (select sel,ROW_NUMBER()over(partition by accc3 order by sel) rr  from #banktmp_acccs ) b on a.sel=b.sel
+
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	
+	begin try 
+		insert into uf(noa,typea,bankno,bank,datea,account,[money],worker,accno)
+		select noa,typea,bankno,bank,datea,account,[money],worker,accno from @uf
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		insert into ufs(noa,noq,sel,checkno,bankno,bank,account,datea,[money])
+		select noa,noq,sel,checkno,bankno,bank,account,datea,[money] from @ufs
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		insert into drun(datea,timea,usera,action,noa,tablea,title)
+		select convert(nvarchar,getdate(),111),left(convert(nvarchar,getdate(),108),5)
+			,@t_userno,'Insert',noa,'uf','自動兌現'
+		from @uf
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		declare cursor_table cursor for
+		select accy from #banktmp_accc group by accy
+		open cursor_table
+		fetch next from cursor_table
+		into @accy
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @cmd =
+			"insert into accc"+@accy+"_1(accc1,accc2,accc3,zno,dmoney,cmoney,part)
+			select accc1,accc2,accc3,zno,dmoney,cmoney,part from #banktmp_accc where accy=@accy"
+			execute sp_executesql @cmd,N'@accy nvarchar(10)',@accy=@accy
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			set @cmd =
+			"insert into acccs"+@accy+"_1(accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,zno,noq,part,dc,dmoney,cmoney,proj)
+			select accc1,accc2,accc3,accc4,accc5,accc6,accc7,accc8,zno,noq,part,dc,dmoney,cmoney,proj from #banktmp_acccs where accy=@accy"
+			execute sp_executesql @cmd,N'@accy nvarchar(10)',@accy=@accy
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			
+			insert into drun(datea,timea,usera,action,noa,tablea,title)
+			select convert(nvarchar,getdate(),111),left(convert(nvarchar,getdate(),108),5)
+				,@t_userno,'Insert',accc3,'accc','自動兌現(傳票)'
+			from #banktmp_accc where accy=@accy
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			
+			fetch next from cursor_table
+			into @accy 
+		end
+		close cursor_table
+		deallocate cursor_table
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select ERROR_MESSAGE() errmsg 
+		return
+	end catch
+	 
+	IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select ERROR_MESSAGE() errmsg 
+		return
+	END
+	ELSE BEGIN
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	END
+	
+	drop table #banktmp_accc
+	drop table #banktmp_acccs
+	
+	select a.*,b.nn mount
+	from @uf a 
+	outer apply (select count(1) nn from @ufs) b
+	order by a.noa;
