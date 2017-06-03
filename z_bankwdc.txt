@@ -1,0 +1,237 @@
+z_bankwdc01:--z_bankwdc01
+	SET QUOTED_IDENTIFIER OFF 
+	declare @cmd nvarchar(max)
+	declare @t_path nvarchar(max) = '[1]'
+	declare @t_db nvarchar(max) = '[2]'
+	declare @t_bdate nvarchar(20) = case when '#non'=[3] then '' else [3] end
+	declare @t_edate nvarchar(20) = case when '#non'=[4] then char(255) else [4] end
+	declare @t_cno nvarchar(max) = case when '#non'=[5] then '' else [5] end
+	------------------------------------------------------------------------------------
+	declare @tmpa table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, a01 float --應收帳款 (trd未立帳)    trans
+		, a02 float --應收票據
+		
+		, b01 float --應付運費 (tre未立帳)    trans
+		, b02 float --應付費用 (payb未立帳)   fixa
+		, b03 float --應付票據
+	)
+	------------------------------------------------------------------------------------
+	--應收帳款 (trd未立帳)
+	declare @tmpb table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, [money] float
+	)
+	insert into @tmpb(datea,[money])
+	select a.trandate,SUM(a.total)
+	from view_trans a
+	left join view_trds b on a.noa=b.tranno
+	where a.trandate between @t_bdate and @t_edate
+	and b.noa is not null
+	and ISNULL(a.total,0)!=0
+	group by a.trandate
+	------------------------------------------------------------------------------------
+	--應收票據
+	declare @tmpc table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, [money] float
+	)	
+	insert into @tmpc(datea,[money]) 
+	select a.indate,sum(a.[money])
+	from gqb a
+	where len(ISNULL(a.enda,''))=0
+	and len(ISNULL(a.usage,''))=0
+	and a.indate between @t_bdate and @t_edate
+	and a.typea='1'
+	group by a.indate
+	------------------------------------------------------------------------------------
+	--應付運費 (tre未立帳)
+	declare @tmpd table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, [money] float
+	)
+	insert into @tmpd(datea,[money])
+	select a.trandate,SUM(a.total2)
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno
+	where a.trandate between @t_bdate and @t_edate
+	and b.noa is not null
+	and ISNULL(a.total2,0)!=0
+	group by a.trandate
+	------------------------------------------------------------------------------------
+	--應付費用 (payb未立帳)
+	declare @tmpe table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, [money] float
+	)
+	insert into @tmpe(datea,[money])
+	select a.datea,SUM(a.total)
+	from fixa a
+	where a.datea between @t_bdate and @t_edate
+	and ISNULL(a.total,0)!=0
+	group by a.datea
+	------------------------------------------------------------------------------------
+	--應付票據
+	declare @tmpf table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, [money] float
+	)	
+	insert into @tmpc(datea,[money]) 
+	select a.indate,sum(a.[money])
+	from gqb a
+	where len(ISNULL(a.enda,''))=0
+	and len(ISNULL(a.usage,''))=0
+	and a.indate between @t_bdate and @t_edate
+	and a.typea='2'
+	group by a.indate
+	
+	-----------------------------------------------------------------------------------------
+	-- tmpb
+	update @tmpa set a01=b.[money]
+	from @tmpa a
+	left join @tmpb b on a.datea=b.datea
+	where b.sel is not null
+	
+	insert into @tmpa(datea,a01)
+	select a.datea,a.[money]
+	from @tmpb a
+	left join @tmpa b on a.datea=b.datea
+	where b.sel is null
+	-- tmpc
+	update @tmpa set a02=b.[money]
+	from @tmpa a
+	left join @tmpc b on a.datea=b.datea
+	where b.sel is not null
+	
+	insert into @tmpa(datea,a02)
+	select a.datea,a.[money]
+	from @tmpc a
+	left join @tmpa b on a.datea=b.datea
+	where b.sel is null
+	-- tmpd
+	update @tmpa set b01=b.[money]
+	from @tmpa a
+	left join @tmpd b on a.datea=b.datea
+	where b.sel is not null
+	
+	insert into @tmpa(datea,b01)
+	select a.datea,a.[money]
+	from @tmpd a
+	left join @tmpa b on a.datea=b.datea
+	where b.sel is null
+	-- tmpe
+	update @tmpa set b02=b.[money]
+	from @tmpa a
+	left join @tmpe b on a.datea=b.datea
+	where b.sel is not null
+	
+	insert into @tmpa(datea,b02)
+	select a.datea,a.[money]
+	from @tmpe a
+	left join @tmpa b on a.datea=b.datea
+	where b.sel is null
+	-- tmpf
+	update @tmpa set b03=b.[money]
+	from @tmpa a
+	left join @tmpf b on a.datea=b.datea
+	where b.sel is not null
+	
+	insert into @tmpa(datea,b03)
+	select a.datea,a.[money]
+	from @tmpf a
+	left join @tmpa b on a.datea=b.datea
+	where b.sel is null
+	-----------------------------------------------------------------------------------------
+	--上期結存
+	declare @total float = 0
+	declare @accy nvarchar(20)
+	declare @accc nvarchar(20)
+	declare @acccs nvarchar(20)
+	declare @acc nvarchar(20)
+	declare @value float
+	
+	--期初日期
+	declare @t_date nvarchar(20) = dbo.AD2ChineseEraName(dateadd(DD,-1,dbo.ChineseEraName2AD(@t_bdate)))
+	
+	declare cursor_table cursor for
+	
+	select  right(left(a.[name],7),3),a.[name],b.[name],c.[name]
+	from sys.tables a
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acccs[0-9][0-9][0-9][_]%') b on RIGHT(a.[name],5)=b.accy
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acc[0-9][0-9][0-9][_]%') c on RIGHT(a.[name],5)=c.accy
+	where a.[name] like 'accc'+left(@t_date,3)+'[_]%'
+	and b.[name] is not null
+	
+	order by RIGHT(a.[name],5)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc,@acccs,@acc
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		set @value=0
+		set @cmd = "select @value=sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') < @t_bdate"
+	
+		execute sp_executesql @cmd,N'@accy nvarchar(20),@t_bdate nvarchar(20),@value float output'
+			,@accy=@accy,@t_bdate=@t_bdate,@value=@value output
+		
+		set @total = @total + ISNULL(@value,0)
+		
+		fetch next from cursor_table
+		into @accy,@accc,@acccs,@acc
+	end
+	close cursor_table
+	deallocate cursor_table
+	-----------------------------------------------------------------------------------------
+	declare @a01 float
+	declare @a02 float
+	declare @b01 float
+	declare @b02 float
+	declare @b03 float
+	
+	declare @tmp table(
+		sel int identity(1,1)
+		, datea nvarchar(20)
+		, a01 float
+		, a02 float
+		, b01 float
+		, b02 float
+		, b03 float
+		, total float
+	)
+	--期初
+	insert into @tmp(datea,total)values(@t_date,@total)
+	
+	set @t_date = @t_bdate
+	while @t_date<=@t_edate
+	begin
+		select @a01=0,@a02=0,@b01=0,@b02=0,@b03=0
+		select @a01=a01,@a02=a02,@b01=b01,@b02=b02,@b03=b03
+		from @tmpa where datea=@t_date
+		set @total = @total + ISNULL(@a01,0) + ISNULL(@a02,0)- ISNULL(@b01,0) - ISNULL(@b02,0) - ISNULL(@b03,0)
+		insert into @tmp(datea,a01,a02,b01,b02,b03,total)
+		select @t_date,@a01,@a02,@b01,@b02,@b03,@total
+		
+		set @t_date = dbo.AD2ChineseEraName(dateadd(DD,1,dbo.ChineseEraName2AD(@t_date)))
+	end
+		
+	select '1' gno
+		,datea a01
+		,dbo.getComma(a01,-1) a02
+		,dbo.getComma(a02,-1) a03
+		,dbo.getComma(b01,-1) a04
+		,dbo.getComma(b02,-1) a05
+		,dbo.getComma(b03,-1) a06
+		,dbo.getComma(total,-1) a07 
+	from @tmp
+	order by sel;
