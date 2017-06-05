@@ -1,3 +1,259 @@
+z_bankwdc02:--z_bankwdc02
+	SET QUOTED_IDENTIFIER OFF 
+	declare @cmd nvarchar(max)
+	declare @t_path nvarchar(max) = '[1]'
+	declare @t_db nvarchar(max) = '[2]'
+	declare @t_bdate nvarchar(20) = case when '#non'=[3] then '' else [3] end
+	declare @t_edate nvarchar(20) = case when '#non'=[4] then char(255) else [4] end
+	declare @t_cno nvarchar(max) = case when '#non'=[5] then '' else [5] end
+	------------------------------------------------------------------------------------
+	--應收帳款 (trd未立帳)
+	declare @tmpa table(
+		sel int identity(1,1)
+		, custno nvarchar(20)
+		, cust nvarchar(20)
+		, mon nvarchar(10)
+		, [money] float
+		, paytype nvarchar(20)
+		, paydate nvarchar(20)
+	)
+	
+	insert into @tmpa(custno,mon,[money])
+	select a.custno,LEFT(a.trandate,6),SUM(a.total)
+	from view_trans a
+	left join view_trds b on a.noa=b.tranno
+	where a.trandate between @t_bdate and @t_edate
+	and b.noa is not null
+	and ISNULL(a.total,0)!=0
+	group by a.custno,LEFT(a.trandate,6)
+	
+	--沒設定月結的都當月結30天
+	update @tmpa set paytype=ISNULL(b.paytype,'')
+		, paydate = [dbo].[getpaydate](a.mon,case when CHARINDEX('月結',b.paytype)>0 then b.paytype else '月結30天' end)
+	from @tmpa a
+	left join cust b on a.custno=b.noa
+	
+	update @tmpa set cust = b.nick
+	from @tmpa a
+	left join cust b on a.custno=b.noa
+	------------------------------------------------------------------------------------
+	--應收票據
+	declare @tmpb table(
+		sel int identity(1,1)
+		, gqbno nvarchar(20)
+		, custno nvarchar(20)
+		, cust nvarchar(50)
+		, datea nvarchar(20) --到期日
+		, [money] float
+		, paydate nvarchar(20)
+	)	
+	insert into @tmpb(gqbno,custno,cust,datea,[money]) 
+	select a.gqbno,a.compno,a.comp,a.indate,a.[money]
+	from gqb a
+	where len(ISNULL(a.enda,''))=0
+	and len(ISNULL(a.usage,''))=0
+	and a.indate between @t_bdate and @t_edate
+	and a.typea='1'
+	and a.[money]!=0
+	
+	update @tmpb set paydate=datea
+	------------------------------------------------------------------------------------
+	--應付運費 (tre未立帳) 付款日同交運日
+	declare @tmpc table(
+		sel int identity(1,1)
+		, driverno nvarchar(20)
+		, driver nvarchar(20)
+		, datea nvarchar(20)
+		, [money] float
+		, paydate nvarchar(20)
+	)
+	insert into @tmpc(driverno,driver,datea,[money])
+	select a.driverno,a.driver,a.trandate,SUM(a.total2)
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno
+	where a.trandate between @t_bdate and @t_edate
+	and b.noa is not null
+	and ISNULL(a.total2,0)!=0
+	group by a.driverno,a.driver,a.trandate
+	
+	update @tmpc set paydate=datea
+	------------------------------------------------------------------------------------
+	--應付費用 (payb未立帳) 付款日同登錄日
+	declare @tmpd table(
+		sel int identity(1,1)
+		, tggno nvarchar(20)
+		, tgg nvarchar(50)
+		, datea nvarchar(20)
+		, [money] float
+		, paydate nvarchar(20)
+	)
+	insert into @tmpd(tggno,datea,[money])
+	select a.tggno,a.datea,SUM(a.total)
+	from fixa a
+	where a.datea between @t_bdate and @t_edate
+	and ISNULL(a.total,0)!=0
+	group by a.tggno,a.datea
+	
+	update @tmpd set tgg=b.nick,paydate=a.datea
+	from @tmpd a
+	left join tgg b on a.tggno=b.noa
+	------------------------------------------------------------------------------------
+	--應付票據
+	declare @tmpe table(
+		sel int identity(1,1)
+		, gqbno nvarchar(20)
+		, tggno nvarchar(20)
+		, tgg nvarchar(50)
+		, datea nvarchar(20) --到期日
+		, [money] float
+		, paydate nvarchar(20)
+	)	
+	insert into @tmpe(gqbno,tggno,tgg,datea,[money]) 
+	select a.gqbno,a.tcompno,a.tcomp,a.indate,a.[money]
+	from gqb a
+	where len(ISNULL(a.enda,''))=0
+	and len(ISNULL(a.usage,''))=0
+	and a.indate between @t_bdate and @t_edate
+	and a.typea='2'
+	and a.[money]!=0
+	
+	update @tmpe set paydate=datea
+	------------------------------------------------------------------------------------
+	--上期結存
+	declare @total float = 0
+	declare @accy nvarchar(20)
+	declare @accc nvarchar(20)
+	declare @acccs nvarchar(20)
+	declare @acc nvarchar(20)
+	declare @value float
+	
+	--期初日期
+	declare @t_date nvarchar(20) = dbo.AD2ChineseEraName(dateadd(DD,-1,dbo.ChineseEraName2AD(@t_bdate)))
+	
+	declare cursor_table cursor for
+	
+	select  right(left(a.[name],7),3),a.[name],b.[name],c.[name]
+	from sys.tables a
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acccs[0-9][0-9][0-9][_]%') b on RIGHT(a.[name],5)=b.accy
+	left join (select [name],RIGHT([name],5) accy from sys.tables where [name] like 'acc[0-9][0-9][0-9][_]%') c on RIGHT(a.[name],5)=c.accy
+	where a.[name] like 'accc'+left(@t_date,3)+'[_]%'
+	and b.[name] is not null
+	
+	order by RIGHT(a.[name],5)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@accc,@acccs,@acc
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		set @value=0
+		set @cmd = "select @value=sum(isnull(a.dmoney,0)-isnull(a.cmoney,0))
+		from "+@acccs+" a
+		left join "+@accc+" b on a.accc3=b.accc3
+		where b.accc3 is not null
+		and a.accc5 like '1112%'
+		and @accy+'/'+isnull(b.accc2,'') < @t_bdate"
+	
+		execute sp_executesql @cmd,N'@accy nvarchar(20),@t_bdate nvarchar(20),@value float output'
+			,@accy=@accy,@t_bdate=@t_bdate,@value=@value output
+		
+		set @total = @total + ISNULL(@value,0)
+		
+		fetch next from cursor_table
+		into @accy,@accc,@acccs,@acc
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------
+	declare @tmp table(
+		sel int identity(1,1)
+		,gno nvarchar(20)
+		,pno int
+		,recno int
+		,datea nvarchar(20)
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+		,memo nvarchar(max)
+		,a01 float --應收帳款
+		,a02 float --應收票據
+		,b01 float --應付運費
+		,b02 float --應付費用
+		,b03 float --應付票據
+		,total float--結存
+	)
+	--期初
+	insert into @tmp(gno,pno,datea,total)values('1',1,@t_date,@total)
+	
+	set @t_date = @t_bdate
+	while @t_date<=@t_edate
+	begin
+		--應收帳款
+		insert into @tmp(gno,pno,datea,custno,cust,a01)
+		select '2',2,paydate,custno,cust,[money]
+		from @tmpa
+		where paytype = @t_date
+		--應收票據
+		insert into @tmp(gno,pno,datea,custno,cust,memo,a02)
+		select '2',2,paydate,custno,cust,gqbno,[money]
+		from @tmpb
+		where paydate = @t_date
+		--應付運費
+		insert into @tmp(gno,pno,datea,custno,cust,b01)
+		select '3',3,paydate,driverno,driver,[money]
+		from @tmpc
+		where paydate = @t_date
+		--應付費用
+		insert into @tmp(gno,pno,datea,custno,cust,b02)
+		select '3',3,paydate,tggno,tgg,[money]
+		from @tmpd
+		where paydate = @t_date
+		--應付票據
+		insert into @tmp(gno,pno,datea,custno,cust,memo,b03)
+		select '3',3,paydate,tggno,tgg,gqbno,[money]
+		from @tmpe
+		where paydate = @t_date
+		
+		set @t_date = dbo.AD2ChineseEraName(dateadd(DD,1,dbo.ChineseEraName2AD(@t_date)))
+	end
+	
+	update @tmp set recno=b.recno
+	from @tmp a
+	left join (select sel,ROW_NUMBER()over(order by datea,pno,sel) recno from @tmp ) b on a.sel=b.sel
+	
+	declare @sel int
+	declare @result float = 0
+	
+	declare cursor_table cursor for
+	select sel
+		,isnull(a01,0)+isnull(a02,0)-isnull(b01,0)-isnull(b02,0)-isnull(b03,0)+isnull(total,0) 
+	from @tmp order by recno
+	open cursor_table
+	fetch next from cursor_table
+	into @sel,@total
+	while(@@FETCH_STATUS <> -1)
+	begin 
+		set @result = @result + @total
+		update @tmp set total = @result where sel=@sel
+		
+		fetch next from cursor_table
+		into @sel,@total
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select gno
+		,datea a01
+		,custno a02
+		,cust a03
+		,memo a04
+		,dbo.getComma(a01,-1) a05
+		,dbo.getComma(a02,-1) a06
+		,dbo.getComma(b01,-1) a07
+		,dbo.getComma(b02,-1) a08
+		,dbo.getComma(b03,-1) a09 
+		,dbo.getComma(total,-1) a10
+	from @tmp
+	order by recno;
+
 z_bankwdc01:--z_bankwdc01
 	SET QUOTED_IDENTIFIER OFF 
 	declare @cmd nvarchar(max)
