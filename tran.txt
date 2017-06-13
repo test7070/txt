@@ -248,3 +248,126 @@ transave:--tran
 			execute sp_executesql @cmd,N'@t_noa nvarchar(50),@t_total float',@t_noa=@t_noa,@t_total=@t_total
 		end
 	end;
+---------------------------------------------------------------------------------------------
+
+tranvccejr2tranjr:--tranvccejr2tranjr txt/tran.txt	
+	SET QUOTED_IDENTIFIER OFF
+	declare @key nvarchar(20) = [1]--'BA'
+	declare @t_bdate nvarchar(20)=[2]
+	declare @t_edate nvarchar(20)=[3]
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		drop table #tmpa
+	END
+	
+	declare @tmpn table(
+		datea nvarchar(10),
+		noa nvarchar(50)
+	)
+	
+	create table #tmp(
+		rr int,
+		tranno nvarchar(50),
+		accy nvarchar(10),
+		noa nvarchar(50),
+		datea nvarchar(10),
+		mount float,
+		weight float,
+		total float
+	)
+	
+	create table #tmpa (
+		accy nvarchar(10),
+		tranno nvarchar(50),
+		trannoq nvarchar(50),
+		noa nvarchar(50),
+		noq nvarchar(50),
+		datea nvarchar(10),
+		trandate nvarchar(10),
+		custno nvarchar(100),
+		comp nvarchar(200),
+		nick nvarchar(50),
+		uccno nvarchar(100),
+		product nvarchar(200),
+		weight float,
+		weight2 float,
+		price float,
+		total float,
+		po nvarchar(50),
+		carno nvarchar(50),
+		driverno nvarchar(50),
+		driver nvarchar(50),
+		straddrno nvarchar(50),
+		straddr nvarchar(200),
+		ordeno nvarchar(50),
+		memo nvarchar(max)
+	)
+	
+	insert @tmpn 
+	select datea,MAX(noa)
+	from view_tran
+	where (datea between @t_bdate and @t_edate)
+	group by datea
+	
+	insert #tmp
+	select ROW_NUMBER()over(partition by a.datea order by a.noa),'',a.accy,a.noa,a.datea,SUM(b.weight),SUM(b.uweight),SUM(b.total)
+	from view_tranvcce a
+	left join view_tranvcces b on a.noa=b.noa
+	where a.datea between @t_bdate and @t_edate
+	and not exists(select noa from view_tran where noa=(select noa from view_trans where ordeno=a.noa group by noa))
+	group by a.accy,a.noa,a.datea
+	
+	update #tmp
+	set tranno=case when isnull(b.noa,'')='' then @key+replace(a.datea,'/','')+'001' 
+	else @key+replace(a.datea,'/','')+REPLICATE('0',3-LEN(CAST(right(b.noa,3)as int)+rr)) + RTRIM(CAST(CAST(right(b.noa,3)as int)+rr AS CHAR)) end	
+	from #tmp a left join @tmpn b on a.datea=b.datea
+	
+	insert #tmpa
+	select a.accy,a.tranno,b.noq,b.noa,b.noq,b.time1,b.time2,b.custno,c.comp,b.cust,b.productno,b.product,b.weight,b.uweight,b.total,b.total2
+	,b.memo2,b.carno,b.driverno,b.driver,b.addrno,b.addr,a.noa,b.memo
+	from #tmp a
+	left join view_tranvcces b on a.noa=b.noa
+	left join cust c on b.custno=c.noa
+	where a.datea between @t_bdate and @t_edate
+	and not exists(select noa from view_trans where ordeno=a.noa group by noa)
+	
+	declare @n int
+	
+	declare @tmp table(
+		msg nvarchar(max)
+	)
+	Begin Transaction [Trans_Name]
+	
+	begin try
+		insert into tran106(noa,datea,mount,weight,total)
+		select tranno,a.datea,mount,weight,total
+		from #tmp a left join @tmpn b on a.datea=b.datea
+		
+		insert into trans106(noa,noq,datea,trandate,custno,comp,nick,uccno,product,weight,weight2,price,total,po,carno,driverno,driver,straddrno,straddr,ordeno,memo)
+		select tranno,noq,datea,trandate,custno,comp,nick,uccno,product,weight,weight2,price,total,po,carno,driverno,driver,straddrno,straddr,ordeno,memo
+		from #tmpa
+		
+		set @n=(select count(*) from #tmp)
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		insert into @tmp(msg)values(error_message())
+	end catch
+	
+	select * from @tmp
+	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		drop table #tmpa
+	END
