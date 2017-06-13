@@ -1,3 +1,170 @@
+trd2umm:--trd2umm  trd.txt
+	-- 只針對現金的沖帳
+	-----------------------------------------------------------------------------------------------------
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_key nvarchar(10) = [1]--'FB'
+	declare @t_bdate nvarchar(10) = [2]--'106/03/01'
+	declare @t_edate nvarchar(10) = [3]--'106/03/31'
+	declare @t_custno nvarchar(max) = [4]--''
+	declare @t_paydate nvarchar(max) = [5]--''
+	declare @t_cno nvarchar(max) = [6]--''
+	-----------------------------------------------------------------------------------------------------
+	set @t_custno = replace(@t_custno,'&',',')
+	declare @tmp table(
+		sel int identity(1,1)
+		,accy nvarchar(10)
+		,noa nvarchar(20)
+		,datea nvarchar(20)
+		,mon nvarchar(10)
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+		,nick nvarchar(20)
+		,total float
+		,payed float
+		,unpay float
+	)
+	insert into @tmp(accy,noa,datea,mon,custno,cust,nick,total,payed)
+	select a.accy,a.noa 
+		,case when len(@t_paydate)=0 then a.datea else @t_paydate end
+		,a.mon,a.custno,b.comp,b.nick
+		,isnull(a.total,0)
+		,isnull(c.paysale,0)
+	from view_trd a
+	left join cust b on a.custno=b.noa
+	outer apply(select sum(isnull(paysale,0)) paysale from umms where vccno=a.noa) c
+	where a.datea between @t_bdate and @t_edate
+	and (len(@t_custno)=0 or charindex(','+a.custno+',',@t_custno)>0)
+	and CHARINDEX('現金',a.ship)>0	
+	order by a.datea,a.noa
+	
+	update @tmp set unpay = ISNULL(total,0)-ISNULL(payed,0)
+	---------------------------------------------------------------------------------------
+	declare @tmpUmm table(
+		sel int identity(1,1)
+		,cno nvarchar(20)
+		,noa nvarchar(20)
+		,datea nvarchar(20)
+		,mon nvarchar(10)
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+		,nick nvarchar(20)
+		,sale float
+		,total float
+		,paysale float
+	)
+	declare @tmpUmms table(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,acc1 nvarchar(20)
+		,acc2 nvarchar(50)
+		,[money] float
+		,[bankno] nvarchar(20)
+		,bank nvarchar(50)
+		,account nvarchar(20)
+		,accy nvarchar(20)
+		,tablea nvarchar(10)
+		,vccno nvarchar(20)
+		,unpayorg float
+		,paysale float
+		,unpay float
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+	)
+	
+	declare @datea nvarchar(20)
+	declare @custno nvarchar(20)
+	declare @total float
+	declare @payed float
+	declare @unpay float
+	
+	declare @noa nvarchar(20)
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @n int
+	declare @maxno1 nvarchar(20)
+	declare @maxno2 nvarchar(20)
+	
+	declare cursor_table cursor for
+	select datea,custno
+		,sum(isnull(total,0)),sum(isnull(payed,0)),sum(isnull(unpay,0)) 
+	from @tmp where unpay!=0
+	group by datea,custno
+	open cursor_table
+	fetch next from cursor_table
+	into @datea,@custno,@total,@payed,@unpay
+	while(@@FETCH_STATUS <> -1)
+	begin
+		
+		select @noa='',@maxno1='',@maxno2=''
+		select top 1 @maxno1 = noa from pay where noa like @t_key+REPLACE(@datea,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+		select top 1 @maxno2 = noa from @tmpUmm where noa like @t_key+REPLACE(@datea,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+
+		set @noa = case when @maxno1>@maxno2 then @maxno1 else @maxno2 end
+		set @noa = case when len(@noa)=0 then @t_key+REPLACE(@datea,'/','')+'000' else @noa end
+
+		set @n = (charindex(left(RIGHT(@noa,3),1),@string)-1)*100 + cast(RIGHT(@noa,2) as int) + 1
+		set @noa = @t_key+REPLACE(@datea,'/','')+SUBSTRING(@string, floor(@n/100)+1,1) + right('00'+cast(@n%100 as nvarchar),2)
+		----Umm
+		
+		insert into @tmpUmm(cno,noa,datea,mon,custno,cust,nick,sale,total,paysale)
+		select top 1 @t_cno,@noa,@datea,LEFT(@datea,6),@custno,b.comp,b.nick,@unpay,@unpay,@unpay
+		from @tmp a
+		left join cust b on a.custno=b.noa
+		where a.custno=@custno
+		
+		----Umms
+		insert into @tmpUmms(noa,noq,acc1,acc2,[money]
+			,accy,tablea,vccno,unpayorg,paysale,unpay,custno,cust)
+		select @noa,ROW_NUMBER()over(order by a.sel)
+			,'1111.' acc1,'現金' acc2,a.[unpay]
+			,a.accy,'trd',a.noa vccno,a.[unpay],a.[unpay],0,a.custno,a.nick
+		from @tmp a
+		left join cust b on a.custno=b.noa
+		where a.custno=@custno 
+		and a.unpay != 0
+	
+		fetch next from cursor_table
+		into @datea,@custno,@total,@payed,@unpay
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------
+	--save
+	declare @curtime datetime = getdate()
+	
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+
+	begin try
+		insert into umm(cno,noa,datea,mon,custno,comp,nick,sale,total,paysale,qtime)
+		select cno,noa,datea,mon,custno,cust,nick,sale,total,paysale,CONVERT(nvarchar,@curtime,120)
+		from @tmpUmm
+		
+		insert into umms(noa,noq,acc1,acc2,[money],bankno,bank,account
+			,accy,tablea,vccno,unpayorg,paysale,unpay,memo2)
+		select noa,noq,acc1,acc2,[money],bankno,bank,account
+			,accy,tablea,vccno,unpayorg,paysale,unpay,''
+		from @tmpUmms
+		
+		--產生傳票
+		INSERT INTO mess (datea,qtime,[tables],data,usera,act) 
+		select replace(CONVERT(nvarchar,getdate(),120),'-','')
+			,noa+' '+replace(CONVERT(nvarchar,@curtime,120),':','') qtime
+			,'umm_post.post' [tables]
+			,LEFT(datea,3)+','+noa+',1'
+			,'erp'
+			,7
+		from @tmpUmm
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		select 'done' msg 
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select ERROR_MESSAGE() msg 
+	end catch;
+
 import_wh:--trd.txt  import_wh  月結整批匯入   沒有產生發票
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)	
