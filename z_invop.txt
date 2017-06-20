@@ -1,0 +1,354 @@
+z_invop1:--z_invop1
+declare @t_invo nvarchar(30) = [2]
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(90),
+	noq nvarchar(30),
+	datea nvarchar(10),
+	title nvarchar(max),
+	custno nvarchar(90),
+	comp nvarchar(90),
+	addr nvarchar(MAX),
+	shipped nvarchar(90),
+	per nvarchar(90),
+	sailing nvarchar(90),
+	froma nvarchar(90),
+	toa nvarchar(90),
+	lcno nvarchar(90),
+	contract nvarchar(90),
+	coin nvarchar(90),
+	productno nvarchar(90),
+	marks nvarchar(90),
+	description nvarchar(90),
+	quantity float,
+	price float,
+	amount float
+)
+insert into @tmp
+select '0',a.noa,b.noq,a.datea,a.title,a.custno,a.comp,a.addr,a.shipped,a.per,a.sailing,a.froma,a.toa,a.lcno,a.contract,a.coin,
+b.productno,b.marks,b.description,b.quantity,b.price,b.amount
+from invo a left join invos b on a.noa=b.noa
+where (len(@t_invo)=0 or a.noa = @t_invo)
+
+--空白欄
+declare @page int=15
+declare @noa nvarchar(50)
+declare @count int
+declare @t_count int
+declare cursor_table cursor for
+select noa,count(*) from @tmp group by noa
+open cursor_table
+fetch next from cursor_table
+into @noa,@count
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_count=@count
+	while (@t_count%@page!=0)
+	begin
+		insert @tmp (gno,noa,noq)
+		select '0',@noa,right('000'+cast(@t_count+1 as nvarchar(50)),3)
+		set @t_count=@t_count+1
+	end
+	fetch next from cursor_table
+	into @noa,@count
+end
+close cursor_table
+deallocate cursor_table
+	
+insert into @tmp(gno,noa,coin,quantity,amount) 
+select '1',noa,MAX(coin),sum(quantity),sum(amount) from @tmp group by noa
+
+select 
+case when productno='' and description='' then null else dbo.getcomma(quantity,3) end quantity
+,case when productno='' and description='' then null else dbo.getcomma(price,2) end price
+,case when productno='' and description='' then null else dbo.getcomma(amount,2) end amount
+,* 
+from @tmp order by noa,gno,noq;
+------------------------------------------------------------------------------------------------------------------------------------------------------
+z_invop2:--z_invop2
+declare @t_invo nvarchar(30) = [2]
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(30),
+	noq nvarchar(30),
+	nos int,
+	datea nvarchar(50),
+	endate nvarchar(50),
+	--出口商
+	cno nvarchar(50),
+	ecomp nvarchar(90),
+	eaddr nvarchar(200),
+	--收貨人
+	custno nvarchar(50),
+	ccomp nvarchar(90),
+	caddr nvarchar(200),
+	attn nvarchar(50),
+	tel nvarchar(90),
+	fax nvarchar(90),
+	--pack
+	description nvarchar(MAX),
+	weight float,
+	gweight float,
+	mount float,
+	memo nvarchar(MAX),
+	pkgs float,
+	sets float,
+	pcs float
+)
+
+insert into @tmp
+select '0',a.noa,b.noq,RANK() OVER(partition by a.noa ORDER BY a.noa,b.noq)
+,a.datea,cast(convert(int,LEFT(a.datea,3)+1911) as nvarchar(50))+'/'+SUBSTRING(a.datea,5,2)+'/'+RIGHT(a.datea,2)
+,a.cno,c.ename,c.addr,a.custno,a.comp,a.addr,a.attn
+,(case when (select count(*) from conn where noa=a.custno and namea=a.attn)>0  
+then (select top 1 tel from conn where noa=a.custno and namea=a.attn) else d.tel end)
+,(case when (select count(*) from conn where noa=a.custno and namea=a.attn)>0  
+then (select top 1 fax from conn where noa=a.custno and namea=a.attn) else d.fax end)
+,b.product,b.weight,b.gweight,b.mount,b.memo,null,null,null
+from invo a left join packing b on a.noa=b.noa
+left join acomp c on c.noa=a.cno
+left join cust d on a.custno=d.noa
+where (len(@t_invo)=0 or a.noa = @t_invo)
+
+--空白欄
+declare @page int=15
+declare @noa nvarchar(50)
+declare @count int
+declare @t_count int
+declare cursor_table cursor for
+select noa,count(*) from @tmp group by noa
+open cursor_table
+fetch next from cursor_table
+into @noa,@count
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_count=@count
+	while (@t_count%@page!=0)
+	begin
+		insert @tmp (gno,noa,noq)
+		select '0',@noa,right('000'+cast(@t_count+1 as nvarchar(50)),3)
+		set @t_count=@t_count+1
+	end
+	fetch next from cursor_table
+	into @noa,@count
+end
+close cursor_table
+deallocate cursor_table
+
+insert into @tmp(gno,noa,mount,weight,gweight,pkgs,sets,pcs)
+select '1',noa,sum(mount),sum(weight),sum(gweight),count(*),sum(mount),sum(mount)
+from @tmp group by noa
+
+select
+dbo.getcomma(mount,0) mount
+,dbo.getcomma(weight,2) weight
+,dbo.getcomma(gweight,2) gweight
+,dbo.getcomma(pkgs,0) pkgs
+,dbo.getcomma(sets,0) sets
+,dbo.getcomma(pcs,0) pcs
+,'Box No. '+cast(nos as nvarchar(50)) nos
+,*
+from @tmp order by noa,gno,noq
+;
+------------------------------------------------------------------------------------------------------------------------
+
+z_invop3:--z_invop3
+declare @t_invo nvarchar(30) = [2]
+
+declare @tmp table(
+		gno nvarchar(1),
+		idno int identity(0,1),
+		page int,
+		pageno int,
+		noa nvarchar(100),
+		noq nvarchar(100),
+		comp nvarchar(200),
+		addr nvarchar(max),
+		datea nvarchar(10),
+		custno nvarchar(100),
+		tel nvarchar(50),
+		fax nvarchar(50),
+		sailing nvarchar(10),
+		shipment nvarchar(max),
+		terms nvarchar(50),
+		orderno nvarchar(100),
+		coin nvarchar(30),
+		pno nvarchar(100),
+		
+		productno nvarchar(100),
+		product nvarchar(200),
+		quantity float,
+		price float,
+		amount float,
+		ototal nvarchar(200) 
+)
+
+declare @noa nvarchar(100)
+declare @noq nvarchar(100)
+declare @pageline int = 40--每頁幾行
+declare @page int=1 --頁數
+declare @pagecount int=1 --目前行數
+declare @tdatecount int=isnull((select count(*) from invos where noa=@t_invo),0) --Packing資料數
+declare @datecount int=0 --目前已插入Packing資料數
+
+--表頭
+insert @tmp (gno,page,pageno,noa,comp,addr,datea,custno,tel,fax,sailing,shipment,terms,orderno,coin,pno)
+select '1',@page,@pagecount,a.noa,a.comp,a.addr,a.datea,a.custno,b.tel,b.fax,a.sailing
+,case when ISNULL(a.froma,'')!='' then ' From:'+a.froma else '' end
++case when ISNULL(a.toa,'')!='' then ' To:'+a.toa else '' end
+,c.payterms,a.ordeno,a.coin+'$',a.pno
+from invo a 
+outer apply (select * from cust where noa=a.custno) b
+outer apply (select * from view_orde where noa=a.ordeno)c
+where a.noa=@t_invo
+
+set @pagecount=@pagecount+14
+
+
+declare cursor_table  cursor for
+select noa,noq from invos where noa=@t_invo order by noa,noq
+open  cursor_table 
+fetch next from cursor_table 
+into @noa,@noq
+while(@@FETCH_STATUS<>-1)
+begin
+	set @datecount=@datecount+1
+	insert into @tmp
+	select '2',@page,@pagecount,a.noa,b.noq,a.comp,a.addr,a.datea,a.custno,c.tel,c.fax,a.sailing
+	,case when ISNULL(a.froma,'')!='' then ' From '+a.froma else '' end+'  '
+	+case when ISNULL(a.toa,'')!='' then ' To '+a.toa else '' end
+	,d.payterms,a.ordeno,a.coin+'$',a.pno,b.productno,b.description,b.quantity,b.price,b.amount
+	,''
+	from invo a 
+	outer apply (select * from invos where noa=a.noa) b
+	outer apply (select * from cust where noa=a.custno) c
+	outer apply (select * from view_orde where noa=a.ordeno)d
+	where a.noa=@noa and b.noq=@noq
+	
+	set @pagecount=@pagecount+9--一個品項暫9行
+	
+	if(@tdatecount>1 and @tdatecount!=@datecount and @datecount%4=0)--資料筆數4以上 且 單行筆數
+	begin
+		--差入空白頁
+		while (@pagecount%@pageline!=0 and @pagecount<@pageline)
+		begin
+			insert @tmp (gno,page,pageno,noa,noq)
+			select '3',@page,@pagecount,@noa,@noq
+			
+			set @pagecount=@pagecount+1
+		end
+		--插入分頁
+		insert @tmp (gno,page,pageno,noa)
+		select '4',@page,@pagecount,@noa
+		
+		set @pagecount=1
+		set @page=@page+1
+		
+		--插入第二頁以上的 抬頭
+		insert into @tmp(gno,noa,page,pageno,comp,datea,orderno,pno,coin)
+		select '5',noa,@page,@pagecount,comp,datea,orderno,pno,coin+'$'
+		from @tmp 
+		where noa=@t_invo and noq=@noq
+		
+		set @pagecount=@pagecount+6
+		
+	end
+	else if (@tdatecount=@datecount) --最後一筆
+	begin
+		--合計
+		insert @tmp(gno,noa,page,pageno,quantity,price,amount)
+		select '6',noa,@page,@pagecount,SUM(quantity),SUM(price),SUM(amount)
+		from @tmp
+		where noa=@t_invo group by noa
+		
+		--合計(英文大寫)
+		insert @tmp(gno,noa,page,pageno,ototal)
+		select '7',noa,@page,@pagecount,('SAY TOTAL U.S DOLLAR'+UPPER(dbo.CurrencyToEnglish(amount))+' .')
+		from @tmp
+		where gno='6' group by noa,amount
+		
+		--插入空白行
+		while((@pagecount+1)%@pageline!=0) --1行結束
+		begin
+		   insert @tmp(gno,noa,page,pageno)
+		   select '8',@noa,@page,@pagecount
+		   
+		   set @pagecount=@pagecount+1
+		end
+		
+		--結束
+		insert @tmp(gno,noa,page,pageno,comp)
+		select '9',noa,@page,@pagecount,comp
+		from @tmp
+		where gno='2' group by noa,comp
+		
+		set @pagecount=1
+		set @page=@page+1
+	
+	end
+	
+	fetch next from cursor_table
+	into @noa,@noq
+end
+close cursor_table
+deallocate cursor_table
+
+select 
+dbo.getComma(quantity,0)+' PCS'quantity,
+dbo.getComma(amount,2)amount,
+* 
+from @tmp
+order by idno
+;
+---------------------------------------------------------------------------------------
+z_invop4:--z_invop4
+declare @t_binvo nvarchar(50)
+declare @t_einvo nvarchar(50)
+declare @t_bdate nvarchar(30)
+declare @t_edate nvarchar(30)
+
+set @t_binvo = case when '#non'=[3] then '' else [3] end
+set @t_einvo = case when '#non'=[4] then char(255) else [4] end
+set @t_bdate = case when '#non'=[5] then '' else [5] end
+set @t_edate = case when '#non'=[6] then char(255) else [6] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	noa nvarchar(50),
+	custno nvarchar(100),
+	addr nvarchar(max),
+	coin nvarchar(10),
+	iamount float,
+	namount float,
+	uamount float
+)
+insert @tmp
+select '0',datea,a.noa,custno,addr,a.coin,amount,case when len(a.coin)=0 or a.coin='NT' then amount else amount/nullif(a.floata,0) end
+,case when a.coin='USD' or a.coin='US' then amount else amount/b.floata end
+from invo a
+outer apply (select * from flors where a.datea between bdate and edate)b
+where (a.noa between @t_binvo and @t_einvo)
+and (datea between @t_bdate and @t_edate)
+
+if((select count(*) from @tmp)>0)
+begin
+	insert @tmp(gno,datea,coin,iamount,namount,uamount)
+	select '1',datea,coin,SUM(iamount),SUM(namount),SUM(uamount)
+	from @tmp
+	group by datea,coin
+	insert @tmp(gno,datea,coin,iamount,namount,uamount)
+	select '2',CHAR(255),coin,SUM(iamount),SUM(namount),SUM(uamount)
+	from @tmp
+	where gno!='1'
+	group by coin	
+end
+
+select 
+dbo.getComma(iamount,2)iamount
+,dbo.getComma(namount,0)namount
+,dbo.getComma(uamount,2)uamount
+,* from @tmp
+order by datea,gno
+;

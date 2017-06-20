@@ -1,0 +1,181 @@
+z_workdp1:--z_workdp1
+declare @t_noa nvarchar(30) = [2]
+declare @tmp table(
+	gno nvarchar(1),
+	anoa nvarchar(30),
+	adatea nvarchar(10),
+	atgg nvarchar(30),
+	astore nvarchar(30),
+	amemo nvarchar(200),
+	bproductno nvarchar(30),
+	bproduct nvarchar(90),
+	bunit nvarchar(10),
+	bborn float,
+	wk_mount float,
+	wk_inmount float,
+	bmount float,
+	wk_unmount float,
+	bprice float,
+	btotal float,
+	bwmount float,
+	bmemo nvarchar(200),
+	bordeno nvarchar(50),
+	bworkno nvarchar(max),
+	bworkno_img nvarchar(max),
+	bproductno_img nvarchar(max),
+	anoa_img nvarchar(max)	
+)
+insert into @tmp
+	select
+		'0',b.noa,b.datea,b.tgg,b.store,b.memo,
+		a.productno,a.product,a.unit,a.born,
+		isnull(c.mount,0),(isnull(c.inmount,0)-isnull(a.mount,0)),
+		a.mount,(isnull(c.mount,0)-isnull(c.inmount,0)),
+		a.price,a.total,a.wmount,a.memo,a.ordeno + '-' +a.no2,a.workno,
+		case when isnull(a.workno,'') != '' then
+			'<img width="70px" src="https://chart.googleapis.com/chart?chs=100x100&cht=qr&chl='+upper(a.workno)+'&chld=H|0">'
+		else null end,
+		case when isnull(a.productno,'') != '' then
+			'<img width="70px" src="https://chart.googleapis.com/chart?chs=100x100&cht=qr&chl='+upper(a.productno)+'&chld=H|0">'
+		else null end,
+		case when isnull(b.noa,'') != '' then
+			'<img width="70px" src="https://chart.googleapis.com/chart?chs=100x100&cht=qr&chl='+upper(b.noa)+'&chld=H|0">'
+		else null end
+	from view_workds a
+	left join view_workd b on a.noa = b.noa
+	outer apply(select top 1 mount,inmount  from view_work where noa=a.workno) c
+	where b.noa = @t_noa
+select * from @tmp;
+----------------------------------------------------------------------------------------------------------------
+z_workdp2:--z_workdp2
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+select
+	'0' gno,b.workcno,a.noq,a.productno,a.product products,a.workno,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.wmount),1)),4,12)) wmount,a.unit,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.mount+a.inmount-a.outmount),1)),4,12)) amount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.errmount),1)),4,12)) errmount
+from view_workds a
+left join view_workd b on a.noa = b.noa
+where b.datea between @t_bdate and @t_edate
+order by b.workcno,a.noq;
+-----------------------------------------------------------------------------------------------------------------
+z_workdp3:--z_workdp3
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_btggno nvarchar(30)
+declare @t_etggno nvarchar(30)
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+set @t_btggno = case when '#non'=[5] then '' else [5] end
+set @t_etggno = case when '#non'=[6] then char(255) else [6] end
+declare @tmp table(
+	gno nvarchar(1),
+	t_workno nvarchar(30),
+	t_tggno nvarchar(30),
+	t_tgg nvarchar(30),
+	t_productno nvarchar(30),
+	t_products nvarchar(90),
+	t_unit nvarchar(10),
+	t_amount float,
+	t_bmount float,
+	t_cmount float
+)
+
+insert into @tmp
+	select
+		'0'gno,wtmp.workno,w.tggno,w.comp,w.productno,w.product,w.unit,
+		w.mount,isnull(wds.mount,0),w.mount-isnull(wds.mount,0) 
+	from (
+		--有領料的workno
+		select b.workno 
+		from view_workc a left join view_workcs b on a.noa=b.noa
+		where (a.datea between @t_bdate and @t_edate) and
+			  (a.tggno between @t_btggno and @t_etggno) and
+			  (b.workno!='')
+		group by b.workno
+	)wtmp
+	left join view_work w on wtmp.workno=w.noa 
+	left join (
+		select
+			workno,productno,SUM(mount+inmount-outmount)mount
+		from view_workds
+		where (datea between @t_bdate and @t_edate)
+		group by workno,productno
+	) wds on (w.noa=wds.workno) and (w.productno=wds.productno)
+	where w.mount!=isnull(wds.mount,0)
+	
+insert into @tmp(gno,t_tggno,t_tgg,t_amount,t_bmount,t_cmount)
+	select '1',t_tggno,t_tgg,sum(t_amount),sum(t_bmount),sum(t_cmount)
+	from @tmp
+	group by t_tggno,t_tgg
+
+select gno,t_workno,t_tggno,t_tgg,t_productno,t_products,t_unit
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,t_amount),1)),0,30)) t_amount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,t_bmount),1)),0,30)) t_bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,t_cmount),1)),0,30)) t_cmount
+from @tmp order by t_tggno,gno,t_workno;
+------------------------------------------------------------------------------------------------------
+z_workdp4:--z_workdp4
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_btggno nvarchar(30)
+declare @t_etggno nvarchar(30)
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+set @t_btggno = case when '#non'=[5] then '' else [5] end
+set @t_etggno = case when '#non'=[6] then char(255) else [6] end
+declare @tmp table(
+	gno nvarchar(1),
+	storeno nvarchar(30),
+	stores nvarchar(50),
+	productno nvarchar(30),
+	products nvarchar(90),
+	unit nvarchar(12),
+	amount float,
+	errmount float,
+	totmount float,
+	taxtype nvarchar(12),
+	totprice float,
+	taxprice float,
+	total float,
+	other float,
+	totmoney float
+)
+insert into @tmp
+	select
+		'0',a.storeno,a.store,a.productno,a.product,a.unit,
+		sum(a.mount+a.inmount-a.outmount),sum(a.errmount),0,b.taxtype,b.money,b.tax,0,0,0
+	from view_workds a
+	left join view_workd b on a.noa = b.noa
+	left join view_workc c on a.workno = c.noa
+	where (b.datea between @t_bdate and @t_edate) and 
+		  (b.tggno between @t_btggno and @t_etggno)
+	group by a.storeno,a.store,a.productno,a.product,a.unit,b.taxtype,b.money,b.tax
+	
+update @tmp set totmount = amount + errmount
+update @tmp set total = totprice + taxprice
+update @tmp set totmoney = total + other
+update @tmp set taxtype = (
+	case taxtype when '1' then '應稅'
+		when '2' then '零稅率'
+		when '3' then '內含'
+		when '4' then '免稅'
+		when '5' then '零稅率'
+		when '6' then '自訂'
+	end
+)
+select
+	gno,storeno,stores,productno,products,unit,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,amount),1)),4,12)) amount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,errmount),1)),4,12)) errmount,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,totmount),1)),4,12)) totmount,
+	taxtype,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,totprice),1)),4,12)) totprice,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,taxprice),1)),4,12)) taxprice,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,other),1)),4,12)) other,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,totmoney),1)),4,12)) totmoney
+from @tmp order by storeno,stores;

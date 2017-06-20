@@ -1,0 +1,880 @@
+z_paytran1:--z_paytran1
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_rc2no nvarchar(30)
+	declare @t_carno  nvarchar(20)
+	declare @t_sort1 nvarchar(max)
+	declare @t_noa nvarchar(max)
+	declare @t_carteamno nvarchar(max)
+	
+	set @pagecount = 34
+	set @t_accy = [1]
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end	
+	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
+	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_rc2no = case when '#non'=[8] then '' else [8] end
+	set @t_carno  = case when '#non'=[9] then '' else [9] end
+	set @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set @t_noa = case when '#non'=[11] then '' else [11] end
+	set @t_carteamno = case when '#non'=[12] then '' else [12] end
+	----------------------------------------------------------------------------------------------------------------------------
+	declare @tmpa table(
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carno nvarchar(20),
+		tranmoney float,
+		tolls float
+	)
+	insert into @tmpa(driverno,driver,carno,tranmoney,tolls)
+	select driverno,driver,carno,total2,tolls
+	from view_trans 
+	where isnull(datea,'') between @t_bdate and @t_edate
+	and isnull(driverno,'') between @t_bdriverno and @t_edriverno
+	and (len(@t_carteamno)=0 or CHARINDEX(','+carteamno+',',','+@t_carteamno+',')>0)
+	and not exists(select noa from view_tres where tranno=view_trans.noa)
+	
+	declare @tmpb table(
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carno nvarchar(20),
+		plus float,
+		minus float
+	)
+	insert into @tmpb(driverno,driver,carno,plus,minus)
+	select driverno,driver,carno,plusmoney,minusmoney
+	from carchg
+	where isnull(datea,'') between @t_bdate and @t_edate
+	and isnull(driverno,'') between @t_bdriverno and @t_edriverno
+	and (len(@t_carteamno)=0 or CHARINDEX(','+carteamno+',',','+@t_carteamno+',')>0)
+	and not exists(select noa from view_tre where CHARINDEX(carchg.noa,','+carchgno+',')>0)
+	
+	declare @tmp table(
+		gno nvarchar(10),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		carno nvarchar(20),
+		tranmoney float,
+		tolls float,
+		plus float,
+		minus float,
+		unpay float
+	)
+	insert into @tmp(gno,driverno,driver,carno,tranmoney,tolls,plus,minus)
+	select '1',driverno,driver,carno,sum(isnull(tranmoney,0)) tranmoney,sum(isnull(tolls,0)) tolls,sum(isnull(plus,0)) plus,sum(isnull(minus,0)) minus
+	from(
+		select isnull(driverno,'') driverno, isnull(driver,'') driver,isnull(carno,'') carno,sum(isnull(tranmoney,0)) tranmoney,sum(isnull(tolls,0)) tolls,0 plus,0 minus
+		from @tmpa group by isnull(driverno,''), isnull(driver,''),isnull(carno,'')
+		union all
+		select isnull(driverno,'') driverno, isnull(driver,'') driver,isnull(carno,'') carno,0 tranmoney,0 tolls,sum(isnull(plus,0)) plus,sum(isnull(minus,0)) minus
+		from @tmpb group by isnull(driverno,''), isnull(driver,''),isnull(carno,'')) a
+	group by driverno,driver,carno
+	
+	update @tmp set unpay = tranmoney+tolls+plus-minus
+	
+	--排除公司車
+	delete @tmp
+	from @tmp a
+	left join driver b on a.driverno=b.noa
+	where b.cartype='公司車'
+	
+	insert into @tmp(gno,driverno,tranmoney,tolls,plus,minus,unpay)
+	select '2',CHAR(255),sum(isnull(tranmoney,0)) ,sum(isnull(tolls,0)) ,sum(isnull(plus,0)) ,sum(isnull(minus,0)) ,sum(isnull(unpay,0))
+	from @tmp
+	
+	select driverno a01
+		,driver a02
+		,carno a03
+		, dbo.getComma(tranmoney,0) a04
+		, dbo.getComma(tolls,0) a05
+		, dbo.getComma(plus,0) a06
+		, dbo.getComma(minus,0)a07
+		, dbo.getComma(unpay,0) a08
+		,*
+	from @tmp
+	order by gno,driverno;
+	
+z_paytran2:--ref:z_tre1
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_rc2no nvarchar(30)
+	declare @t_carno  nvarchar(20)
+	declare @t_sort1 nvarchar(max)
+	declare @t_noa nvarchar(max)
+	
+	set @pagecount = 34
+	set @t_accy = [1]
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end	
+	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
+	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_rc2no = case when '#non'=[8] then '' else [8] end
+	set  @t_carno  = case when '#non'=[9] then '' else [9] end
+	set  @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set  @t_noa = case when '#non'=[11] then '' else [11] end
+	----------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_tre1')is not null
+	BEGIN
+		set @cmd = 'drop table #z_tre1'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_tre1 (
+		noa  nvarchar(20),
+		carno  nvarchar(20),
+		driverno nvarchar(20),
+		driver  nvarchar(20),
+		checkno  nvarchar(30),
+		paydate  nvarchar(10),
+		bdate  nvarchar(10),
+		edate  nvarchar(10),
+		[money]  float,
+		plus  float,
+		minus  float,
+		total float
+	)
+	declare  @tmp2  table(
+		noa  nvarchar(20),
+		carno  nvarchar(20),
+		driverno nvarchar(20),
+		[date]  nvarchar(10),
+		custno  nvarchar(20),
+		driver  nvarchar(20),
+		addr  nvarchar(40),
+		product  nvarchar(40),
+		mount  decimal(10,3),
+		price  float,
+		discount  float,
+		[money]  float,
+		memo  nvarchar(50)
+	)
+
+	declare @tmp3 table(
+		noa  nvarchar(20),
+		treno  nvarchar(20),
+		carno  nvarchar(20),
+		driverno nvarchar(20),
+		[date]  nvarchar(10),
+		plusitem  nvarchar(20),
+		plus  float,
+		minusitem  nvarchar(20),
+		minus  float,
+		memo  nvarchar(20)
+	)
+	---------------------------------------------------------------------------------------------------
+	set @cmd = 
+		" select noa,isnull(carno,''),isnull(driverno,''),isnull(driver,''),isnull(checkno,''),paydate,bdate,edate,[money],0 plus,0 minus,0 total from view_tre"+@t_accy+  
+		" where (isnull(datea,'') between @t_bdate and @t_edate) "+
+		" and (len(@t_noa)=0 or @t_noa=noa) "+
+		" and (len(@t_carno)=0 or @t_carno=carno) "+
+		" and (isnull(driverno,'') between @t_bdriverno and @t_edriverno)"
+	insert  into  #z_tre1
+	execute sp_executesql @cmd,N'@t_noa nvarchar(20),@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_carno nvarchar(20),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20)',
+		@t_noa=@t_noa,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_carno=@t_carno,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno
+
+	set  @cmd=
+		"  select a.noa,a.carno,a.driverno,c.trandate,c.custno,b.driver,ltrim(b.straddr),c.product,b.mount,b.price,b.discount,b.[money],isnull(c.caseno,'')"+
+		"  from #z_tre1 a"+
+		"  left  join  view_tres"+@t_accy+"  b  on  a.noa=b.noa"+
+		"  left  join  view_trans"+@t_accy+" c  on  b.tranno=c.noa  and  b.trannoq=c.noq"+
+		"  order by a.driverno,a.carno,"+@t_sort1
+	insert  into  @tmp2
+	execute sp_executesql @cmd
+	
+	insert  into  @tmp3
+	select b.noa,a.noa,b.carno,b.driverno,b.datea,left(b.plusitem,20),b.plusmoney,left(b.minusitem,20),b.minusmoney,left(ltrim(rtrim(b.memo)),20) from #z_tre1 a
+	left join carchg b on b.driverno=a.driverno and b.carno=a.carno and (b.datea between a.bdate and a.edate)
+	where b.noa is not null
+
+	--------------------------------------------------------------------------------------------------------
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @money float
+	declare @plus float
+	declare @minus float
+	declare @plusitem nvarchar(40)
+	declare @minusitem nvarchar(40)
+	declare @checkno nvarchar(20)
+	declare @paydate nvarchar(10)
+	declare @noa nvarchar(20)
+
+	declare cursor_table cursor for
+	select treno,sum(isnull(plus,0)),sum(isnull(minus,0)) from @tmp3 group by treno
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@plus,@minus
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update  #z_tre1  set  plus=@plus,minus=@minus  where  noa=@noa
+		fetch next from cursor_table
+		into @noa,@plus,@minus
+	end
+	close cursor_table
+	deallocate cursor_table
+	update  #z_tre1  set total=isnull([money],0)+isnull(plusmoney,0)-isnull(minusmoney,0)
+
+	---------------------------------------------------------------------------------------------------------
+	declare  @h1 nvarchar(max)
+	declare  @h2 nvarchar(max)
+	declare  @h3 nvarchar(max)
+	declare  @h4 nvarchar(max)
+	declare  @h5 nvarchar(max)
+	set  @h1  =  '日'+SPACE(5)+'期'+SPACE(1)+'客戶'+SPACE(1)+'起迄地點'+SPACE(12)+SPACE(1)+'品名'+SPACE(6)+SPACE(1)+
+				'數'+SPACE(6)+'量'+SPACE(1)+'單'+SPACE(4)+'價'+SPACE(1)+'折'+SPACE(2)+'扣'+SPACE(1)+'金'+SPACE(4)+'額'+SPACE(1)+'備'+SPACE(6)+'註'
+	set  @h2  =  '日'+SPACE(5)+'期'+SPACE(1)+'其'+space(3)+'他'+space(3)+'加'+space(3)+'項'+space(9)+SPACE(2)+'其'+space(3)+'他'+space(3)+'減'+space(3)+'項'+space(9)+SPACE(2)+'備註'
+	set  @h3  = REPLICATE('=',9)+SPACE(1)+REPLICATE('=',4)+SPACE(1)+REPLICATE('=',20)+SPACE(1)+REPLICATE('=',10)+SPACE(1)+
+				REPLICATE('=',10)+SPACE(1)+REPLICATE('=',8)+SPACE(1)+REPLICATE('=',6)+SPACE(1)+REPLICATE('=',8)+SPACE(1)+REPLICATE('=',27)
+	set  @h4  = REPLICATE('-',110)
+	set  @h5  = REPLICATE('=',9)+SPACE(1)+  REPLICATE('=',26)+SPACE(2)+  REPLICATE('=',26)+SPACE(2)+REPLICATE('=',44)
+
+	declare  @tmp  table(
+		gno  nvarchar(1),
+		noa  nvarchar(20),
+		carno  nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		checkno nvarchar(20),
+		paydate nvarchar(20),
+		curpage int,
+		totpage int,
+		page nvarchar(10),
+		memo  varchar(200)
+	)
+
+	declare @date nvarchar(20)
+	declare @custno  nvarchar(20)
+	declare @driver nvarchar(20)
+	declare @addr nvarchar(40)
+	declare @product nvarchar(20)
+	declare @mount decimal(12,3)
+	declare @price float
+	declare @discount float
+	declare @memo nvarchar(40)
+	declare @total float
+
+	declare @curcount int
+	declare @t_mount decimal(12,3)
+	declare @t_money float
+	declare @t_plus float
+	declare @t_minus float
+	declare @t_total float
+	declare @t_page int
+	declare cursor_table cursor for
+	select noa,checkno,carno,driverno,driver,[money],plus,minus,total,checkno,paydate from #z_tre1
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@checkno,@carno,@driverno,@driver,@money,@plus,@minus,@total,@checkno,@paydate
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @t_page=1
+		set @t_mount = 0
+		set @t_money = 0
+		set @t_plus = @plus
+		set @t_minus = @minus
+		set @t_total = @total
+		set @curcount = 0
+		insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h1,@t_page)
+		set @curcount=@curcount+1
+		insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
+		set @curcount=@curcount+1
+		
+		declare cursor_table2 cursor for
+		select [date],noa,custno,addr,product,mount,price,discount,[money],[memo] from @tmp2 where noa=@noa
+		open cursor_table2
+		fetch next from cursor_table2
+		into @date,@noa,@custno,@addr,@product,@mount,@price,@discount,@money,@memo
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @t_mount = @t_mount + @mount
+			set @t_money = @t_money + @money
+			if @curcount>=@pagecount
+			begin
+				set @curcount = 0
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h1,@t_page)
+				set @curcount=@curcount+1
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
+				set @curcount=@curcount+1
+			end
+			
+			insert into @tmp(gno,noa,curpage,memo)
+			values( '0',@noa,@t_page,
+				convert(char(9),@date)+SPACE(1)+convert(char(4),@custno)+SPACE(1)+
+				convert(char(20),@addr)+SPACE(1)+convert(char(10),@product)+SPACE(1)+
+				right(SPACE(10)+rtrim(convert(char(10),@mount)),10)+SPACE(1)+
+				convert(char(8),CONVERT(money,@price),1)+SPACE(1)+
+				right(space(10)+rtrim(convert(char(6),convert(decimal(6,3),@discount))),6)+SPACE(1)+
+				reverse(substring(reverse(convert(char(11),CONVERT(money,@money),1)),4,8))+SPACE(1)+
+				left(@memo,20))
+			set @curcount=@curcount+1
+			if(@curcount=@pagecount)
+				set @t_page  =  @t_page + 1
+			fetch next from cursor_table2
+			into @date,@noa,@custno,@addr,@product,@mount,@price,@discount,@money,@memo
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		if @curcount=@pagecount  or  @pagecount-@curcount>=2 
+		begin
+			insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page,@h4)
+			insert into @tmp (gno,noa,curpage,memo)
+			values('0',@noa,@t_page,
+				SPACE(36)+'合'+SPACE(2)+'計：'+SPACE(3)+
+				right(SPACE(10)+rtrim(convert(char(10),@t_mount)),10)++SPACE(17)+
+				reverse(substring(reverse(convert(char(11),CONVERT(money,@t_money),1)),4,8)))
+			set @curcount=@curcount+2
+			if(@curcount=@pagecount)
+				set @t_page  =  @t_page + 1
+		end
+		else
+		begin
+			if @pagecount-@curcount=1
+			begin
+				insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h4,@t_page)
+				set @t_page  =  @t_page + 1
+				insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h1,@t_page)
+				insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
+				insert into @tmp (gno,noa,curpage,memo)
+				values('0',@noa,@t_page,
+				SPACE(36)+'合'+SPACE(2)+'計：'+SPACE(3)+
+				right(SPACE(10)+rtrim(convert(char(10),@t_mount)),10)++SPACE(17)+
+				reverse(substring(reverse(convert(char(11),CONVERT(money,@t_money),1)),4,8)))
+				set @curcount=3
+			end
+		end
+		----------------------------------------------------
+		if exists(select * from @tmp3 where treno=@noa)
+		begin
+			if @pagecount-@curcount>=3
+			begin
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h2,@t_page)
+				set @curcount=@curcount+1
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h5,@t_page)
+				set @curcount=@curcount+1
+			end
+			else
+			begin
+				while (@pagecount!=@curcount and @pagecount>@curcount)
+				begin
+					insert into @tmp(gno,noa,curpage,memo)values('0',@noa,@t_page,'')
+					set @curcount=@curcount+1
+				end
+				set @t_page  =  @t_page + 1
+			end
+		end
+		
+		declare cursor_table2 cursor for
+		select [date],plusitem,plus,minusitem,minus,memo from @tmp3 where  treno=@noa
+		open cursor_table2
+		fetch next from cursor_table2
+		into @date,@plusitem,@plus,@minusitem,@minus,@memo
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if @curcount>=@pagecount
+			begin
+				set @curcount = 0
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h2,@t_page)
+				set @curcount=@curcount+1
+				insert into @tmp(gno,noa,memo,curpage)values('0',@noa,@h3,@t_page)
+				set @curcount=@curcount+1
+			end
+			
+			insert into @tmp(gno,noa,curpage,memo)
+			values('0',@noa,@t_page,
+				convert(char(9),@date)+SPACE(1)+
+				convert(char(18),@plusitem)+
+				reverse(substring(reverse(convert(char(11),CONVERT(money,@plus),1)),4,8))+SPACE(2)+
+				convert(char(18),@minusitem)+
+				reverse(substring(reverse(convert(char(11),CONVERT(money,@minus),1)),4,8))+SPACE(2)+
+				@memo)
+			set @curcount=@curcount+1
+			if(@curcount=@pagecount)
+				set @t_page  =  @t_page + 1
+			fetch next from cursor_table2
+			into @date,@plusitem,@plus,@minusitem,@minus,@memo
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		if exists(select * from @tmp3 where noa=@noa) and @pagecount-@curcount>=1
+		begin
+			insert into @tmp (gno,noa,memo,curpage)values('0',@noa,@h4,@t_page)
+			set @curcount=case when  @curcount+1=@pagecount  then  0  else  @curcount+1  end
+		end
+		if @curcount!=0
+		begin
+			insert into @tmp (gno,noa,memo,curpage)values('0',@noa,'',@t_page)
+			set @curcount=case when  @curcount+1=@pagecount  then  0  else  @curcount+1  end
+		end
+		set @curcount=@curcount%@pagecount
+		if(@curcount=0)
+			set @t_page  =  @t_page + 1
+		while(@curcount<@pagecount-2)
+		begin
+			insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page ,'')
+			set @curcount  =  @curcount+1		
+		end
+		if(@curcount>@pagecount-2)
+		begin
+			insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page ,'')
+			set @curcount  =  0
+			while(@curcount<@pagecount-2)
+			begin
+				insert into @tmp (gno,noa,curpage,memo)values('0',@noa,@t_page ,'')
+				set @curcount  =  @curcount+1		
+			end
+		end
+
+		insert into @tmp (gno,noa,curpage,memo)
+		values('0',@noa,@t_page ,
+			'運'+SPACE(4)+'費：'+SPACE(1)+
+			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_money),1)),4,10))+SPACE(1)+
+			'其他加項：'+SPACE(1)+
+			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_plus),1)),4,10))+SPACE(1)+
+			'其他減項：'+SPACE(1)+
+			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_minus),1)),4,10))+SPACE(1)+
+			'實領金額：'+SPACE(1)+
+			reverse(substring(reverse(convert(char(13),CONVERT(money,@t_total),1)),4,10))+SPACE(1))
+		insert  into  @tmp(gno,noa,curpage,memo)
+		values('1',@noa,@t_page,
+			'審'+SPACE(4)+'核：'+SPACE(1)+
+			SPACE(11)+
+			'支票號碼：'+SPACE(1)+
+			convert(char(11),@checkno)+
+			'兌票日期：'+SPACE(1)+
+			SPACE(11)+
+			'製'+SPACE(4)+'表：'+SPACE(1)+
+			SPACE(11)+
+			'簽'+SPACE(4)+'收：')
+		update  @tmp  set carno=@carno,driverno=@driverno,driver=@driver,totpage=@t_page,
+		page=CONVERT(nvarchar,curpage)+'/'+CONVERT(nvarchar,@t_page) where noa=@noa
+		fetch next from cursor_table
+		into @noa,@checkno,@carno,@driverno,@driver,@money,@plus,@minus,@total,@checkno,@paydate
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select  (driverno+carno) x,driver namea,*,REPLACE(memo,SPACE(1),'&nbsp'+char(59))xmemo  from  @tmp order by noa;
+	
+z_carchg:--z_carchg
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_rc2no nvarchar(30)
+	declare @t_carno  nvarchar(20)
+	declare @t_sort1 nvarchar(max)
+	declare @t_noa nvarchar(max)
+	declare @t_carteamno nvarchar(max)
+	
+	set @pagecount = 34
+	set @t_accy = [1]
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end	
+	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
+	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_rc2no = case when '#non'=[8] then '' else [8] end
+	set @t_carno  = case when '#non'=[9] then '' else [9] end
+	set @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set @t_noa = case when '#non'=[11] then '' else [11] end
+	set @t_carteamno = case when '#non'=[12] then '' else [12] end
+	----------------------------------------------------------------------------------------------------------------------------
+	declare @treno nvarchar(20)
+	declare @carteamno nvarchar(20)
+	declare @tranno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(20)
+	declare @money float
+	declare @plusmoney float
+	declare @minusmoney float
+	declare @string nvarchar(max)
+	declare @n int
+	----------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#carteam')is not null
+	BEGIN
+		set @cmd = 'drop table #carteam'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carteam(
+		noa nvarchar(10)
+	)
+	set @string = @t_carteamno
+	while(1=1 and LEN(@string)>0)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carteam select @string
+			end
+			break
+		end
+		insert into #carteam select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	---------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#tmp1')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp1'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #tmp1(
+		treno nvarchar(20),
+		carteamno nvarchar(20),
+	)
+	set @cmd=
+	" select a.noa,null"+
+	" from view_tre"+@t_accy+" a"+
+	" left join driver b on a.driverno=b.noa"+
+	" where (a.driverno between @t_bdriverno and @t_edriverno)"+
+	" and ((a.bdate between @t_bdate and @t_edate) or (a.edate between @t_bdate and @t_edate))"
+	insert into #tmp1
+	execute sp_executesql @cmd,N'@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_bdate  nvarchar(10),@t_edate nvarchar(10)'
+	,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_bdate=@t_bdate,@t_edate=@t_edate
+	
+	declare cursor_table cursor for
+	select treno from #tmp1
+	open cursor_table
+	fetch next from cursor_table
+	into @treno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @carteamno =''
+		select @tranno=''
+		set @cmd="select top(1) @tranno=tranno from view_tres"+@t_accy+" where noa=@treno and len(tranno)>0"
+		execute sp_executesql @cmd,N'@treno  nvarchar(20),@tranno nvarchar(20) output',@treno=@treno,@tranno=@tranno output
+		if len(@tranno)>0
+		begin
+			set @cmd="select top(1) @carteamno = carteamno from view_trans"+@t_accy+" where noa=@tranno"
+			execute sp_executesql @cmd,N'@tranno nvarchar(20),@carteamno nvarchar(20) output',@tranno=@tranno,@carteamno=@carteamno output
+		end
+		else
+		begin
+			select top(1) @carteamno = carteamno from carchg where treno=@treno
+		end	
+		update #tmp1 set carteamno=@carteamno where treno=@treno
+		fetch next from cursor_table
+		into @treno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare @result table(
+			gno  nvarchar(1),
+			noa nvarchar(20),
+			datea nvarchar(10),
+			carno nvarchar(20),
+			driverno nvarchar(20),
+			driver nvarchar(50),
+			item nvarchar(50),
+			plus float,
+			minus float,
+			memo nvarchar(20)
+	)
+	insert into @result
+	select '0' gno,a.noa,datea,carno,driverno,driver,plusitem+minusitem,plusmoney,minusmoney,left(ltrim(rtrim(memo)),20)
+	from carchg a
+	left join #tmp1 b on a.treno=b.treno
+	left join #carteam c on b.carteamno=c.noa
+	where c.noa  is  not  null
+	
+	insert into @result
+	select  '1' gno,'','','',driverno,'','',SUM(plus),SUM(minus),''
+	from @result
+	group by driverno
+	
+	insert into @result
+	select  '2' gno,'','','',MAX(driverno),'','',SUM(plus),SUM(minus),''
+	from @result where  gno='0'
+	
+	select gno,noa,datea,carno,driverno,driver,item,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plus),1)),4,12)) plus,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minus),1)),4,12)) minus,
+	memo
+	from @result
+	order by driverno,gno,datea
+	drop table #carteam
+	drop table #tmp1;
+
+z_paytran3:--z_paytran3
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_accy nvarchar(10)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bdriverno nvarchar(20)
+	declare @t_edriverno nvarchar(20)
+	declare @t_rc2no nvarchar(30)
+	declare @t_carno  nvarchar(20)
+	declare @t_sort1 nvarchar(max)
+	declare @t_noa nvarchar(max)
+	declare @t_carteamno nvarchar(max)
+	
+	set @pagecount = 34
+	set @t_accy = [1]
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_bcustno = case when '#non'=[4] then '' else [4] end
+	set @t_ecustno = case when '#non'=[5] then CHAR(255) else [5] end	
+	set @t_bdriverno = case when '#non'=[6] then '' else [6] end
+	set @t_edriverno = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_rc2no = case when '#non'=[8] then '' else [8] end
+	set @t_carno  = case when '#non'=[9] then '' else [9] end
+	set @t_sort1  = case when '#non'=[10] then '' else [10] end
+	set @t_noa = case when '#non'=[11] then '' else [11] end
+	set @t_carteamno = case when '#non'=[12] then '' else [12] end
+	----------------------------------------------------------------------------------------------------------------------------
+	declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @driver nvarchar(20)
+	declare @money float
+	declare @plusmoney float
+	declare @minusmoney float
+	declare @tolls float
+	declare @string nvarchar(max)
+	declare @n int
+	declare @checkno  nvarchar(20)
+	declare @pno nvarchar(1)
+	------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#carteam')is not null
+	BEGIN
+		set @cmd = 'drop table #carteam'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #carteam(
+		noa nvarchar(10)
+	)
+	set @string = @t_carteamno
+	while(1=1 and LEN(@string)>0)
+	begin
+		set @n = PATINDEX('%,%',@string)
+		if @n=0
+		begin
+			if LEN(@string)>0
+			begin
+				insert into #carteam select @string
+			end
+			break
+		end
+		insert into #carteam select LEFT(@string,@n-1)	
+		set @string = SUBSTRING(@string,@n+1,LEN(@string)-@n)
+	end
+	----------------------------------------------------------------------------------------------------------------------------
+	
+	----------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_paytran3')is not null
+	BEGIN
+		set @cmd = 'drop table #z_paytran3'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_paytran3(
+		gno nvarchar(1),
+		pno nvarchar(1),
+		driverno nvarchar(20),
+		driver nvarchar(50),
+		carno nvarchar(20),
+		[money] float,
+		plusmoney float,
+		minusmoney float,
+		total float,
+		checkno nvarchar(20),
+		tolls  float,
+		xxx nvarchar(20),
+		yyy nvarchar(20)
+	)
+	
+	set @cmd=
+	" select '0','1',isnull(a.driverno,''),isnull(b.namea,''),isnull(a.carno,''),"+
+	" sum(ISNULL(a.total2,0)),0,0,0,'',sum(isnull(a.tolls,0)),'',''"+
+	" from view_trans"+@t_accy+" a"+
+	" left join driver b on a.driverno=b.noa"+ 
+	" left join calctypes d  on a.calctype=d.noa+d.noq"+
+	" left join #carteam f on f.noa=a.carteamno "+
+	" left join view_tres"+@t_accy+" g on a.noa=g.tranno"+
+	" left join view_tre"+@t_accy+" h on g.noa=h.noa"+
+	" where d.isoutside=1"+ 
+	" and (f.noa is not null)"+
+	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
+	" and (h.datea between @t_bdate and @t_edate)"+
+	" and (len(@t_rc2no)=0 or a.noa=@t_rc2no)"+
+	" group  by  isnull(a.driverno,''),isnull(b.namea,''),isnull(a.carno,''),f.noa"
+	
+	insert into #z_paytran3
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
+
+	---------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#listTre')is not null
+	BEGIN
+		set @cmd = 'drop table #listTre'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #listTre(
+		noa nvarchar(20),
+		typea nvarchar(1),
+	)
+	set @cmd=
+	" select h.noa,'A'"+
+	" from view_trans"+@t_accy+" a"+
+	" left join driver b on a.driverno=b.noa"+ 
+	" left join calctypes d  on a.calctype=d.noa+d.noq"+
+	" left join #carteam f on f.noa=a.carteamno "+
+	" left join view_tres"+@t_accy+" g on a.noa=g.tranno"+
+	" left join view_tre"+@t_accy+" h on g.noa=h.noa"+
+	" where d.isoutside=1"+ 
+	" and (f.noa is not null)"+
+	" and (a.driverno between @t_bdriverno and @t_edriverno)"+
+	" and (h.datea between @t_bdate and @t_edate)"+
+	" and (len(@t_rc2no)=0 or a.noa=@t_rc2no)"+
+	" group  by h.noa" 
+	
+	insert into #listTre
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
+	
+	set @cmd=
+	" select  a.noa,'B'"+  
+	" from  view_tre"+@t_accy+" a"+
+	" left join #listTre b on a.noa=b.noa "+ 
+	" where  b.noa is null"+
+	" and (a.datea between @t_bdate and @t_edate)"+
+	" and (a.driverno between @t_bdriverno and @t_edriverno)"
+	insert into #listTre
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bdriverno nvarchar(20),@t_edriverno nvarchar(20),@t_rc2no nvarchar(20)',
+		@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bdriverno=@t_bdriverno,@t_edriverno=@t_edriverno,@t_rc2no=@t_rc2no
+	
+	declare cursor_table cursor for
+	select a.driverno,a.carno,sum(isnull(a.plusmoney,0)),sum(isnull(a.minusmoney,0))
+	from carchg a
+	left join #listTre b on a.treno=b.noa
+	left join #carteam c on a.carteamno=c.noa
+	where b.noa  is  not  null
+	and (b.typea='A' or (b.typea='B' and c.noa is not  null))
+	group by a.driverno,a.carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno,@plusmoney,@minusmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if not exists(select * from #z_paytran3 where driverno=@driverno and carno=@carno)
+		begin
+			set @driver=''
+			select @driver=namea from driver where noa=@driverno
+			insert into #z_paytran3(gno,pno,driverno,driver,carno)values('0','1',@driverno,@driver,@carno)
+		end
+		update #z_paytran3 set plusmoney=@plusmoney,minusmoney=@minusmoney where driverno=@driverno and carno=@carno
+		fetch next from cursor_table
+		into @driverno,@carno,@plusmoney,@minusmoney
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------
+	
+	
+	declare cursor_table cursor for
+	select driverno,carno from #z_paytran3 group  by  driverno,carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @checkno=''
+		set @cmd=
+			" select top 1 @checkno=a.checkno "+
+			" from view_tre"+@t_accy+" a"+
+			" left join #carteam f on f.noa=a.carteamno "+
+			" where (f.noa is not null)"+
+			" and a.driverno=@driverno and carno=@carno"+ 
+			" and (a.datea between @t_bdate and @t_edate)"+ 
+			" and len(isnull(a.checkno,''))>0"
+		execute sp_executesql @cmd,N'@driverno nvarchar(20),@carno nvarchar(20),@t_bdate nvarchar(20),@t_edate nvarchar(20),@checkno nvarchar(20) output',
+			@driverno=@driverno,@carno=@carno,@t_bdate=@t_bdate,@t_edate=@t_edate,@checkno=@checkno output 
+		update #z_paytran3 set checkno=@checkno where driverno=@driverno and carno=@carno
+		if len(@checkno)>0
+			update #z_paytran3 set pno='0' where driverno=@driverno
+		fetch next from cursor_table
+		into @driverno,@carno
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	declare cursor_table cursor for
+	select driverno,min(pno),SUM([money]),SUM(plusmoney),SUM(minusmoney),sum(tolls) from #z_paytran3 group  by  driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@pno,@money,@plusmoney,@minusmoney,@tolls
+	while(@@FETCH_STATUS <> -1)
+	begin
+		insert into #z_paytran3 (gno,pno,driverno,[money],plusmoney,minusmoney,tolls)values('1',@pno,@driverno,@money,@plusmoney,@minusmoney,@tolls)	
+		fetch next from cursor_table
+		into @driverno,@pno,@money,@plusmoney,@minusmoney,@tolls
+	end
+	close cursor_table
+	deallocate cursor_table
+	--------------------------------------------------------------------
+	insert into #z_paytran3 select '2','1',CHAR(255),'','',SUM([money]),SUM(plusmoney),SUM(minusmoney),0,'',SUM(tolls),'','' from #z_paytran3 where gno='0'
+	update #z_paytran3 set total=isnull([money],0)+isnull(plusmoney,0)-isnull(minusmoney,0)+isnull(tolls,0)
+	
+	update #z_paytran3 set gno='3' where gno='2'
+	update #z_paytran3 set gno='2' where gno='1'
+	update #z_paytran3 set gno='1' where gno='0'
+	----------------------------------------------------------
+	set @cmd='@!#@@WWWQ!@'
+	declare cursor_table cursor for
+	select driverno,carno from #z_paytran3 order by pno,driverno,gno,carno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno,@carno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(@cmd!=@driverno)
+		begin
+			update #z_paytran3 set xxx=driverno,yyy=driver where driverno=@driverno and carno=@carno	
+		end		
+		set @cmd=@driverno
+		fetch next from cursor_table
+		into @driverno,@carno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	select gno,driverno,driver,xxx,yyy,carno,checkno,pno
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) [money]
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,plusmoney),1)),4,12)) pm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,minusmoney),1)),4,12)) mm
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,tolls),1)),4,12)) tolls
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	from #z_paytran3 order by pno,driverno,gno,carno
+	drop table #carteam
+	drop table #z_paytran3;

@@ -1,0 +1,204 @@
+change:--change
+SET QUOTED_IDENTIFIER OFF
+declare @t_noa nvarchar(50)=[1]--單據編號[1]
+declare @noq nvarchar(50)
+declare @ucanoa nvarchar(50)
+declare @ucasnoq nvarchar(50)
+declare @rev nvarchar(50)
+declare @now_rev nvarchar(50)
+declare @typea nvarchar(50)
+declare @ucanoq nvarchar(50)
+
+--只有變動單還沒有更新過才能執行
+if(isnull((select rev from ucachg where noa=@t_noa),'')='' and @t_noa!='')
+begin
+	--先將舊版本寫入至ucass
+	set @ucanoa=(select productno from ucachg where noa=@t_noa)
+	set @rev=isnull((select rev from uca where noa=@ucanoa),'000')
+
+	--避免重複寫入
+	delete ucass where noa=@ucanoa and rev=@rev
+
+	insert ucass(noa,noq,spec,productno,product,unit,uweight,manu,mount,weight,hours,memo,td,type,price,totalhours,edate,loss,mtype,process,processno,RANK,dividea,mul,ucachgno,rev)
+	select noa,noq,spec,productno,product,unit,uweight,manu,mount,weight,hours,memo,td,type,price,totalhours,edate,loss,mtype,process,processno,RANK,dividea,mul,ucachgno,rev from ucas where noa=@ucanoa
+	
+	--新版本編號
+	set @now_rev=CAST(CAST(@rev as int)+1 as nvarchar(10))
+	set @now_rev=right('00000000'+@now_rev,(case when LEN(@now_rev)>3 then LEN(@now_rev) else 3 end))
+	
+	--處理變更單內容
+	declare cursor_table cursor for
+	select noq,typea,ucanoq from ucachgs where noa=@t_noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noq,@typea,@ucanoq
+	while(@@FETCH_STATUS <> -1)
+	begin
+		--新增
+		if(@typea='1')
+		begin
+			set @ucasnoq=isnull((select MAX(noq) from ucas where noa=@ucanoa),'000')
+			set @ucasnoq=right('000'+CAST(CAST(@ucasnoq as int)+1 as nvarchar(10)),3)
+			insert ucas(noa,noq,productno,product,spec,processno,process,unit,mount,mtype,loss,dividea,mul,memo)
+			select @ucanoa,@ucasnoq,productno,product,spec,processno,process,unit,mount,mtype,loss,dividea,mul,memo from ucachgs where noa=@t_noa and noq=@noq
+		end
+		--修改
+		if(@typea='2')
+		begin
+			update a
+			set productno=b.productno,product=b.product,spec=b.spec,processno=b.processno,process=b.process
+			,unit=b.unit,mount=b.mount,mtype=b.mtype,loss=b.loss,dividea=b.dividea,mul=b.mul,memo=b.memo
+			from ucas a 
+			outer apply(select * from ucachgs where noa=@t_noa and noq=@noq)b
+			where a.noa=@ucanoa and a.noq=@ucanoq
+		
+		end
+		--刪除
+		if(@typea='3')
+		begin
+			delete ucas where noa=@ucanoa and noq=@ucanoq
+		end
+
+		fetch next from cursor_table
+		into @noq,@typea,@ucanoq
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	--更新版次
+	update uca set rev=@now_rev where noa=@ucanoa
+	update ucas set rev=@now_rev where noa=@ucanoa
+	update ucachg set rev=@now_rev where noa=@t_noa
+end
+;
+------------------------------------------------------------------------------------------------------------
+post:--ucachg --早期版本
+--變更uca
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(50)=[1]--單據編號[1]
+declare @condition nvarchar(20)=[2]--動作 0 刪除, 1 新增[2]
+-----------------------------------------------------------------------
+declare @cmd nvarchar(max)
+declare @now_date nvarchar(10)--現在日期
+set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+--變更bom的生效日
+declare @datea nvarchar(50) = isnull((select datea from ucachg where noa=@noa),'')
+--核准
+declare @apv nvarchar(50) = isnull((select apv from ucachg where noa=@noa),'')
+--變更bom的製品
+declare @ucano nvarchar(100) = isnull((select productno from ucachg where noa=@noa),'')
+
+declare @noq nvarchar(max)
+declare @opno nvarchar(max)
+declare @oproduct nvarchar(max)
+declare @opro nvarchar(max)
+declare @oprocess nvarchar(max)
+declare @pno nvarchar(max)
+declare @product nvarchar(max)
+declare @pro nvarchar(max)
+declare @process nvarchar(max)
+declare @mtype nvarchar(max)
+declare @unit nvarchar(max)
+declare @mount float
+declare @loss float
+declare @dividea float
+declare @mul float
+declare @memo nvarchar(max)
+declare @orgdata nvarchar(max)
+declare @ucanoq nvarchar(50)
+
+
+if(@apv='Y' and @now_date>=@datea)
+begin
+	if(@condition='0')
+	begin
+		declare cursor_table cursor for
+		select noq,orgproductno,orgproduct,orgprocessno,orgprocess
+		,productno,product,processno,process,mtype,unit,mount,loss,dividea,mul,memo,orgdata,ucanoq
+		from ucachgs where noa=@noa
+		open cursor_table
+		fetch next from cursor_table
+		into @noq,@opno,@oproduct,@opro,@oprocess,@pno,@product,@pro,@process,@mtype,@unit,@mount,@loss,@dividea,@mul,@memo,@orgdata,@ucanoq
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if(@opno='' and @pno!='')--新增
+			begin
+				--刪除新增的資料
+				delete ucas where noa=@ucano and ucachgno=@noa+'-'+@noq
+			end
+			
+			if(@opno!='' and @pno!='')--修改
+			begin
+				update ucas 
+				set productno=dbo.split(@orgdata,'&&',2),product=dbo.split(@orgdata,'&&',3),spec=dbo.split(@orgdata,'&&',4)
+				,processno=dbo.split(@orgdata,'&&',5),process=dbo.split(@orgdata,'&&',6)
+				,unit=dbo.split(@orgdata,'&&',7),mount=dbo.split(@orgdata,'&&',8),mtype=dbo.split(@orgdata,'&&',9)
+				,loss=dbo.split(@orgdata,'&&',10),dividea=dbo.split(@orgdata,'&&',11),mul=dbo.split(@orgdata,'&&',12),memo=dbo.split(@orgdata,'&&',13)
+				where noa=@ucano and noq=@ucanoq
+			end
+		
+			if(@opno!='' and @pno='')--刪除
+			begin
+				BEGIN TRY
+				insert ucas (noa,noq,productno,product,spec,processno,process,unit,mount,mtype,loss,dividea,mul,memo)
+				select dbo.split(@orgdata,'&&',0),dbo.split(@orgdata,'&&',1)
+				,dbo.split(@orgdata,'&&',2),dbo.split(@orgdata,'&&',3),dbo.split(@orgdata,'&&',4)
+				,dbo.split(@orgdata,'&&',5),dbo.split(@orgdata,'&&',6),dbo.split(@orgdata,'&&',7)
+				,dbo.split(@orgdata,'&&',8),dbo.split(@orgdata,'&&',9),dbo.split(@orgdata,'&&',10)
+				,dbo.split(@orgdata,'&&',11),dbo.split(@orgdata,'&&',12),dbo.split(@orgdata,'&&',13)
+				END TRY
+				BEGIN CATCH
+				END CATCH
+			end
+		
+			fetch next from cursor_table
+			into @noq,@opno,@oproduct,@opro,@oprocess,@pno,@product,@pro,@process,@mtype,@unit,@mount,@loss,@dividea,@mul,@memo,@orgdata,@ucanoq
+		end
+		close cursor_table
+		deallocate cursor_table
+	end
+
+	if(@condition='1')
+	begin
+		declare cursor_table cursor for
+		select noq,orgproductno,orgproduct,orgprocessno,orgprocess
+		,productno,product,processno,process,mtype,unit,mount,loss,dividea,mul,memo,orgdata,ucanoq
+		from ucachgs where noa=@noa
+		open cursor_table
+		fetch next from cursor_table
+		into @noq,@opno,@oproduct,@opro,@oprocess,@pno,@product,@pro,@process,@mtype,@unit,@mount,@loss,@dividea,@mul,@memo,@orgdata,@ucanoq
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if(@opno='' and @pno!='')--新增
+			begin
+				set @ucanoq= 'I'+right('000'+cast(cast((select MAX(noq) from ucas where noa=@ucano and noq not like'I%') as int)+1 as nvarchar(30)),3)
+					
+				insert ucas (noa,noq,productno,product,unit,mount,mtype,processno,process,loss,dividea,mul,memo,ucachgno)
+				select @ucano,@ucanoq,@pno,@product,@unit,@mount,@mtype,@pro,@process,@loss,@dividea,@mul,@memo,@noa+'-'+@noq
+				
+			end
+			
+			if(@opno!='' and @pno!='')--修改
+			begin
+				update ucas 
+				set productno=@pno,product=@product,unit=@unit,mount=@mount,mtype=@mtype
+				,processno=@pro,process=@process,loss=@loss,dividea=@dividea,mul=@mul,memo=@memo
+				where noa=@ucano and noq=@ucanoq
+			end
+		
+			if(@opno!='' and @pno='')--刪除
+			begin
+				delete ucas where noa=@ucano and noq=@ucanoq
+				
+			end
+		
+			fetch next from cursor_table
+			into @noq,@opno,@oproduct,@opro,@oprocess,@pno,@product,@pro,@process,@mtype,@unit,@mount,@loss,@dividea,@mul,@memo,@orgdata,@ucanoq
+		end
+		close cursor_table
+		deallocate cursor_table
+				
+	end
+end
+;
