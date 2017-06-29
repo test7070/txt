@@ -168,3 +168,126 @@ dbo.getComma(weight,2)weight
 ,* from @tmp
 order by custno,gno,datea
 ;
+-----------------------------------------------------------------------------------------------------
+z_tran_jr4:--z_tran_jr4
+declare @t_mon nvarchar(10)
+declare @t_bdriverno nvarchar(20)
+declare @t_edriverno nvarchar(20)
+
+set @t_mon = case when '#non'='104/11' then '' else '104/11' end
+set @t_bdriverno = case when '#non'='#non' then '' else '#non' end
+set @t_edriverno = case when '#non'='#non' then char(255) else '#non' end	
+	
+declare @tmp table(
+	gno nvarchar(1),
+	rr int,
+	carno nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	con nvarchar(max),
+	mon nvarchar(10),
+	money float,
+	memo nvarchar(max),
+	counta float
+)
+insert @tmp(gno,driverno,driver)
+select '9',driverno,driver
+from carsals
+where noa='104/10'
+
+--應領tran
+insert @tmp
+select '1','1',b.carno,b.driverno,b.driver,b.carno+'總收入',@t_mon,sum(b.total),'',''
+from view_trans b left join  view_tran a on a.noa=b.noa
+where (LEFT(b.datea,6)=@t_mon)
+and exists(select * from @tmp where b.driverno=driverno)
+and isnull(b.driverno,'')!=''
+group by b.carno,b.driverno,b.driver,b.carno
+
+update @tmp
+set counta=b.carno
+from @tmp a
+outer apply(select count(carno)carno,driverno from @tmp where a.driverno=driverno group by driverno)b
+
+--應領carchg
+insert @tmp
+select '1','2',carno,driverno,driver,plusitem,@t_mon,sum(plusmoney),'',''
+from carchg a
+where (LEFT(datea,6)=@t_mon)
+and exists(select * from @tmp where a.driverno=driverno and gno='9')
+group by carno,driverno,driver,plusitem
+
+--應扣carchg
+insert @tmp
+select '2','3',carno,driverno,driver,minusitem,@t_mon,sum(minusmoney),'',''
+from carchg a
+where (LEFT(datea,6)=@t_mon)
+and exists(select * from @tmp where a.driverno=driverno and gno='9')
+group by carno,driverno,driver,minusitem
+
+--應扣carborr
+insert @tmp
+select '2','4',carno,driverno,driver,'私人借支('+datea+')',b.mon,b.money,dbo.getcomma(a.driverpay,0)+' '+cast(mount as nvarchar(50))+'期',''
+from carborr a left join carborrs b on a.noa=b.noa
+where b.mon=@t_mon
+and exists(select * from @tmp where a.driverno=driverno and gno='9')
+
+update a
+set rr=rx
+from (select ROW_NUMBER()over(partition by gno,driverno,driver order by rr,gno)rx,rr from @tmp where ISNULL(money,0)!=0)a
+
+delete @tmp where gno='9' or ISNULL(money,0)=0
+
+declare @result table(
+	gno nvarchar(1),
+	rr int,
+	counta nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	con1 nvarchar(max),
+	mon1 nvarchar(10),
+	money1 float,
+	memo1 nvarchar(max),
+	con2 nvarchar(max),
+	mon2 nvarchar(10),
+	money2 float,
+	memo2 nvarchar(max)
+)
+insert @result(gno,rr,driverno,driver)
+select '0',rr,driverno,driver
+from @tmp a
+group by rr,driverno,driver
+
+update @result
+set con1=b.con,mon1=b.mon,money1=b.money,memo1=b.memo,counta=b.counta
+from @result a left join @tmp b on a.driverno=b.driverno and a.driver=b.driver and a.rr=b.rr
+where b.gno='1'
+
+update @result
+set con2=b.con,mon2=b.mon,money2=b.money,memo2=b.memo
+from @result a left join @tmp b on a.driverno=b.driverno and a.driver=b.driver and a.rr=b.rr
+where b.gno='2'
+
+insert @result(gno,rr,driverno,driver,money1,money2)
+select '1',9998,driverno,driver,sum(money1),sum(money2)
+from @result
+group by driverno,driver
+
+insert @result(gno,rr,driverno,driver,money1)
+select '2',9998,driverno,driver,sum(money1-money2)
+from @result
+where gno='1'
+group by driverno,driver
+
+insert @result(gno,rr,driverno,driver)
+select '3',9998,driverno,driver
+from @result
+group by driverno,driver
+
+select 
+left(@t_mon,3)+'年'+right(@t_mon,2)+'月份薪資表' title
+,dbo.getComma(money1,0) money1
+,dbo.getComma(money2,0) money2
+,counta+'台車收入金額' counta
+,* from @result order by driverno,driver,rr,gno
+;
