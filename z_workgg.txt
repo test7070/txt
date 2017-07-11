@@ -42,7 +42,8 @@ declare @tmp table(
 
 insert into @tmp
 	select '99' gno,a.stationno,b.station,a.datea--,isnull(c.gen,isnull(b.gen,0))
-	,isnull(c.gen,case when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end)
+	,isnull(c.gen,case when ISNULL(b.maxgen,0)>0 then isnull(b.hours,0) else 	
+	case when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end end)
 	,sum(a.hours)
 	from view_cugu a left join station b on (a.stationno=b.noa) 
 	outer apply(select top 1 gen from view_cugt where (datea=a.datea) and (stationno=a.stationno)) c
@@ -59,7 +60,7 @@ insert into @tmp
 	and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(d.productno,''),5)!='D4302')
 	and (len(@t_ordeno)=0 or d.ordeno=@t_ordeno) 
 	and (len(@t_ordeno2)=0 or d.no2=@t_ordeno2) 
-	group by a.stationno,b.station,a.datea,c.gen,b.gen,b.wages,b.gensel
+	group by a.stationno,b.station,a.datea,c.gen,b.gen,b.wages,b.gensel,b.maxgen,b.hours
 
 update @tmp set gen=8 where gen=0
 
@@ -1428,3 +1429,167 @@ select a.gno,a.accy,a.stationno stno,a.stations,a.gen,a.datea,a.cuadate,a.uindat
 	,a.unit,round(a.hours,3) hours,round(a.mans,3) mans,round(a.rate,3) rate,
 	'work?left(noa,'+cast(len(a.workno) as nvarchar)+')=$workno?'+a.accy qhref
 from @tmp a order by a.stationno,a.datea,a.gno;
+
+--******************************************************************************************************
+z_workgg13:--z_workgg13
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_xgroupano nvarchar(max)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_proj nvarchar(50)
+declare @t_ordeno nvarchar(50) 
+declare @t_ordeno2 nvarchar(50)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then @t_bdate else [3] end
+set @t_xgroupano = case when '#non' = [7] then '' else [7] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_proj = '[21]'
+set @t_ordeno = case when '#non' = [24] then '' else [24] end
+set @t_ordeno2 = case when '#non' = [25] then '' else [25] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(10),
+	ordeno nvarchar(50), --銷售訂單號
+	no2 nvarchar(10), --序號
+	ordesisvcc nvarchar(50),--銷售訂單明細狀態
+	custno nvarchar(90),--客戶編號
+	nick nvarchar(MAX),--客戶簡稱
+	omount float,--銷售訂單明細數量
+	vmount float,--已出貨
+	uvmount float,--未出貨
+	packno nvarchar(MAX),--包裝方式
+	packname nvarchar(MAX),--包裝名稱
+	packd nvarchar(MAX),--包裝明細(未出貨)
+	ctn float,--包裝總箱數(未出貨)
+	cuft float,--包裝總材積(未出貨)
+	bwdate nvarchar(MAX),--開工日期
+	ewdate nvarchar(MAX),--完工日期
+	wmount float,--開工數量
+	wbmount float,--完工數量
+	uwbmount float,--未做量
+	worksatus nvarchar(MAX),--工令入庫單狀態
+	ordesdatea nvarchar(20),--銷售訂單明細預定交期
+	odweek float, --週別
+	odate nvarchar(10),--訂單日期
+	custorde nvarchar(50),--客戶訂單
+	vcceno nvarchar(50),--出貨通知單號
+	shiporderno nvarchar(50),--Booking No.
+	cldate nvarchar(50),--結關日期
+	shipno nvarchar(MAX),--運輸航次
+	cuordevcceno nvarchar(MAX),--運輸記錄
+	trantype nvarchar(MAX),--運輸方式
+	casetype nvarchar(MAX),--櫃型
+	groupbno nvarchar(MAX),--次產品線
+	productno nvarchar(MAX),--件號代號
+	products nvarchar(MAX),--件號名稱
+	engpro nvarchar(MAX),--銷售明細註記一
+	spec nvarchar(MAX), --型號
+	groupeno nvarchar(MAX),--車縫
+	scolor nvarchar(MAX), --皮料1
+	classno nvarchar(MAX),--皮料2
+	classa nvarchar(MAX),--皮料3
+	zinc nvarchar(MAX),--皮料4
+	sourceno nvarchar(MAX), --轉印代號
+	sourcename nvarchar(MAX), --轉印名稱
+	groupfno nvarchar(MAX),--護片代號
+	groupfname nvarchar(MAX),--護片顏色
+	sizeano nvarchar(MAX),--網烙印代號
+	sizeaname nvarchar(MAX),--網烙印名稱
+	groupgino nvarchar(MAX),--大弓/座管代號
+	groupginame nvarchar(MAX),--大弓/座管名稱
+	grouphno nvarchar(MAX),--中束代號
+	grouphnmae nvarchar(MAX),--中束名稱
+	uccmemo nvarchar(MAX),--銷售明細註記八
+	amemo nvarchar(MAX),--備註
+	worker1 nvarchar(MAX),--開立人員姓名
+	cust2no nvarchar(MAX),--付款客戶
+	cust2name nvarchar(MAX),--付款客戶名稱
+	worker2 nvarchar(MAX),--維護人員
+	storeno nvarchar(MAX),--出貨倉庫編號
+	storename nvarchar(MAX),--出貨倉庫
+	custpname nvarchar(MAX),--客戶件號名稱
+	bmemo nvarchar(MAX),--銷售明細註記三
+	stype nvarchar(MAX),--內銷/外銷
+	sourcetype nvarchar(MAX),--來源類別
+	custpno nvarchar(MAX),--客戶件號
+)
+
+insert #tmp
+select '0',a.noa,b.no2
+,case when isnull(d.vmount,0)>0 then '已出足' else '未出足' end
+,a.custno,a.nick,b.mount,isnull(d.vmount,0),b.mount-isnull(d.vmount,0)
+,b.packwayno,b.packway
+,case when b.mount-isnull(d.vmount,0)<=0 and isnull(d.vmount,0)>0 then '已出足'
+when isnull(e.inmount,0)>0 and isnull(e.outmount,0)>0 
+then cast(e.inmount*e.outmount as nvarchar(20))+'*'+cast(floor((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount)) as nvarchar(20))
++'+'+cast((b.mount-isnull(d.vmount,0))-(floor((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount))*(e.inmount*e.outmount)) as nvarchar(50))
+else '無提供包裝方式' end packd
+,ceiling((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount)) ctn
+,ceiling((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount))*isnull(e.cuft,0) cuft
+,case when len(isnull(f1.bwdate1,''))=0 and len(isnull(f1.bwdate2,''))=0 then '' else isnull(f1.bwdate1,'')+'~'+isnull(f1.bwdate2,'') end bwdate
+,case when len(isnull(f2.ewdate1,''))=0 and len(isnull(f2.ewdate2,''))=0 then '' else isnull(f2.ewdate1,'')+'~'+isnull(f2.ewdate2,'') end ewdate
+,isnull(g.wmount,0)wmount,isnull(g.wbmount,0) wbmount,isnull(g.wbmount,0)-isnull(b.mount,0) uwbmount
+,case when isnull(g.wbmount,0)>0 then '結案' else '未開立' end worksatus
+,b.datea ordesdatea
+,case when len(b.datea)=0 then '' when len(b.datea)=9 then DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(b.datea)) else DATEPART(ISO_WEEK,b.datea) end
+,a.odate,a.custorde
+,stuff((select ','+noa from view_vcces where ordeno=a.noa and no2=b.no2 FOR XML PATH('')),1,1,'')
+,i.sono,i.cldate,i.ship
+,stuff((select ','+noa from view_vcces where ordeno=a.noa and no2=b.no2 FOR XML PATH('')),1,1,'')
+,a.trantype,replace(a.casetype,'~#$',"'")
+,c.groupbno,b.productno,b.product,c.engpro,c.spec,c.groupeno
+,b.scolor,b.class,b.classa,b.zinc
+,b.source,isnull((select top 1 mon from adpro where noa=b.source),'')
+,c.groupfno,isnull((select top 1 mon from adsss where noa=c.groupfno),'')
+,b.sizea,isnull((select top 1 mon from adoth where noa=b.sizea),'')
+,case when isnull(c.groupgno,'')!='' then isnull(c.groupgno,'') else isnull(c.groupino,'') end
+,case when isnull(c.groupgno,'')!='' then isnull((select top 1 mon from adknife where noa=c.groupgno),'') 
+else isnull((select top 1 mon from adtran where noa=c.groupino),'') end
+,c.grouphno,isnull((select top 1 mon from adpipe where noa=c.grouphno),'')
+,c.memo,a.memo,a.worker,a.custno2,a.cust2,a.worker2,j.storeno,j.store
+,k.product,b.memo,case when a.stype='3' then '外銷' else '內銷' end
+,case when len(b.quatno)>0 then '報價單' else '非計畫' end,k.productno
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join uca c on b.productno=c.noa
+outer apply (select sum(case when va.typea='2' then -1 else 1 end*vb.mount)vmount from view_vcc va left join view_vccs vb on va.noa=vb.noa where vb.ordeno=a.noa and vb.no2=b.no2)d
+outer apply (select top 1 * from pack2s where noa=b.productno and packway=b.packwayno)e
+outer apply (select MIN(cuadate)bwdate1,MAX(cuadate)bwdate2 from view_work where ordeno=a.noa and no2=b.no2 and isnull(cuadate,'')!='')f1
+outer apply (select MIN(uindate)ewdate1,MAX(uindate)ewdate2 from view_work where ordeno=a.noa and no2=b.no2 and isnull(uindate,'')!='')f2
+outer apply (select sum(mount)wmount ,sum(inmount)wbmount,count(*)iswork from view_work where ordeno=a.noa and no2=b.no2 and productno=b.productno)g
+outer apply (select top 1 * from view_vcces where ordeno=a.noa and no2=b.no2)h
+outer apply (select top 1 * from boaj where noa=h.noa)i
+outer apply (select top 1 * from view_vccs where ordeno=a.noa and no2=b.no2)j
+outer apply (select top 1 * from ucccust where noa=c.noa)k
+where isnull(b.datea,'') between @t_bdate and @t_edate
+and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+and isnull(b.productno,'') between @t_bproductno and @t_eproductno
+and (len(@t_ordeno)=0 or a.noa=@t_ordeno)
+and (len(@t_ordeno2)=0 or b.no2=@t_ordeno2)
+and c.noa is not null --只抓製成品 或半成品
+and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(b.productno,''),5)!='D4302')
+
+select 
+dbo.getComma(omount,-1)omount,
+dbo.getComma(vmount,-1)vmount,
+dbo.getComma(uvmount,-1)uvmount,
+dbo.getComma(ctn,-1)ctn,
+dbo.getComma(cuft,-1)cuft,
+dbo.getComma(wmount,-1)wmount,
+dbo.getComma(wbmount,-1)wbmount,
+dbo.getComma(uwbmount,-1)uwbmount,
+* from #tmp order by odate,ordeno,no2
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
