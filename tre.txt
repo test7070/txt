@@ -1,3 +1,251 @@
+tre_import_nr:-- tre.txt/tre_import_nr    整批	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_noa nvarchar(20) = [1]
+	declare @t_date nvarchar(10) = [2]
+	declare @t_btrandate nvarchar(10) = [3]
+	declare @t_etrandate nvarchar(10) = [4]
+	declare @t_driverno nvarchar(max) = [5]
+	----------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#trans_tre_nr')is not null
+	BEGIN
+		drop table #trans_tre_nr
+	END
+	create table #trans_tre_nr(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,driverno nvarchar(20)
+		,driver nvarchar(20)
+		,datea nvarchar(10)
+		,mon nvarchar(20)
+		,carchgno nvarchar(max)
+		,[money] float
+		,plusmoney float
+		,minusmoney float
+		,total float
+		,memo nvarchar(max)
+		,worker nvarchar(20)
+		,worker2 nvarchar(20)
+	)
+	IF OBJECT_ID('tempdb..#trans_tre_nrs')is not null
+	BEGIN
+		drop table #trans_tre_nrs
+	END
+	create table #trans_tre_nrs(
+		sel int identity(1,1)
+		,carno nvarchar(20)
+		,driverno nvarchar(20)
+		,driver nvarchar(20)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,datea nvarchar(10)
+		,trandate nvarchar(10)
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+		,straddrno nvarchar(20)
+		,straddr nvarchar(50)
+		,endaddrno nvarchar(20)
+		,endaddr nvarchar(50)
+		,productno nvarchar(20)
+		,product nvarchar(50)
+		,unit nvarchar(20)
+		,mount float
+		,[weight] float
+		,price float
+		,[money] float
+		,memo nvarchar(max)
+		,tranno nvarchar(20)
+		,trannoq nvarchar(10)
+	)
+	insert into #trans_tre_nrs(carno,driverno,driver,noa,noq,datea,trandate,custno,cust,straddrno,straddr,endaddrno,endaddr
+		,productno,product,unit,mount,[weight],price,[money],memo,tranno,trannoq)
+	select isnull(a.carno,''),isnull(a.driverno,''),a.driver,a.noa,a.noq,a.datea,a.trandate,a.custno,a.nick,a.straddrno,a.straddr
+		,a.endaddrno,a.endaddr,a.uccno,a.product
+		,a.unit2
+		,a.mount3,a.mount4
+		,isnull(a.price2,0)
+		,a.total2
+		,a.memo,a.noa,a.noq
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno and a.noq=b.trannoq
+	where (b.noa is null or b.noa=@t_noa)
+	and a.trandate between @t_btrandate and @t_etrandate
+	and (len(@t_driverno)=0 or CHARINDEX(','+a.driverno+',',','+@t_driverno+',')>0)
+	----------------------------------------------------------------------------------------------------
+	declare @sel int
+	--declare @carno nvarchar(20)
+	declare @driverno nvarchar(20)
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @key nvarchar(20) = 'BJ'
+	declare @maxno1 nvarchar(20) = ''
+	declare @maxno2 nvarchar(20) = ''
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @n int 
+
+	select @maxno1=max(noa) from view_tre where noa like @key+REPLACE(@t_date,'/','')+'[0-9,A-Z][0-9][0-9]'
+
+	declare @tmpnoa nvarchar(20)
+	declare @money1 float
+	declare @money2 float
+	declare @carchgno nvarchar(max)
+	declare @plusmoney float
+	declare @minusmoney float
+
+	declare cursor_table cursor for
+	select driverno from #trans_tre_nrs group by driverno
+	open cursor_table
+	fetch next from cursor_table
+	into @driverno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @maxno2='',@noa=''
+		select @maxno2=max(noa) from #trans_tre_nrs where noa like @key+REPLACE(@t_date,'/','')+'[0-9,A-Z][0-9][0-9]'
+		set @maxno2 = ISNULL(@maxno2,'')
+		select @noa = case when @maxno1 > @maxno2 then @maxno1 else @maxno2 end
+		if len(isnull(@noa,''))=0
+		begin
+			set @n = 1
+		end
+		else
+		begin
+			set @n = (charindex(left(RIGHT(@noa,3),1),@string)-1)*100 + cast(RIGHT(@noa,2) as int) + 1
+		end
+		
+		set @noa = @key+REPLACE(@t_date,'/','')+SUBSTRING(@string,floor(@n/100)+1,1) + right('000'+cast(@n%100 as nvarchar),2)
+
+		----------------------------------------------------------
+		--加減項
+		select @carchgno = '', @plusmoney=0, @minusmoney=0
+		
+		declare cursor_table2 cursor for
+		select a.noa,isnull(plusmoney,0) plusmoney,isnull(minusmoney,0) minusmoney 
+		from carchg a 
+		where a.driverno=@driverno
+		and not exists(select top 1 noa from view_tre where charindex(a.noa,carchgno)>0) 
+		and not exists(select top 1 noa from #trans_tre_nr where charindex(a.noa,carchgno)>0) 
+		and a.datea between @t_btrandate and @t_etrandate 
+		open cursor_table2
+		fetch next from cursor_table2
+		into @tmpnoa,@money1,@money2
+		while(@@FETCH_STATUS <> -1)
+		begin
+			select @carchgno = @carchgno + case when LEN(@carchgno)>0 then ',' else '' end + @tmpnoa
+				,@plusmoney = @plusmoney + @money1
+				,@minusmoney = @minusmoney + @money2
+			fetch next from cursor_table2
+			into @tmpnoa,@money1,@money2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		----------------------------------------------------------------------
+		insert into #trans_tre_nr(noa,driverno,datea,mon,carchgno,plusmoney,minusmoney)
+		select @noa,@driverno,@t_date,'',@carchgno,@plusmoney,@minusmoney
+		----------------------------------------------------------------------
+		declare cursor_table2 cursor for
+		select sel,row_number()over(order by trandate,tranno,trannoq) from #trans_tre_nrs 
+		where driverno=@driverno
+		open cursor_table2
+		fetch next from cursor_table2
+		into @sel,@n
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @noq = right('000'+CAST(@n as nvarchar),3)
+			update #trans_tre_nrs set noa=@noa,noq=@noq where sel=@sel
+			
+			fetch next from cursor_table2
+			into @sel,@n
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		
+		fetch next from cursor_table
+		into @driverno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update #trans_tre_nr set driver=isnull(b.namea,'')
+	from #trans_tre_nr a
+	left join driver b on a.driverno=b.noa
+	
+	update #trans_tre_nr set [money]=b.[money]
+	from #trans_tre_nr a
+	left join (select noa,SUM(ISNULL([money],0)) [money] from #trans_tre_nrs group by noa) b on a.noa=b.noa
+	
+	update #trans_tre_nr set total = ISNULL([money],0)+ISNULL(plusmoney,0)-ISNULL(minusmoney,0)
+	
+	----------------------------------------------------
+	declare @accy nvarchar(10) = left(@t_date,3)
+	
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	
+	begin try
+		set @cmd ="
+		insert into tre"+@accy+"(noa,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total)
+		select noa,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total
+		from #trans_tre_nr"
+		execute sp_executesql @cmd
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name]
+		select ERROR_MESSAGE() msg
+		return
+	end catch
+	
+	begin try
+		set @cmd =
+		"insert into tres"+@accy+"(noa,noq,driverno,driver,trandate,comp,carno
+			,straddr,endaddr,product,unit,mount,weight,price,[money],memo,tranno,trannoq)
+		select noa,noq,driverno,driver,trandate,cust,carno
+			,straddr,endaddr,product,unit,mount,weight,price,[money],memo,tranno,trannoq
+		from #trans_tre_nrs"
+		execute sp_executesql @cmd
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name]	
+		select ERROR_MESSAGE() msg	
+		return
+	end catch
+	
+	Commit Transaction [Trans_Name]
+	
+	
+	set @n=0
+	select @n=count(1) from #trans_tre_nr 
+	
+	declare @tmp table(
+		msg nvarchar(max)
+	)
+	insert into @tmp
+	select '產生 '+CAST(@n as nvarchar)+'張立帳單' msg
+	select * from @tmp
+	drop table #trans_tre_nr
+	drop table #trans_tre_nrs;
+
+tre_jr:--tre_jr  單筆匯入
+	declare @t_noa nvarchar(20) = [1]
+	declare @t_carteamno nvarchar(20)= [2]
+	declare @t_bdate nvarchar(20)= [3]
+	declare @t_edate nvarchar(20)= [4]
+	declare @t_carno nvarchar(20)= [5]
+	declare @t_driverno nvarchar(20)= [6]
+	--------------------------------------------------------------------------------------------
+	select a.*
+	from view_trans a
+	left join view_tres b on a.noa=b.tranno
+	--left join calctypes c on a.calctype=c.noa+c.noq
+	where (b.noa is null or b.noa=@t_noa)
+	--and a.carteamno=@t_carteamno
+	and isnull(a.datea,'') between @t_bdate and @t_edate
+	and ISNULL(a.carno,'')=@t_carno
+	--and ISNULL(a.driverno,'')=@t_driverno 
+	--and isnull(c.isoutside,0)=1
+	order by a.trandate,a.noa;
+
+
 tre_import_wh2:--tre_import_wh2  單一司機   ref. tre.txt tre_import_wh
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
