@@ -23,25 +23,33 @@ declare @tmp table(
 	straddrno nvarchar(100),
 	straddr nvarchar(100),
 	chk1 nvarchar(2),
-	memo nvarchar(max)
+	memo nvarchar(max),
+	cno nvarchar(50),
+	acomp nvarchar(max)
 )
 insert @tmp
-select ROW_NUMBER()over(partition by datea,trandate,po,custno,straddrno,chk1 order by uccno),'0',datea,trandate,custno,nick,uccno,weight,weight2,po,carno,straddrno
-,straddr,case chk1 when '1' then 'V' else ' ' end chk1,memo
-from view_trans
-where (datea between @t_bdate and @t_edate)
+select ROW_NUMBER()over(partition by time1,time2,memo2,custno,addrno,chk1 order by productno),'0',time1,time2,custno,cust,productno,sum(weight),sum(uweight),memo2,carno,addrno
+,addr,case chk1 when '1' then 'V' else ' ' end chk1,memo,cno,acomp
+from view_tranvcces
+where (time1 between @t_bdate and @t_edate)
 and (custno between @t_bcustno and @t_ecustno)
 and (carno between @t_bcarno and @t_ecarno)
-and (straddrno between @t_baddr and @t_eaddr)
+and (addrno between @t_baddr and @t_eaddr)
+group by time1,time2,custno,cust,productno,memo2,carno,addrno,addr,chk1,memo,cno,acomp
 
 update @tmp
 set gno=case when rr=1 then 0 else 1 end
+
+insert @tmp(gno,cno)
+select '2',cno
+from @tmp
+group by cno
 
 select 
 dbo.getComma(weight,2) weight
 ,dbo.getComma(weight2,2) weight2
 ,* from @tmp
-order by datea,trandate,custno,uccno,straddrno
+order by cno,gno,datea,trandate,custno,uccno,straddrno
 ;
 ------------------------------------------------------------------------------------------------
 z_tran_jr2:--z_tran_jr2
@@ -71,26 +79,26 @@ declare @tmp table(
 	comp nvarchar(200),
 	total2 float,
 	total3 float,
+	cno nvarchar(100),
 	acomp nvarchar(100)
 )
-insert @tmp (gno,rr,straddrno,straddr,trandate,carno,weight,weight2,price,total,po,uccno,custno,comp)
-select '0',ROW_NUMBER()over(partition by straddrno order by trandate),straddrno,straddr,trandate,carno,weight,weight2,price,total,po,uccno,custno,nick
-from view_trans
-where (trandate between @t_bdate and @t_edate)
+insert @tmp (gno,rr,straddrno,straddr,trandate,carno,weight,weight2,price,total,po,uccno,custno,comp,cno,acomp)
+select '0',ROW_NUMBER()over(partition by straddrno order by b.trandate),straddrno,straddr,b.trandate,b.carno,b.weight,weight2,price,b.total,po,uccno,custno,nick,a.cno,a.acomp
+from view_trans b
+left join view_tran a on a.noa=b.noa
+where (b.trandate between @t_bdate and @t_edate)
 and (custno between @t_bcustno and @t_ecustno)
-and (carno between @t_bcarno and @t_ecarno)
+and (b.carno between @t_bcarno and @t_ecarno)
 and (straddrno between @t_baddr and @t_eaddr)
 
-update @tmp
-set acomp=(select top 1 nick from acomp)
 
-insert @tmp(gno,straddrno,weight2,total,total2,total3)
-select '1',straddrno,SUM(weight2),SUM(total),SUM(total*0.05),SUM(total+total*0.05)
-from @tmp group by straddrno
+insert @tmp(gno,cno,straddrno,weight2,total,total2,total3)
+select '1',cno,straddrno,SUM(weight2),SUM(total),SUM(total*0.05),SUM(total+total*0.05)
+from @tmp group by straddrno,cno
 
-insert @tmp(gno,straddrno)
-select '2',straddrno from @tmp
-group by straddrno
+insert @tmp(gno,cno,straddrno)
+select '2',cno,straddrno from @tmp
+group by straddrno,cno
 
 select 
 straddr+'噸數統計' title
@@ -102,7 +110,7 @@ straddr+'噸數統計' title
 ,'$'+dbo.getComma(total2,0) total2
 ,'$'+dbo.getComma(total3,0) total3
 ,* from @tmp
-order by straddrno,gno,trandate
+order by cno,straddrno,gno,trandate
 ;
 -------------------------------------------------------------------------------------------------
 z_tran_jr3:--z_tran_jr3
@@ -118,12 +126,10 @@ declare @t_eaddr nvarchar(20) = case when '#non'=[11] then char(255) else [11] e
 declare @tmp table(
 	rr int,
 	gno nvarchar(1),
-	mon nvarchar(20),
+	vccano nvarchar(50),
+	noa nvarchar(20),
 	custno nvarchar(100),
-	comp nvarchar(200),
-	addr nvarchar(max),
-	serial nvarchar(50),
-	tel nvarchar(50),
+	comp nvarchar(100),
 	datea nvarchar(10),
 	uccno nvarchar(50),
 	weight float,
@@ -133,43 +139,197 @@ declare @tmp table(
 	po nvarchar(50),
 	straddrno nvarchar(50),
 	straddr nvarchar(50),
-	tax float,
-	total float
+	qhref nvarchar(max),
+	tax float,--5%稅
+	total float,--請款金額
+	cno nvarchar(50),
+	acomp nvarchar(50)
 )
-
+--tran
 insert @tmp
-select ROW_NUMBER()over(partition by custno,b.trandate,b.carno,po,straddrno order by b.trandate),'0',replace(LEFT(a.datea,6),'/','-')+'月份',b.custno,c.comp,c.addr_comp
-,c.serial,c.tel,b.trandate,b.uccno,b.weight2,b.price,b.total,b.carno,b.po
-,b.straddrno,b.straddr,0,0
+select '1','0',isnull(departure,''),a.noa,custno,c.nick,b.trandate,uccno,b.weight,price,b.total,b.carno,po,b.straddrno,b.saddr,'tran_jr?noa=$noa?'+a.accy,0,0,b.cno,b.acomp
 from view_tran a left join view_trans b on a.noa=b.noa
 left join cust c on b.custno=c.noa
 where (a.datea between @t_bdate and @t_edate)
 and (custno between @t_bcustno and @t_ecustno)
 
-update @tmp
-set gno=case when rr=1 then 0 else 1 end
+--custchg(聯單加項)
+insert @tmp
+select '2','0',a.vccano,b.noa,a.custno,a.comp,b.datea,plusitem,1,plusmoney,plusmoney,a.carno,a.po,a.straddrno,a.straddr,'custchg?noa=$noa?',0,0,b.cno,b.acomp
+from @tmp a left join custchg b on a.po=b.po
+where len(isnull(b.po,''))!=0 and len(b.plusitem)!=0
 
-insert @tmp(gno,custno,money,tax,total)
-select '2',custno,SUM(money),SUM(money)*0.05,SUM(money)*0.05+SUM(money)
-from @tmp
-group by custno
+--custchg(聯單減項)
+insert @tmp
+select '3','0',a.vccano,b.noa,a.custno,a.comp,b.datea,minusitem,1,minusmoney,minusmoney,a.carno,a.po,a.straddrno,a.straddr,'custchg?noa=$noa?',0,0,b.cno,b.acomp
+from @tmp a left join custchg b on a.po=b.po
+where len(isnull(b.po,''))!=0 and len(b.minusitem)!=0
+and a.rr='1'
 
-insert @tmp(gno,custno)
-select '3',custno
+update a
+set rr=rx
+from(select ROW_NUMBER()over(partition by vccano,custno,noa order by datea)rx,rr from @tmp)a
+
+insert @tmp(gno,rr,vccano,datea,custno,money,tax,total,cno)
+select '1',9997,vccano,CHAR(255),custno,SUM(money),SUM(money)*0.05,SUM(money)*0.05+SUM(money),cno
 from @tmp
-group by custno
+group by vccano,custno,cno,acomp
+
+insert @tmp(gno,rr,datea,vccano,custno,cno)
+select '2',9998,CHAR(255),vccano,custno,cno
+from @tmp
+group by vccano,custno,cno
 
 select 
-dbo.getComma(weight,2)weight
-,dbo.getComma(price,0)price
-,dbo.getComma(money,0)money
-,dbo.getComma(tax,0)tax
-,'$'+dbo.getComma(total,0)total
-,* from @tmp
-order by custno,gno,datea
+@t_bdate+' ~ '+@t_edate date
+,case when rr!=1 then '' else noa end noa
+,dbo.getComma(weight,2)weight
+,dbo.getComma(price,-1)price
+,dbo.getComma(money,-1)money
+,dbo.getComma(tax,2)tax
+,dbo.getComma(total,0)total
+,* from @tmp a
+order by cno,custno,vccano,datea,rr
 ;
 -----------------------------------------------------------------------------------------------------
 z_tran_jr4:--z_tran_jr4
+declare @t_bdate nvarchar(20) = case when '#non'=[2] then '' else [2] end
+declare @t_edate nvarchar(20) = case when '#non'=[3] then char(255) else [3] end
+declare @t_bcustno nvarchar(20) = case when '#non'=[6] then '' else [6] end
+declare @t_ecustno nvarchar(20) = case when '#non'=[7] then char(255) else [7] end
+
+declare @tmp table(
+	gno varchar(1),
+	cno nvarchar(50),
+	vccadate nvarchar(10),
+	vccano nvarchar(50),
+	noa nvarchar(50),
+	custno nvarchar(50),
+	trandate nvarchar(10),
+	straddrno nvarchar(50),
+	straddr nvarchar(100),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	weight float,
+	po nvarchar(50),
+	price float,
+	total float,
+	worker nvarchar(50)
+)
+--明細
+insert @tmp 
+select '9',isnull(a.cno,''),a.datea,isnull(a.departure,''),a.noa,isnull(a.addrno,''),b.trandate,b.straddrno,b.straddr,b.uccno,b.product,b.weight2,b.po,b.price,b.total,a.worker
+from view_tran a left join view_trans b on a.noa=b.noa
+where (a.datea between @t_bdate and @t_edate)
+and (a.addrno between @t_bcustno and @t_ecustno)
+
+--加項
+insert @tmp(gno,cno,vccano,noa,custno,straddrno,straddr,trandate,uccno,product,po,total)
+select '8',b.cno,a.vccano,a.noa,b.custno,straddrno,straddr,char(255),b.plusitemno,b.plusitem,b.po,b.plusmoney
+from @tmp a left join custchg b on a.po=b.po
+where len(a.po)!=0 and b.plusmoney!=0
+group by a.vccano,a.noa,b.custno,a.straddrno,a.straddr,b.plusitemno,b.plusitem,b.po,b.plusmoney,b.cno
+
+--減項
+insert @tmp(gno,cno,vccano,noa,custno,straddrno,straddr,trandate,uccno,product,po,total)
+select '8',b.cno,a.vccano,a.noa,b.custno,straddrno,straddr,char(255),b.minusitemno,b.minusitem,b.po,b.minusmoney
+from @tmp a left join custchg b on a.po=b.po
+where len(a.po)!=0 and b.minusmoney!=0
+group by a.vccano,a.noa,b.custno,a.straddrno,a.straddr,b.minusitemno,b.minusitem,b.po,b.minusmoney,b.cno
+
+declare @result table(
+	gno varchar(1),
+	rr int,
+	page int,
+	cno nvarchar(50),
+	acomp nvarchar(100),
+	vccadate nvarchar(10),
+	vccano nvarchar(50),
+	noa nvarchar(50),
+	worker nvarchar(50),
+	tel nvarchar(50),
+	fax nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(50),
+	serial nvarchar(50),
+	ctel nvarchar(50),--客戶電話
+	cfax nvarchar(50),--客戶傳真
+	addr nvarchar(max),--客戶地址
+	trandate nvarchar(10),
+	straddrno nvarchar(50),
+	straddr nvarchar(100),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	weight float,
+	po nvarchar(50),
+	price float,
+	total float,
+	tax float,
+	money float
+)
+insert @result(gno,cno,vccadate,vccano,noa,worker,custno,trandate,straddrno,straddr,uccno,product,weight,po,price,total)
+select '1',cno,vccadate,vccano,noa,worker,custno,trandate,straddrno,straddr,uccno,product,sum(weight),po,price,sum(total)
+from @tmp
+where gno='9'
+group by cno,vccadate,vccano,noa,worker,custno,trandate,straddrno,straddr,uccno,product,po,price
+
+insert @result(gno,cno,vccano,noa,custno,trandate,straddrno,straddr,uccno,product,weight,po,price,total)
+select '2',cno,vccano,noa,custno,trandate,straddrno,straddr,uccno,product,weight,po,price,total
+from @tmp
+where gno='8'
+
+update a
+set rr=rx
+from (select ROW_NUMBER()over(partition by vccano,noa order by noa,trandate,straddrno)rx,rr from @result)a
+
+--插入換頁
+declare @pageline float=16
+
+--更新頁數
+update a
+set page=ceiling(cast(rr as float)/@pageline)
+from (select page,rr from @result)a
+
+insert @result(gno,page,cno,acomp,vccadate,vccano,noa,worker,tel,fax,custno,comp,serial,ctel,cfax,addr)
+select '0',page,a.cno,b.acomp,vccadate,vccano,a.noa,a.worker,b.tel,b.fax,a.custno,c.comp,c.serial,c.tel,c.fax,c.addr_comp
+from @result a left join acomp b on a.cno=b.noa
+left join cust c on a.custno=c.noa
+where gno='1'
+group by page,a.cno,b.acomp,vccadate,vccano,a.noa,a.worker,b.tel,b.fax,a.custno,c.comp,c.serial,c.tel,c.fax,c.addr_comp
+
+insert @result(gno,rr,page,cno,vccano,noa,custno,weight,total)
+select '3',9997,page,cno,vccano,noa,custno,SUM(weight),SUM(total)
+from @result
+where gno='1' or gno='2'
+group by page,vccano,noa,custno,cno
+
+update @result
+set tax=b.tax,money=b.money
+from @result a outer apply(select SUM(total)*0.05 tax,SUM(total)*0.05+SUM(total)money,MAX(page)page from @result where gno='3' and vccano=a.vccano and noa=a.noa)b
+where a.gno='3' and a.page=b.page
+
+update @result
+set tel=b.tel,fax=b.fax
+from @result a left join acomp b on a.cno=b.noa
+where gno='3'
+
+insert @result(gno,rr,page,cno,vccano,noa,custno)
+select '4','9998',page,cno,vccano,noa,custno
+from @result
+group by page,cno,vccano,noa,custno
+
+select
+'中華民國'+LEFT(vccadate,3)+'年'+SUBSTRING(vccadate,5,2)+'月' year
+,case when trandate=CHAR(255) then '-' else trandate end trandate
+,dbo.getComma(weight,3) weight
+,dbo.getComma(price,-1)price
+,dbo.getComma(tax,0)tax
+,dbo.getComma(total,0)total
+,dbo.getComma(money,0)money
+,* from @result order by vccano,noa,page,rr
+;
+------------------------------------------------------------------------------------------------------
+z_tran_jr5:--z_tran_jr5
 declare @t_mon nvarchar(10)
 declare @t_bdriverno nvarchar(20)
 declare @t_edriverno nvarchar(20)
@@ -292,7 +452,7 @@ left(@t_mon,3)+'年'+right(@t_mon,2)+'月份薪資表' title
 ,* from @result order by driverno,driver,rr,gno
 ;
 ------------------------------------------------------------------------------------
-z_tran_jr5:--z_tran_jr5
+z_tran_jr6:--z_tran_jr6
 declare @t_bdate nvarchar(20)
 declare @t_edate nvarchar(20) 
 declare @t_bdriverno nvarchar(20)
