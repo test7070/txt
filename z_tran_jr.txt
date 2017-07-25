@@ -83,14 +83,13 @@ declare @tmp table(
 	acomp nvarchar(100)
 )
 insert @tmp (gno,rr,straddrno,straddr,trandate,carno,weight,weight2,price,total,po,uccno,custno,comp,cno,acomp)
-select '0',ROW_NUMBER()over(partition by straddrno order by b.trandate),straddrno,straddr,b.trandate,b.carno,b.weight,weight2,price,b.total,po,uccno,custno,nick,a.cno,a.acomp
+select '0',ROW_NUMBER()over(partition by straddrno order by b.trandate),straddrno,straddr,b.trandate,b.carno,b.weight,weight2,price2,price3,po,uccno,custno,nick,a.cno,a.acomp
 from view_trans b
 left join view_tran a on a.noa=b.noa
 where (b.trandate between @t_bdate and @t_edate)
 and (custno between @t_bcustno and @t_ecustno)
 and (b.carno between @t_bcarno and @t_ecarno)
 and (straddrno between @t_baddr and @t_eaddr)
-
 
 insert @tmp(gno,cno,straddrno,weight2,total,total2,total3)
 select '1',cno,straddrno,SUM(weight2),SUM(total),SUM(total*0.05),SUM(total+total*0.05)
@@ -218,7 +217,7 @@ declare @tmp table(
 )
 --明細
 insert @tmp 
-select '9',isnull(a.cno,''),a.datea,isnull(a.departure,''),a.noa,isnull(a.addrno,''),b.trandate,b.straddrno,b.straddr,b.uccno,b.product,b.weight2,b.po,b.price,b.total,a.worker
+select '9',isnull(a.cno,''),a.datea,isnull(a.departure,''),a.noa,isnull(a.addrno,''),b.trandate,b.straddrno,b.straddr,b.uccno,b.product,b.weight,b.po,b.price,b.total,a.worker
 from view_tran a left join view_trans b on a.noa=b.noa
 where (a.datea between @t_bdate and @t_edate)
 and (a.addrno between @t_bcustno and @t_ecustno)
@@ -338,118 +337,194 @@ set @t_mon = case when '#non'=[12] then '' else [12] end
 set @t_bdriverno = case when '#non'=[13] then '' else [13] end
 set @t_edriverno = case when '#non'=[14] then char(255) else [14] end	
 	
-declare @tmp table(
+SET QUOTED_IDENTIFIER OFF
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #tmp
+END
+
+
+create table #tmp(
 	gno nvarchar(1),
 	rr int,
+	datea nvarchar(10),
 	carno nvarchar(50),
 	driverno nvarchar(50),
 	driver nvarchar(50),
-	con nvarchar(max),
+	custno nvarchar(50),
+	comp nvarchar(50),
+	weight float,
+	straddrno nvarchar(50),
+	straddr nvarchar(100),
+	product nvarchar(100),
 	mon nvarchar(10),
+	price float,
 	money float,
 	memo nvarchar(max),
 	counta float
 )
-insert @tmp(gno,driverno,driver)
-select '9',driverno,driver
-from carsals
-where noa='104/10'
-
 --應領tran
-insert @tmp
-select '1','1',b.carno,b.driverno,b.driver,b.carno+'總收入',@t_mon,sum(b.total),'',''
+insert #tmp
+select '1','1',b.trandate,b.carno,b.driverno,b.driver,b.custno,c.nick,sum(b.weight2),b.straddrno,max(b.straddr),'',@t_mon,b.price,sum(b.total),'',''
 from view_trans b left join  view_tran a on a.noa=b.noa
+left join cust c on b.custno=c.noa
 where (LEFT(b.datea,6)=@t_mon)
-and exists(select * from @tmp where b.driverno=driverno)
-and isnull(b.driverno,'')!=''
-group by b.carno,b.driverno,b.driver,b.carno
-
-update @tmp
-set counta=b.carno
-from @tmp a
-outer apply(select count(carno)carno,driverno from @tmp where a.driverno=driverno group by driverno)b
+and (b.driverno between @t_bdriverno and @t_edriverno) 
+group by b.trandate,b.carno,b.driverno,b.driver,b.custno,c.nick,b.straddrno,b.price
 
 --應領carchg
-insert @tmp
-select '1','2',carno,driverno,driver,plusitem,@t_mon,sum(plusmoney),'',''
+insert #tmp
+select '1','2',a.datea,carno,driverno,driver,custno,b.nick,'','','',plusitem,@t_mon,'',plusmoney,'',''
 from carchg a
+left join cust b on a.custno=b.noa
 where (LEFT(datea,6)=@t_mon)
-and exists(select * from @tmp where a.driverno=driverno and gno='9')
-group by carno,driverno,driver,plusitem
+and (driverno between @t_bdriverno and @t_edriverno) 
+and plusmoney!=0
 
 --應扣carchg
-insert @tmp
-select '2','3',carno,driverno,driver,minusitem,@t_mon,sum(minusmoney),'',''
+insert #tmp
+select '2','3',a.datea,carno,driverno,driver,custno,b.nick,'','','',minusitem,@t_mon,'',minusmoney,'',''
 from carchg a
+left join cust b on a.custno=b.noa
 where (LEFT(datea,6)=@t_mon)
-and exists(select * from @tmp where a.driverno=driverno and gno='9')
-group by carno,driverno,driver,minusitem
+and (driverno between @t_bdriverno and @t_edriverno) 
+and minusmoney!=0
 
---應扣carborr
-insert @tmp
-select '2','4',carno,driverno,driver,'私人借支('+datea+')',b.mon,b.money,dbo.getcomma(a.driverpay,0)+' '+cast(mount as nvarchar(50))+'期',''
+--應扣carborr(有車牌)
+insert #tmp
+select '2','4','第 '+cast(CAST(noq as float) as nvarchar(10))+' 期',carno,driverno,driver,'','','','','',typea+'('+datea+')',b.mon,'',b.money,dbo.getcomma(a.driverpay,0)+' 分'+cast(mount as nvarchar(50))+'期',''
 from carborr a left join carborrs b on a.noa=b.noa
-where b.mon=@t_mon
-and exists(select * from @tmp where a.driverno=driverno and gno='9')
+where b.mon=@t_mon and isnull(carno,'')!=''
+and (driverno between @t_bdriverno and @t_edriverno) 
+
+--應扣carborr(無車牌)
+insert #tmp
+select '3','4','第 '+cast(CAST(noq as float) as nvarchar(10))+' 期',carno,driverno,driver,'','','','','',typea+'('+datea+')',b.mon,'',b.money,dbo.getcomma(a.driverpay,0)+' 分'+cast(mount as nvarchar(50))+'期',''
+from carborr a left join carborrs b on a.noa=b.noa
+where b.mon=@t_mon and isnull(carno,'')=''
+and (driverno between @t_bdriverno and @t_edriverno) 
 
 update a
 set rr=rx
-from (select ROW_NUMBER()over(partition by gno,driverno,driver order by rr,gno)rx,rr from @tmp where ISNULL(money,0)!=0)a
+from (select ROW_NUMBER()over(partition by driverno,carno,gno order by datea)rx,rr from #tmp)a
 
-delete @tmp where gno='9' or ISNULL(money,0)=0
-
-declare @result table(
-	gno nvarchar(1),
+create table #result(
+	gno nvarchar(2),
 	rr int,
-	counta nvarchar(50),
+	carno nvarchar(50),
 	driverno nvarchar(50),
 	driver nvarchar(50),
-	con1 nvarchar(max),
-	mon1 nvarchar(10),
-	money1 float,
-	memo1 nvarchar(max),
-	con2 nvarchar(max),
-	mon2 nvarchar(10),
-	money2 float,
-	memo2 nvarchar(max)
+	comp nvarchar(100),
+	weight float,
+	straddr nvarchar(100),
+	price float,
+	money1 float,--應收金額
+	con1 nvarchar(max),--應收內容
+	con2 nvarchar(max),--應扣內容
+	datea nvarchar(10),--應收日期
+	datea1 nvarchar(10),--應扣日期
+	money2 float,--應扣金額
+	memo nvarchar(max),
+	mon1 nvarchar(10),--應收月份
+	mon2 nvarchar(10),--應付月份
+	counta nvarchar(20)
 )
-insert @result(gno,rr,driverno,driver)
-select '0',rr,driverno,driver
-from @tmp a
-group by rr,driverno,driver
+insert #result(gno,rr,carno,driverno,driver)
+select '9',rr,carno,driverno,driver
+from #tmp
+group by rr,carno,driverno,driver
+order by driverno,driver,carno,rr
 
-update @result
-set con1=b.con,mon1=b.mon,money1=b.money,memo1=b.memo,counta=b.counta
-from @result a left join @tmp b on a.driverno=b.driverno and a.driver=b.driver and a.rr=b.rr
-where b.gno='1'
+--依車牌分明細
+insert #result(gno,carno,driverno,driver)
+select '01',carno,driverno,driver
+from #result
+group by carno,driverno,driver
 
-update @result
-set con2=b.con,mon2=b.mon,money2=b.money,memo2=b.memo
-from @result a left join @tmp b on a.driverno=b.driverno and a.driver=b.driver and a.rr=b.rr
-where b.gno='2'
+insert #result(gno,rr,datea,carno,driverno,driver,comp,weight,straddr,price,money1)
+select '02',a.rr,b.datea,a.carno,a.driverno,a.driver,b.comp,b.weight,b.straddr,b.price,b.money
+from #result a left join #tmp b on a.driverno=b.driverno and a.carno=b.carno
+where a.rr=b.rr and b.gno='1'
 
-insert @result(gno,rr,driverno,driver,money1,money2)
-select '1',9998,driverno,driver,sum(money1),sum(money2)
-from @result
-group by driverno,driver
+delete #result where gno='9'
 
-insert @result(gno,rr,driverno,driver,money1)
-select '2',9998,driverno,driver,sum(money1-money2)
-from @result
-where gno='1'
-group by driverno,driver
+update #result
+set con2=b.product,datea1=b.datea,money2=b.money,memo=b.memo
+from #result a 
+outer apply(select * from #tmp where driverno=a.driverno and carno=a.carno and a.rr=a.rr and gno='2') b
+where a.rr=b.rr
 
-insert @result(gno,rr,driverno,driver)
-select '3',9998,driverno,driver
-from @result
+insert #result(gno,rr,carno,driverno,driver,money1,money2)
+select '03',MAX(rr)+1,carno,driverno,driver,SUM(isnull(money1,0)),SUM(isnull(money2,0))
+from #result
+where gno='02'
+group by carno,driverno,driver
+
+insert #result(gno,rr,carno,driverno,driver,money1)
+select '04',rr+1,carno,driverno,driver,isnull(money1,0)-isnull(money2,0)
+from #result
+where gno='03'
+
+insert #result(gno,rr,carno,driverno,driver)
+select '05',rr+1,carno,driverno,driver
+from #result
+where gno='04'
+
+--車主總計
+insert #result(gno,rr,carno,driverno,driver,counta)
+select '06',9995,CHAR(255),driverno,driver,cast(b.counta as nvarchar(10))+'台車收入金額'
+from #result a
+outer apply (select count(*)counta from #result where driverno=a.driverno and gno='04' group by driverno)b
+where gno='01'
+group by driverno,driver,b.counta,b.counta
+
+insert #result(gno,rr,carno,driverno,driver,con1,money1)
+select '07',9996,CHAR(255),driverno,driver,carno+'總收入',money1
+from #result
+where gno='04'
+
+update #result
+set con2=b.product,datea1=b.datea,money2=b.money,memo=b.memo
+from #result a 
+outer apply(select * from #tmp where driverno=a.driverno and carno=a.carno and a.rr=a.rr and gno='3') b
+where a.rr=b.rr
+
+insert #result(gno,rr,carno,driverno,driver,money1,money2)
+select '08',MAX(rr)+1,carno,driverno,driver,SUM(isnull(money1,0)),SUM(isnull(money2,0))
+from #result
+where gno='07'
+group by carno,driverno,driver
+
+insert #result(gno,rr,carno,driverno,driver,money1)
+select '09',rr+1,carno,driverno,driver,isnull(money1,0)-isnull(money2,0)
+from #result
+where gno='08'
+
+insert #result(gno,rr,carno,driverno,driver)
+select '10',9999,CHAR(255),driverno,driver
+from #result
 group by driverno,driver
 
 select 
-left(@t_mon,3)+'年'+right(@t_mon,2)+'月份薪資表' title
+left(@t_mon,3)+'年'+RIGHT(@t_mon,2)+'月薪資表' title
+,dbo.getComma(price,-1) price
 ,dbo.getComma(money1,0) money1
 ,dbo.getComma(money2,0) money2
-,counta+'台車收入金額' counta
-,* from @result order by driverno,driver,rr,gno
+,* from #result
+order by driverno,driver,carno,rr
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #result
+END
 ;
 ------------------------------------------------------------------------------------
 z_tran_jr6:--z_tran_jr6
@@ -463,164 +538,237 @@ set @t_edate = case when '#non'=[3] then char(255) else [3] end
 set @t_bdriverno = case when '#non'=[13] then '' else [13] end
 set @t_edriverno = case when '#non'=[14] then char(255) else [14] end
 
-declare @tmp table(
-	gno nvarchar(2),
+
+SET QUOTED_IDENTIFIER OFF
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(1),
 	rr int,
+	page int,
+	recno int,
 	carno nvarchar(50),
-	driverno nvarchar(50),
-	driver nvarchar(50),
 	datea nvarchar(10),
-	custno nvarchar(50),
 	nick nvarchar(50),
-	straddrno nvarchar(50),
 	straddr nvarchar(50),
-	productno nvarchar(50),
 	product nvarchar(100),
-	mount float,
+	weight float,
 	unit nvarchar(50),
 	price float,
 	total float,
+	item nvarchar(100),--修繕其他支出
+	datea1 nvarchar(10),
+	total2 float,
 	memo nvarchar(max),
+	datea2 nvarchar(10),--助手加班
+	[day] nvarchar(10),
+	total3 float
+)
+--tran 明細
+insert #tmp(gno,carno,datea,nick,straddr,product,weight,unit,price,total)
+select '1',carno,right(b.trandate,5),b.nick,b.straddr,b.product,sum(b.weight),b.unit,b.price,sum(b.total)
+from  view_trans b
+where (b.trandate between @t_bdate and @t_edate)
+group by cno,b.carno,b.trandate,b.nick,b.straddr,b.product,b.unit,b.price
+
+--司機加項明細
+insert #tmp(gno,carno,datea,product,total,memo)
+select '1',carno,right(datea,5),plusitem,sum(plusmoney),memo
+from carchg
+where (datea between @t_bdate and @t_edate)
+and ISNULL(plusmoney,0)!=0 
+group by cno,carno,datea,plusitem,memo
+
+--司機減項明細
+insert #tmp(gno,carno,item,datea1,total2,memo)
+select '2',carno,minusitem,right(datea,5),sum(minusmoney),memo
+from carchg
+where (datea between @t_bdate and @t_edate)
+and ISNULL(minusmoney,0)!=0 and (minusitem not like '%助手%') and (minusitem not like '%加班%')
+group by cno,carno,datea,minusitem,memo
+
+--修繕明細
+insert #tmp(gno,carno,item,datea1,total2,memo)
+select '2',carno,b.product,mon,sum(total),b.memo
+from fixas b left join fixa a on a.noa=b.noa
+where (a.mon between LEFT(@t_bdate,6) and LEFT(@t_edate,6))
+group by cno,carno,b.product,mon,b.memo
+
+--請助手明細
+insert #tmp(gno,carno,day,datea2,total3)
+select '3',carno,minusitem,right(datea,5),sum(minusmoney)
+from carchg
+where (datea between @t_bdate and @t_edate)
+and ISNULL(minusmoney,0)!=0 and (minusitem like '%助手%')
+group by cno,carno,datea,minusitem
+
+
+--加班明細
+insert #tmp(gno,recno,carno,day,datea2,total3)
+select '4','1',carno,minusitem,right(datea,5),sum(minusmoney)
+from carchg
+where (datea between @t_bdate and @t_edate)
+and ISNULL(minusmoney,0)!=0 and (minusitem like '%加班%')
+group by cno,carno,datea,minusitem
+
+update a
+set rr=rx
+from (select ROW_NUMBER()over(partition by carno,gno order by gno,datea)rx,rr from #tmp)a
+
+update #tmp
+set rr=rr+23
+where gno='4'
+
+declare @pageline int =45
+
+update a
+set page=ceiling(cast(rr as float)/@pageline)
+from (select rr,page from #tmp)a
+
+
+create table #result(
+	gno nvarchar(1),
+	rr int,
+	page int,
+	carno nvarchar(50),
+	datea nvarchar(10),
+	nick nvarchar(50),
+	straddr nvarchar(50),
+	product nvarchar(100),
+	weight float,
+	unit nvarchar(50),
+	price float,
+	total float,
+	item nvarchar(100),--修繕其他
+	datea1 nvarchar(10),
+	total2 float,
+	memo nvarchar(max),
+	datea2 nvarchar(10),--助手加班
+	[day] nvarchar(50),
+	total3 float,
 	tax float,
 	btotal float,
-	ttotal float,
-	stotal float,
-	ntotal float,
-	nbtotal float,
-	nttotal float
+	ttotal float,--實領金額
+	ntotal float,--司機實領
+	nbtotal float,--司機負擔
+	nttotal float,--司機累計負擔
+	comp nvarchar(50),
+	driver nvarchar(50)
 )
-insert @tmp
-select '02','1',carno,driverno,driver,trandate,custno,nick,straddrno,straddr,uccno,product,sum(weight),unit,price,sum(total),memo,'','','','','','',''
-from view_trans
-where (trandate between @t_bdate and @t_edate)
-and (driverno between @t_bdriverno and @t_edriverno)
-group by carno,driverno,driver,trandate,custno,nick,straddrno,straddr,uccno,product,unit,price,memo
+insert #result(gno,rr,carno,datea,nick,straddr,product,weight,unit,price,total)
+select '2',rr,carno,datea,nick,straddr,product,weight,unit,price,total
+from #tmp
+where gno='1'
 
---carchg 
-insert @tmp(gno,rr,carno,driverno,driver,datea,product,total,memo)
-select '02','2',a.carno,a.driverno,a.driver,b.datea,plusitem,sum(plusmoney),b.memo
-from @tmp a left join carchg b on a.carno=b.carno and a.driverno=b.driverno and a.driver=b.driver
-where (b.datea between @t_bdate and @t_edate)
-group by a.carno,a.driverno,a.driver,b.datea,plusitem,b.memo
+declare @carno nvarchar(50) 
+declare @rr int
+declare @page int
 
-insert @tmp(gno,carno,driverno,driver)
-select '01',carno,driverno,driver
-from @tmp
-group by carno,driverno,driver
+update a
+set page=ceiling(cast(rr as float)/@pageline)
+from (select rr,page from #result)a
 
-insert @tmp(gno,carno,driverno,driver,total)
-select '03',carno,driverno,driver,sum(total)
-from @tmp
-group by carno,driverno,driver
+--補空白行
+declare cursor_table cursor for 
+select carno,MAX(rr),MAX(page) from #result group by carno
+open cursor_table 
+fetch next from cursor_table 
+into @carno,@rr,@page
+while(@@FETCH_STATUS <> -1) 
+begin
+	while ((@rr)%@pageline>0)
+	begin
+		set @rr=@rr+1
+		insert #result(gno,carno,page,rr)
+		select '2',@carno,@page,@rr
+	end
 
-insert @tmp(gno,carno,driverno,driver)
-select '04',carno,driverno,driver
-from @tmp
-group by carno,driverno,driver
+	fetch next from cursor_table 
+	into @carno,@rr,@page
+end 
+close cursor_table 
+deallocate cursor_table
 
---carchg 
-insert @tmp(gno,rr,carno,driverno,driver,datea,product,stotal,memo)
-select '06','1',a.carno,a.driverno,a.driver,b.datea,minusitem,sum(minusmoney),b.memo
-from @tmp a left join carchg b on a.carno=b.carno and a.driverno=b.driverno and a.driver=b.driver
-where (b.datea between @t_bdate and @t_edate)
-and (minusitem not like '%助手%' and minusitem not like '%加班%') and gno='01'
-group by a.carno,a.driverno,a.driver,b.datea,minusitem,b.memo
 
-insert @tmp(gno,carno,driverno,driver,stotal)
-select '06',carno,driverno,driver,sum(stotal)
-from @tmp
-where gno='05'
-group by carno,driverno,driver
+update #result
+set item=b.item,datea1=b.datea1,total2=b.total2,memo=b.memo
+from #result a left join #tmp b on a.rr=b.rr and a.page=b.page and a.carno=b.carno
+where b.gno='2'
 
-insert @tmp(gno,carno,driverno,driver)
-select '07',carno,driverno,driver
-from @tmp
-group by carno,driverno,driver
+update #result
+set datea2=b.datea2,day=b.day,total3=b.total3
+from #result a left join #tmp b on a.rr=b.rr and a.page=b.page and a.carno=b.carno
+where b.gno='3'
 
---carchg 
-insert @tmp(gno,rr,carno,driverno,driver,datea,product,stotal,memo)
-select '08','1',a.carno,a.driverno,a.driver,b.datea,minusitem,sum(minusmoney),b.memo
-from @tmp a left join carchg b on a.carno=b.carno and a.driverno=b.driverno and a.driver=b.driver
-where (b.datea between @t_bdate and @t_edate)
-and (minusitem like '%助手%') and gno='01'
-group by a.carno,a.driverno,a.driver,b.datea,minusitem,b.memo
+update #result
+set datea2=b.datea2,day=b.day,total3=b.total3
+from #result a left join #tmp b on a.rr=b.rr and a.page=b.page and a.carno=b.carno
+where b.gno='4'
 
-insert @tmp(gno,carno,driverno,driver,stotal)
-select '09',carno,driverno,driver,sum(stotal)
-from @tmp
-where gno='08'
-group by carno,driverno,driver
+update #result
+set total3=b.total3
+from #result a 
+outer apply (select SUM(total3)total3 from #tmp where gno='3' and carno=a.carno and a.page=page)b
+where rr='22'
 
-insert @tmp(gno,carno,driverno,driver)
-select '10',carno,driverno,driver
-from @tmp
-group by carno,driverno,driver
+--插入表頭
+insert #result(gno,rr,page,carno)
+select '1','0',page,carno
+from #result
+group by page,carno
 
---carchg 
-insert @tmp(gno,rr,carno,driverno,driver,datea,product,stotal,memo)
-select '11','1',a.carno,a.driverno,a.driver,b.datea,minusitem,sum(minusmoney),b.memo
-from @tmp a left join carchg b on a.carno=b.carno and a.driverno=b.driverno and a.driver=b.driver
-where (b.datea between @t_bdate and @t_edate)
-and (minusitem like '%加班%')
-group by a.carno,a.driverno,a.driver,b.datea,minusitem,b.memo
+--插入助手小計跟加班明細字
+update #result
+set gno=case rr when 22 then 3 when 23 then 4 else gno end
 
-insert @tmp(gno,carno,driverno,driver,stotal)
-select '12',carno,driverno,driver,sum(stotal)
-from @tmp
-where gno='11'
-group by carno,driverno,driver
+--插入收入小計+3%稅金
+insert #result(gno,rr,page,carno,total,total2,total3,tax)
+select '5',9996,page,carno,SUM(isnull(total,0)),SUM(isnull(total2,0)),SUM(isnull(total3,0)),SUM(isnull(total,0))*0.03
+from #tmp
+where gno!='3'
+group by page,carno
 
---insert @tmp(gno,rr,carno,driverno,driver,btotal)
---select '00','1',a.carno,a.driverno,a.driver,SUM(isnull(b.total,0))
---from @tmp a left join view_tre b on a.carno=b.carno and a.driverno=b.driverno and a.driver=b.driver
---where isnull(rc2ano,'')='' and left(mon,3)='103' and gno='01'
---group by a.carno,a.driverno,a.driver
+insert #result(gno,rr,page,carno,total,total2,btotal,ttotal)
+select '6',9997,page,carno,total+tax,b.total2,'',total+tax-b.total2
+from #result a
+outer apply(select SUM(isnull(total3,0))+SUM(isnull(total2,0))total2 from #tmp where carno=a.carno and page=a.page)b
+where gno='5'
 
-insert @tmp(gno,carno,driverno,driver,tax,total)
-select '13',carno,driverno,driver,sum(total)*0.03,sum(total)+sum(total)*0.03
-from @tmp
-where gno='03'
-group by carno,driverno,driver
+insert #result(gno,rr,page,carno,driver,total,btotal,ttotal,ntotal,nbtotal,nttotal)
+select '7',9998,page,a.carno,d.namea,ttotal*0.6,btotal*0.6,ttotal*0.6-btotal*0.6,ttotal*0.4,btotal*0.4,ttotal*0.4-btotal*0.4
+from #result a
+left join car2 c on a.carno=c.noa
+left join driver d on c.driverno=d.noa
+where gno='6'
 
-update @tmp
-set stotal=b.stotal
-from @tmp a 
-outer apply(select SUM(stotal)stotal from @tmp where (gno='06' or gno='09' or gno='12') and a.carno=carno and a.driverno=driverno and a.driver=driver)b
-where gno='13'
-
-update @tmp
-set stotal=b.btotal
-from @tmp a 
-outer apply(select SUM(btotal)btotal from @tmp where (gno='00') and a.carno=carno and a.driverno=driverno and a.driver=driver)b
-where gno='13'
-
-update @tmp
-set ttotal=isnull(total,0)+isnull(btotal,0)
-where gno='13'
-
-insert @tmp(gno,carno,driverno,driver,total,btotal,ttotal,ntotal,nbtotal,nttotal)
-select '14',carno,driverno,driver,total*0.6,btotal*0.6,(total+btotal)*0.6,total*0.4,btotal*0.4,(total+btotal)*0.4
-from @tmp
-where gno='13'
-
-insert @tmp(gno,carno,driverno,driver)
-select '15',carno,driverno,driver
-from @tmp
-group by carno,driverno,driver
+insert #result(gno,rr,page,carno)
+select '8',9999,page,carno
+from #result
+group by page,carno
 
 select 
-carno+'(收入+支出)報表' title
-,dbo.getComma(mount,-1) mount
-,dbo.getComma(price,0) price
-,dbo.getComma(total,0) total
-,dbo.getComma(tax,0) tax
-,dbo.getComma(btotal,0)btotal
-,dbo.getComma(ttotal,0)ttotal
-,dbo.getComma(stotal,0)stotal
-,dbo.getComma(stotal,0)stotal
-,dbo.getComma(ntotal,0) ntotal
-,dbo.getComma(nbtotal,0)nbtotal
-,dbo.getComma(nttotal,0)nttotal
-,* 
-from @tmp order by carno,driverno,gno,datea,rr
+carno+' 收入支出表' title
+,'東元' comp
+,dbo.getcomma(total,0)total,dbo.getcomma(total2,0)total2
+,dbo.getcomma(total3,0)total3,dbo.getcomma(ttotal,0)ttotal
+,dbo.getcomma(btotal,0)btotal,dbo.getcomma(ntotal,0)ntotal
+,dbo.getcomma(nttotal,0)nttotal,dbo.getcomma(nbtotal,0)nbtotal
+,* from #result
+order by carno,rr
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #result
+END
 ;
