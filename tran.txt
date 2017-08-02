@@ -370,4 +370,139 @@ tranvccejr2tranjr:--tranvccejr2tranjr txt/tran.txt
 	IF OBJECT_ID('tempdb..#tmpa')is not null
 	BEGIN
 		drop table #tmpa
-	END
+	END;
+----------------------------------------------------------------------------------------------------
+tranpaybjr:--tranpaybjr
+SET QUOTED_IDENTIFIER OFF
+declare @t_key nvarchar(10) = [1]
+declare @t_mon nvarchar(10) = [2]
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #tmp
+END
+
+
+	create table #tmp(
+		gno nvarchar(1),
+		rr int,
+		cno nvarchar(50),
+		acomp nvarchar(100),
+		po nvarchar(50),
+		tggno nvarchar(50),
+		tgg nvarchar(100),
+		mount float,
+		price float,
+		total float	
+	)
+	insert #tmp
+	select '2','',isnull(a.cno,''),isnull(a.acomp,''),b.po,b.straddrno,c.comp,sum(b.weight2),isnull(b.price2,0),sum(b.price3)
+	from view_tran a left join view_trans b on a.noa=b.noa
+	left join tgg c on b.straddrno=c.noa
+	where left(a.datea,6)=@t_mon
+	group by a.cno,a.acomp,b.po,b.straddrno,c.comp,b.price2
+	
+	update a
+	set rr=rx
+	from (select ROW_NUMBER()over(partition by cno,tggno order by cno,tggno)rx,rr from #tmp where gno='2')a
+	
+	insert #tmp(gno,cno,acomp,tggno,tgg)
+	select '1',cno,acomp,tggno,tgg
+	from #tmp
+	group by cno,acomp,tggno,tgg
+	
+	update a
+	set rr=rx
+	from (select ROW_NUMBER()over(partition by gno order by cno,tggno) rx,rr from #tmp where gno='1')a
+	
+	--是否以立帳
+	create table #result(
+		noa nvarchar(50),
+		cno nvarchar(50),
+		tggno nvarchar(50),
+		mon nvarchar(10)
+	)
+	insert #result
+	select noa,cno,tggno,mon
+	from payb 
+	where vccno='tran' and mon=@t_mon
+	
+	declare @datea nvarchar(10)=cast(cast(left(@t_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@t_mon,2)+'/15'
+	set @datea= CONVERT(varchar(100),DATEADD(MONTH, DATEDIFF(MONTH, -1, @datea ),-1),111)
+	set @datea=cast(cast(left(@datea,4) as int)-1911 as nvarchar(10))+'/'+RIGHT(@datea,5)
+	declare @paybnoa nvarchar(50)=(select MAX(noa) from payb where datea=@datea)
+	
+declare @n int
+	
+declare @tmp table(
+	msg nvarchar(max)
+)
+
+Begin Transaction [Trans_Name]
+begin try
+	
+	--新增
+	if(isnull(@paybnoa,'')='')
+	begin
+		insert payb(noa,cno,acomp,datea,mon,tggno,comp,bdate,edate,vccno)
+		select  @t_key+replace(@datea,'/','')+REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
+			   ,cno,acomp,@datea,LEFT(@datea,6),tggno,tgg,LEFT(@datea,6)+'/01',@datea,'tran'
+		from #tmp a
+		where gno='1' and not exists(select cno,tggno from #result)
+		order by cno,tggno
+		
+		insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
+		select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
+			   ,b.po,'費用',b.mount,b.price,b.price,b.price,'tran'
+		from payb a left join #tmp b on a.cno=b.cno and a.tggno=b.tggno
+		where b.gno='2'	and not exists(select cno,tggno from #result)	
+	end
+	else
+	begin
+		insert payb(noa,cno,acomp,datea,mon,tggno,comp,bdate,edate,vccno)
+		select @t_key+cast(cast(right(@paybnoa,10) as int)+rr as nvarchar(50))
+			   ,cno,acomp,@datea,LEFT(@datea,6),tggno,tgg,LEFT(@datea,6)+'/01',@datea,'tran'
+		from #tmp
+		where gno='1' and not exists(select cno,tggno from #result)
+		order by cno,tggno
+		
+		insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
+		select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
+			   ,b.po,'費用',b.mount,b.price,b.price,b.price,'tran'
+		from payb a left join #tmp b on a.cno=b.cno and a.tggno=b.tggno
+		where b.gno='2'	and not exists(select cno,tggno from #result)
+	end
+	
+	--更新
+	delete paybs where noa in(select noa from #result)
+	insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
+	select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
+			,b.po,'費用',b.mount,b.price,b.price,b.price,'tran'
+	from payb a left join #tmp b on a.cno=b.cno and a.tggno=b.tggno
+	where b.gno='2'	and exists(select cno,tggno from #result)
+	
+	set @n=(select count(*) from #tmp where gno='1')
+	
+Commit Transaction [Trans_Name]
+insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+end try
+begin catch
+	Rollback Transaction [Trans_Name]
+	insert into @tmp(msg)values(error_message())
+end catch
+
+select * from @tmp
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #result
+END
+;
