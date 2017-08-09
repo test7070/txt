@@ -1,0 +1,133 @@
+﻿z_genz1:--z_genz1
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+set @accy='[1]'
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	rr int,
+	productno nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(10),
+	datea nvarchar(10),
+	no nvarchar(50),
+	typea nvarchar(50),
+	mount float,--生產數量
+	smount float,--銷售數量
+	total float,--結存數量
+	mon nvarchar(10)
+)
+insert @tmp
+select '0','',a.invent,b.product,b.unit,a.date,a.no
+,case a.item+1 when 1 then '上期結轉' when 2 then '生產' when 3 then '銷售' when 4 then '退回' when 5 then '折讓' when 6 then '報廢' end
+,a.inmount,a.outmount+a.losemount,a.blance,left(a.date,2)
+from acc12 a left join ucca b on a.invent=b.noa
+where a.item!='4'
+
+update a
+set rr=rx,gno='0'
+from (select ROW_NUMBER()over(partition by productno order by datea,gno)rx,rr,gno from @tmp)a
+
+update a
+set total=b.total
+from @tmp a
+outer apply(select sum(total)total from @tmp where rr<=a.rr and a.productno=productno)b
+
+insert @tmp(gno,productno,mon,mount,smount)
+select '1',productno,mon,SUM(mount),SUM(smount)
+from @tmp
+group by productno,mon
+
+insert @tmp(gno,productno,mon,mount,smount,total)
+select '2',productno,CHAR(255),SUM(mount),SUM(smount),b.total
+from @tmp a
+outer apply(select top 1 total from @tmp where a.productno=productno order by rr desc)b
+where gno='0'
+group by productno,b.total
+
+select 
+productno pno,@accy [year],right(datea,5) datea
+,dbo.getComma(mount,0)mount
+,dbo.getComma(smount,0)smount
+,dbo.getComma(total,0)total
+,* from @tmp
+order by productno,mon,gno,rr
+;
+---------------------------------------------------------------------------------
+z_genz2:--z_genz2
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+set @accy='[1]'
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	rr int,
+	productno nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(10),
+	datea nvarchar(10),
+	product1 nvarchar(150),
+	mount float,
+	price float,
+	total float,
+	mon nvarchar(10)
+)
+
+insert #tmp
+select '0','',a.noa,a.product,a.unit,b.datea,a.noa+' '+a.product,b.mount,c.price,b.mount*c.price,@accy+'/01'
+from ucca a left join view_gets b on a.noa=b.productno
+left join view_get c on c.noa=b.noa
+where (a.noa between @t_bpno and @t_epno)
+and(b.datea between @t_bdate and @t_edate)
+
+update a
+set rr=rx,gno='0'
+from (select ROW_NUMBER()over(partition by productno order by datea,gno)rx,rr,gno from #tmp)a
+
+update a
+set total=b.total
+from #tmp a
+outer apply(select sum(total)total from #tmp where rr<=a.rr and a.productno=productno)b
+
+insert #tmp(gno,productno,mon,mount,total)
+select '1',productno,mon,SUM(mount),SUM(total)
+from #tmp
+group by productno,mon
+
+insert #tmp(gno,productno,mon,mount,total)
+select '2',productno,CHAR(255),SUM(mount),SUM(total)
+from #tmp
+where gno='0'
+group by productno
+
+select 
+productno pno,@accy [year],right(datea,5) datea
+,* from #tmp
+order by productno,mon,gno,rr
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
