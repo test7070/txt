@@ -6,7 +6,8 @@ declare @t_ecustno nvarchar(20) = case when '#non'=[7] then char(255) else [7] e
 declare @t_bcarno nvarchar(20) = case when '#non'=[8] then '' else [8] end
 declare @t_ecarno nvarchar(20) = case when '#non'=[9] then char(255) else [9] end
 declare @t_baddr nvarchar(20) = case when '#non'=[10] then '' else [10] end 
-declare @t_eaddr nvarchar(20) = case when '#non'=[11] then char(255) else [11] end 
+declare @t_eaddr nvarchar(20) = case when '#non'=[11] then char(255) else [11] end
+declare @t_chk1 nvarchar(20) = case when '#non'=[16] then '' else [16] end
 
 declare @tmp table(
 	rr int,
@@ -39,6 +40,7 @@ where (time1 between @t_bdate and @t_edate)
 and (custno between @t_bcustno and @t_ecustno)
 and (carno between @t_bcarno and @t_ecarno)
 and (addrno between @t_baddr and @t_eaddr)
+and(len(@t_chk1)='' or chk1=@t_chk1)
 
 update @tmp
 set gno=case when rr=1 then 0 else 1 end
@@ -61,7 +63,7 @@ dbo.getComma(weight,2) weight
 ,dbo.getComma(price1,3) price1
 ,dbo.getComma(price2,3) price2
 ,* from @tmp
-order by cno,datea,custno,carno,uccno,straddrno
+order by cno,datea,custno,carno,po,uccno,straddrno 
 ;
 ------------------------------------------------------------------------------------------------
 z_tran_jr2:--z_tran_jr2
@@ -102,6 +104,13 @@ where (b.trandate between @t_bdate and @t_edate)
 and (custno between @t_bcustno and @t_ecustno)
 and (b.carno between @t_bcarno and @t_ecarno)
 and (straddrno between @t_baddr and @t_eaddr)
+
+insert @tmp (gno,rr,straddrno,straddr,trandate,weight,uccno,price,total,cno,acomp)
+select '0','9996',tggno,comp,a.datea,b.mount,b.acc2,b.price,b.total,a.cno,a.comp
+from payb a left join paybs b on a.noa=b.noa
+where(a.datea between @t_bdate and @t_edate)
+and (tggno between @t_baddr and @t_eaddr)
+and isnull(b.rc2no,'')=''
 
 insert @tmp(gno,cno,straddrno,weight2,total,total2,total3)
 select '1',cno,straddrno,SUM(weight2),SUM(total),SUM(total*0.05),SUM(total+total*0.05)
@@ -349,6 +358,7 @@ group by page,cno,vccano,noa,custno
 select
 '中華民國'+LEFT(vccadate,3)+'年'+SUBSTRING(vccadate,5,2)+'月' year
 ,case when trandate=CHAR(255) then '-' else trandate end trandate
+,case when cno='A' then '東元運輸股份有限公司 帳戶:159 00100652 9' else '台元運輸股份有限公司 帳戶:159 00100842 4' end account						
 ,dbo.getComma(weight,3) weight
 ,dbo.getComma(price,-1)price
 ,dbo.getComma(tax,0)tax
@@ -398,44 +408,39 @@ create table #tmp(
 )
 --應領tran
 insert #tmp
-select '1','1',b.trandate,b.carno,b.driverno,b.driver,b.custno,c.nick,sum(b.weight2),b.straddrno,max(b.straddr),'',@t_mon,b.price,sum(b.total),'',''
+select '1','1',b.trandate,b.carno,b.driverno,b.driver,b.custno,c.nick,sum(b.weight),b.straddrno,max(b.straddr),'',@t_mon,b.mount3,sum(b.total2),'',''
 from view_trans b left join  view_tran a on a.noa=b.noa
 left join cust c on b.custno=c.noa
 where (LEFT(b.datea,6)=@t_mon)
 and (b.driverno between @t_bdriverno and @t_edriverno) 
-group by b.trandate,b.carno,b.driverno,b.driver,b.custno,c.nick,b.straddrno,b.price
+group by b.trandate,b.carno,b.driverno,b.driver,b.custno,c.nick,b.straddrno,b.mount3
 
 --應領carchg
 insert #tmp
-select '1','2',a.datea,carno,driverno,driver,custno,b.nick,'','','',plusitem,@t_mon,'',plusmoney,'',''
+select '1','2',a.datea,carno,driverno,driver,custno,b.nick,'','',plusitem,plusitem,@t_mon,'',plusmoney,'',''
 from carchg a
 left join cust b on a.custno=b.noa
 where (LEFT(datea,6)=@t_mon)
 and (driverno between @t_bdriverno and @t_edriverno) 
 and plusmoney!=0
 
+--應扣carchg 
+insert #tmp 
+select '2','3',a.datea,carno,driverno,driver,custno,b.nick,'','','',minusitem,@t_mon,'',minusmoney,'','' 
+from carchg a 
+left join cust b on a.custno=b.noa 
+where (LEFT(datea,6)=@t_mon) 
+and (driverno between @t_bdriverno and @t_edriverno) 
+and minusmoney!=0 and minusitem not like '%借支%'
+
 --應扣carchg
 insert #tmp
-select '2','3',a.datea,carno,driverno,driver,custno,b.nick,'','','',minusitem,@t_mon,'',minusmoney,'',''
+select '3','4',a.datea,carno,driverno,driver,custno,b.nick,'','','',minusitem,@t_mon,'',minusmoney,'',''
 from carchg a
 left join cust b on a.custno=b.noa
 where (LEFT(datea,6)=@t_mon)
 and (driverno between @t_bdriverno and @t_edriverno) 
-and minusmoney!=0
-
---應扣carborr(有車牌)
-insert #tmp
-select '2','4','第 '+cast(CAST(noq as float) as nvarchar(10))+' 期',carno,driverno,driver,'','','','','',typea+'('+datea+')',b.mon,'',b.money,dbo.getcomma(a.driverpay,0)+' 分'+cast(mount as nvarchar(50))+'期',''
-from carborr a left join carborrs b on a.noa=b.noa
-where b.mon=@t_mon and isnull(carno,'')!=''
-and (driverno between @t_bdriverno and @t_edriverno) 
-
---應扣carborr(無車牌)
-insert #tmp
-select '3','4','第 '+cast(CAST(noq as float) as nvarchar(10))+' 期',carno,driverno,driver,'','','','','',typea+'('+datea+')',b.mon,'',b.money,dbo.getcomma(a.driverpay,0)+' 分'+cast(mount as nvarchar(50))+'期',''
-from carborr a left join carborrs b on a.noa=b.noa
-where b.mon=@t_mon and isnull(carno,'')=''
-and (driverno between @t_bdriverno and @t_edriverno) 
+and minusmoney!=0 and minusitem like '%借支%'
 
 update a
 set rr=rx
@@ -602,10 +607,10 @@ create table #tmp(
 )
 --tran 明細
 insert #tmp(gno,carno,datea,nick,straddr,product,weight,unit,price,total)
-select '1',carno,right(b.trandate,5),b.nick,b.straddr,b.product,sum(b.weight),b.unit,b.price,sum(b.total)
+select '1',carno,right(b.trandate,5),b.nick,b.straddr,b.product,sum(b.weight),b.unit,b.mount3,sum(b.total2)
 from  view_trans b
 where (b.trandate between @t_bdate and @t_edate)
-group by cno,b.carno,b.trandate,b.nick,b.straddr,b.product,b.unit,b.price
+group by cno,b.carno,b.trandate,b.nick,b.straddr,b.product,b.unit,b.mount3
 
 --司機加項明細
 insert #tmp(gno,carno,datea,product,total,memo)
@@ -632,19 +637,18 @@ group by cno,carno,b.product,mon,b.memo
 
 --請助手明細
 insert #tmp(gno,carno,day,datea2,total3)
-select '3',carno,minusitem,right(datea,5),sum(minusmoney)
+select '3',carno,replace(right(minusitem,3),')',''),right(datea,5),sum(minusmoney)
 from carchg
 where (datea between @t_bdate and @t_edate)
-and ISNULL(minusmoney,0)!=0 and (minusitem like '%助手%')
+and ISNULL(minusmoney,0)!=0 and (minusitemno='0017' or minusitem='0018')
 group by cno,carno,datea,minusitem
-
 
 --加班明細
 insert #tmp(gno,recno,carno,day,datea2,total3)
 select '4','1',carno,minusitem,right(datea,5),sum(minusmoney)
 from carchg
 where (datea between @t_bdate and @t_edate)
-and ISNULL(minusmoney,0)!=0 and (minusitem like '%加班%')
+and ISNULL(minusmoney,0)!=0 and (minusitemno='0022')
 group by cno,carno,datea,minusitem
 
 update a
@@ -691,6 +695,13 @@ create table #result(
 	comp nvarchar(50),
 	driver nvarchar(50)
 )
+
+insert #result(gno,rr,carno)
+select '9',max(rr),carno
+from #tmp
+where gno='1' or gno='2' 
+group by carno
+
 insert #result(gno,rr,carno,datea,nick,straddr,product,weight,unit,price,total)
 select '2',rr,carno,datea,nick,straddr,product,weight,unit,price,total
 from #tmp
@@ -725,6 +736,7 @@ end
 close cursor_table 
 deallocate cursor_table
 
+delete #result where gno='9'
 
 update #result
 set item=b.item,datea1=b.datea1,total2=b.total2,memo=b.memo
