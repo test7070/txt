@@ -255,7 +255,7 @@ declare @tmp table(
 insert @tmp
 select '1',0,0,typea,noa,product,isnull(beginmount,0),isnull(costa,0),isnull(costb,0),isnull(costc,0),0,isnull(costd,0),isnull(costd/nullif(inmount,0),0)
 from ucca
-where inmount>0 and (typea='製成品' or typea='在製品' or typea='下腳品' or typea='加工')
+where inmount>0 and (drcr='2' or drcr='3' or drcr='6' or drcr='7')
 and (noa between @t_bpno and @t_epno)
 
 --頁數
@@ -381,18 +381,465 @@ dbo.getComma(mount,2)mount
 ,* from @tmp
 order by page,idno
 ;
+---------------------------------------------------------------------------------------------------
+z_genz8:--z_genz8
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
 
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
 
+create table #tmp(
+	gno nvarchar(1),
+	idno int,
+	page int,
+	drcr nvarchar(10),
+	pro_invent nvarchar(50),
+	product1 nvarchar(100),
+	beginmount float,
+	beginmoney float,
+	inmount float,
+	inmoney float,
+	salemount float,
+	salecost2 float,
+	lastmount float,
+	lastmoney float,
+	price float,--平均單價
+	invent nvarchar(50),
+	product2 nvarchar(100),
+	tax_mount float,--應耗率
+	sum_mount float,--耗用數量
+	sum_money float,--耗用金額
+	prod_mount float,--生產數量
+	use_mount float,--應耗量
+	zmount float,
+	ousemoney float--超耗金額
+)
+insert #tmp (gno,drcr,pro_invent,product1,beginmount,beginmoney,inmount,inmoney,salemount,salecost2,lastmoney,lastmount,price,invent,product2,tax_mount)
+select '9',a.drcr,a.noa,a.product,a.beginmount,a.beginmoney,a.inmount,a.inmoney,a.salemount,a.salecost2
+,a.beginmoney+a.inmoney-a.salecost,a.beginmount+a.inmount+a.outmount,ROUND((a.beginmoney+a.inmoney)/(a.beginmount+a.inmount),0)
+,b.invent,b.product,b.tax_mount
+from ucca a left join uccab b on a.noa=b.pr_invent
+left join ucca c on c.noa=b.invent
+where (a.drcr='4' or a.drcr='5') and b.item='1'
+and (a.noa between @t_bpno and @t_epno)
 
+--領料成本
+update #tmp
+set sum_mount=b.mount,sum_money=b.money,prod_mount=b.prod_mount,zmount=b.zmount,ousemoney=round(a.price*b.zmount,0),use_mount=ROUND(a.tax_mount*b.prod_mount,2)
+from #tmp a
+outer apply(select sum(mount)mount,sum(money)money,sum(prod_mount)prod_mount,sum(mount-prod_mount)zmount from acc13 where item='4' and a.pro_invent=pr_invent and a.invent=invent and drcr=a.drcr)b
 
+--銷售原料成本
+update #tmp
+set sum_mount=b.mount,sum_money=b.money
+from #tmp a
+outer apply(select sum(mount)mount,sum(money)money from acc13 where item='5' and a.pro_invent=pr_invent and a.invent=invent and drcr=a.drcr)b
 
+insert #tmp(gno,drcr,pro_invent,product1,beginmoney,beginmount)
+select '0',drcr,pro_invent,product1,beginmoney,beginmount
+from #tmp
+group by drcr,pro_invent,product1,beginmoney,beginmount
 
+insert #tmp(gno,drcr,pro_invent,product1,inmoney,inmount)
+select '1',drcr,pro_invent,product1,inmoney,inmount
+from #tmp
+where gno='9'
+group by drcr,pro_invent,product1,inmoney,inmount
 
+insert #tmp(gno,drcr,pro_invent,product1,invent,product2,prod_mount,sum_mount,sum_money,tax_mount,use_mount,price,ousemoney)
+select '2',drcr,pro_invent,product1,invent,product2,prod_mount,sum_mount,sum_money,tax_mount,use_mount,price,ousemoney
+from #tmp
+where gno='9'
 
+insert #tmp(gno,drcr,pro_invent,product1,sum_mount,sum_money,ousemoney)
+select '3',drcr,pro_invent,product1,sum(sum_mount),sum(sum_money),sum(ousemoney)
+from #tmp
+where gno='2'
+group by drcr,pro_invent,product1
 
+insert #tmp(gno,drcr,pro_invent,product1,salemount,salecost2)
+select '4',drcr,pro_invent,product1,salemount,salecost2
+from #tmp
+where gno='9'
+group by drcr,pro_invent,product1,salemount,salecost2
+
+insert #tmp(gno,drcr,pro_invent,product1,lastmount,lastmoney)
+select '5',drcr,pro_invent,product1,lastmount,lastmoney
+from #tmp
+where gno='9'
+group by drcr,pro_invent,product1,lastmount,lastmoney
+
+delete #tmp where gno='9'
+
+update a
+set idno=rx
+from(select ROW_NUMBER()over(partition by gno order by drcr,pro_invent)rx,idno from #tmp)a
+
+--頁數
+declare @pageline int = 4
+declare @tggno nvarchar(50) 
+declare @idno int
+declare @page int
+
+update a
+set idno=xidno,page=ceiling(cast(xidno as float)/@pageline)
+from (select idno,page,row_number()over(partition by gno order by drcr,pro_invent) xidno from #tmp)a
+
+insert #tmp(gno,drcr,page,pro_invent,sum_mount,sum_money,ousemoney)
+select '6',drcr,page,CHAR(255),sum(sum_mount),sum(sum_money),sum(ousemoney)
+from #tmp
+where gno='3'
+group by drcr,page
+
+insert #tmp(gno,drcr,page,pro_invent,sum_mount,sum_money,ousemoney)
+select '7',drcr,max(page),CHAR(255),sum(sum_mount),sum(sum_money),sum(ousemoney)
+from #tmp
+where gno='3'
+group by drcr
+
+insert #tmp(gno,drcr,page,pro_invent)
+select '8',drcr,page,CHAR(255)
+from #tmp
+group by drcr,page
+
+select 
+dbo.getComma(beginmount,2)beginmount
+,dbo.getComma(inmount,2)inmount
+,dbo.getComma(salemount,2)salemount
+,dbo.getComma(sum_mount,2)sum_mount
+,dbo.getComma(lastmount,2)lastmount
+,dbo.getComma(use_mount,2)use_mount
+,dbo.getComma(price,2)price
+,dbo.getComma(ousemoney,2)ousemoney
+,dbo.getComma(tax_mount,4)tax_mount
+,dbo.getComma(beginmoney,1)beginmoney
+,dbo.getComma(sum_money,1)sum_money
+,dbo.getComma(salecost2,2)salecost2
+,dbo.getComma(lastmount,2)lastmoney
+,@accy+'年12月31日' title
+,* from #tmp
+order by drcr,pro_invent,gno
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
+--------------------------------------------------------------------------------------------------
+z_genz9:--z_genz9
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+declare @t_datea nvarchar(20)
+declare @t_gro nvarchar(20)
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+set @t_datea = case when '#non'=[6] then '' else [6] end
+set @t_gro = case when '#non'=[10] then '' else [10] end
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+
+create table #tmp (
+	gno nvarchar(1),
+	idno int,
+	page int,
+	drcr nvarchar(2),
+	noa nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(20),
+	beginmount float,
+	beginmoney float,
+	inmount float,
+	inmoney float,
+	outmount float,
+	salecost float,
+	salemoney float,
+	per float,
+	lastmount float,
+	price float,
+	lastmoney float,
+	costa float,
+	coatb float,
+	costc float
+)
+insert #tmp
+select '0',0,0,drcr,noa,product,unit,beginmount,beginmoney,inmount,inmoney,outmount,salecost,salemoney,(salemoney-salecost)/nullif(salemoney,0)*100,lastmount,lastmoney/nullif(lastmount,0),lastmoney,costa,costb,costc
+from ucca
+where (drcr=2 or drcr>=6)
+and (noa between @t_bpno and @t_epno)
+
+create table #tmpa(
+	pno nvarchar(100),
+	inmount float,
+	inmoney float
+)
+insert #tmpa
+select a.noa,sum(a.mount-b.mount),SUM(a.money-b.total)
+from rc2as a left join vccbs b on a.noa=b.invono
+where a.datea<=@t_datea and left(a.datea,3)=@accy
+group by a.noa
+
+declare @cost nvarchar(10)=(select 成本計價 from zacc where LEFT(結帳日期,3)=@accy group by 成本計價)
+
+if @cost!='4'
+begin
+	update #tmp
+	set inmount=a.inmount-b.inmount,inmoney=a.costa-b.inmoney+a.coatb*(a.inmount-b.inmount)/a.inmount+a.costc*(a.inmount-b.inmount)/a.inmount 
+	from #tmp a left join #tmpa b on a.noa=b.pno
+	where drcr='2'
+
+	update #tmp
+	set inmount=b.inmount
+	from #tmp a left join #tmpa b on a.noa=b.pno
+	where drcr!='2'
+end
+
+delete #tmp where isnull(beginmount,0)=0 and  isnull(inmount,0)=0 and isnull(outmount,0)=0 and  isnull(lastmount,0)=0
+
+--頁數
+declare @pageline int = 26
+declare @tggno nvarchar(50) 
+declare @idno int
+declare @page int
+
+update a
+set idno=xidno,page=ceiling(cast(xidno as float)/@pageline)
+from (select idno,page,row_number()over(partition by gno order by drcr,noa) xidno from #tmp)a
+
+insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,salemoney,per,lastmount,lastmoney)
+select '1',page,CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(salemoney),sum(per),sum(lastmount),sum(lastmoney)
+from #tmp
+group by page
+
+insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,salemoney,per,lastmount,lastmoney)
+select '2',MAX(page),CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(salemoney),sum(per),sum(lastmount),sum(lastmoney)
+from #tmp
+where gno='0'
+
+insert #tmp(gno,page)
+select '3',page
+from #tmp
+group by page
+
+select
+@accy+'年01月01日起至'+@accy+'年'+left(right(@t_datea,5),2)+'月'+right(@t_datea,2)+'日' title
+,case when @t_gro='毛利率' then cast(dbo.getComma(per,2) as nvarchar(50))+'%' else '' end per
+,case when @t_gro='毛利率' then '毛利率' else '' end pern
+,dbo.getComma(beginmount,2)beginmount
+,dbo.getComma(beginmoney,2)beginmoney
+,dbo.getComma(inmount,2)inmount
+,dbo.getComma(inmoney,2)inmoney
+,dbo.getComma(outmount,2)outmount
+,dbo.getComma(salecost,2)salecost
+,dbo.getComma(salemoney,2)salemoney
+,dbo.getComma(lastmount,2)lastmount
+,dbo.getComma(price,2)price
+,dbo.getComma(lastmoney,2)lastmoney
+,*
+from #tmp
+order by page,gno,noa
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+;
+--------------------------------------------------------------------------------------------------
+z_genz10:--z_genz10
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp (
+	gno nvarchar(1),
+	idno int,
+	page int,
+	noa nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(20),
+	beginmount float,
+	beginmoney float,
+	inmount float,
+	inmoney float,
+	outmount float,
+	salecost float,
+	lastmount float,
+	price float,
+	lastmoney float,
+)
+insert #tmp
+select '0',0,0,noa,product,unit,beginmount,beginmoney,inmount,inmoney,beginmount+inmount-lastmount,beginmoney+inmoney-lastmoney,lastmount,lastmoney/nullif(lastmount,0),lastmoney
+from ucca
+where (drcr=3)
+and (noa between @t_bpno and @t_epno)
+
+delete #tmp where isnull(beginmount,0)=0 and  isnull(inmount,0)=0 and isnull(outmount,0)=0 and  isnull(lastmount,0)=0
+
+--頁數
+declare @pageline int = 26
+declare @tggno nvarchar(50) 
+declare @idno int
+declare @page int
+
+update a
+set idno=xidno,page=ceiling(cast(xidno as float)/@pageline)
+from (select idno,page,row_number()over(partition by gno order by noa) xidno from #tmp)a
+
+insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,lastmount,lastmoney)
+select '1',page,CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
+from #tmp
+group by page
+
+insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,lastmount,lastmoney)
+select '2',MAX(page),CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
+from #tmp
+where gno='0'
+
+insert #tmp(gno,page)
+select '3',page
+from #tmp
+group by page
+
+select
+@accy+'年01月01日起至'+@accy+'年12月31日' title
+,dbo.getComma(beginmount,2)beginmount
+,dbo.getComma(beginmoney,2)beginmoney
+,dbo.getComma(inmount,2)inmount
+,dbo.getComma(inmoney,2)inmoney
+,dbo.getComma(outmount,2)outmount
+,dbo.getComma(salecost,2)salecost
+,dbo.getComma(lastmount,2)lastmount
+,dbo.getComma(price,2)price
+,dbo.getComma(lastmoney,2)lastmoney
+,*
+from #tmp
+order by page,gno,noa
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
+--------------------------------------------------------------------------------------------------
+z_genz11:--z_genz11
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+declare @t_saleprice nvarchar(20)
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+set @t_saleprice = case when '#non'=[9] then '' else [9] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp (
+	gno nvarchar(1),
+	idno int,
+	page int,
+	noa nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(20),
+	beginmount float,
+	beginmoney float,
+	inmount float,
+	inmoney float,
+	usemount float,
+	usemoney float,
+	outmount float,
+	salecost float,
+	lastmount float,
+	price float,
+	lastmoney float,
+)
+insert #tmp
+select '0',0,0,noa,product,unit,beginmount,beginmoney,inmount,inmoney,beginmount+inmount-lastmount,beginmoney+inmoney-lastmoney,outmount,case when @t_saleprice='銷售金額' then salemoney else salecost end,lastmount,lastmoney/nullif(lastmount,0),lastmoney
+from ucca
+where (drcr=4 or drcr=5)
+and (noa between @t_bpno and @t_epno)
+
+delete #tmp where isnull(beginmount,0)=0 and  isnull(inmount,0)=0 and isnull(outmount,0)=0 and  isnull(lastmount,0)=0
+
+--頁數
+declare @pageline int = 26
+declare @tggno nvarchar(50) 
+declare @idno int
+declare @page int
+
+update a
+set idno=xidno,page=ceiling(cast(xidno as float)/@pageline)
+from (select idno,page,row_number()over(partition by gno order by noa) xidno from #tmp)a
+
+insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,lastmount,lastmoney)
+select '1',page,CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
+from #tmp
+group by page
+
+insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,lastmount,lastmoney)
+select '2',MAX(page),CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
+from #tmp
+where gno='0'
+
+insert #tmp(gno,page)
+select '3',page
+from #tmp
+group by page
+
+select
+@accy+'年01月01日起至'+@accy+'年12月31日' title
+,case when @t_saleprice='銷售金額' then '銷售金額' else '銷售成本' end salename
+,dbo.getComma(beginmount,2)beginmount
+,dbo.getComma(beginmoney,2)beginmoney
+,dbo.getComma(inmount,2)inmount
+,dbo.getComma(inmoney,2)inmoney
+,dbo.getComma(usemount,2)usemount
+,dbo.getComma(usemoney,2)usemoney
+,dbo.getComma(outmount,2)outmount
+,dbo.getComma(salecost,2)salecost
+,dbo.getComma(lastmount,2)lastmount
+,dbo.getComma(price,2)price
+,dbo.getComma(lastmoney,2)lastmoney
+,*
+from #tmp
+order by page,gno,noa
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
 
 --------------------------------------------------------------------------------------------------
-z_genz12:--z_genz12
+z_genz_bk12:--z_genz_bk12
 declare @t_mon nvarchar(20)= case when '#non'=[11] then '' else [11] end
 declare @tmp table(
 	gno nvarchar(1),
@@ -410,26 +857,27 @@ declare @tmp table(
 )
 insert @tmp
 select '0',b.noa,noq
-,case item when '01.期初存貨' then '買賣業' when '06.期初存料' then '製造業' when '28.勞務成本' then '其他業用' end
-,case item when '01.期初存貨' then LEFT(item ,2) when '02.本期進貨' then LEFT(item ,2) when '03.期末存貨' then LEFT(item ,2)
-when '進銷成本' then '09' when '06.期初存料' then LEFT(item ,2)+4 when '07.本期進料' then LEFT(item ,2)+4 when '08.期末存料' then LEFT(item ,2)+4
-when '直接原料' then '13' when '11.期初存料' then LEFT(item ,2)+3 when '12.本期進料' then  LEFT(item ,2)+3 when '13.期末存料' then  LEFT(item ,2)+3
-when '間接原料' then '17' when '16.直接人工' then LEFT(item ,2)+2 when '17.製造費用' then LEFT(item ,2)+2
-when '製造成本' then '20' when '18.期初在製品' then LEFT(item ,2)+3 when '19.期末在製品' then LEFT(item ,2)+3
-when '製成品成本' then '30' when '22.期初製成品' then LEFT(item ,2)+9 when '23.期末製成品' then LEFT(item ,2)+9
-when '26.外銷估列應收退稅或已收退稅款' then LEFT(item ,2)+7 when '27.產銷成本減項' then LEFT(item ,2)+13 when '產銷成本' then '50' when '營業成本' then '90' end
-,case item when '進銷成本' then '(一)' when '進銷成本' then '(一)' when '製造成本' then '(二)' when '製成品成本' then '(三)'
-when '產銷成本' then '(四)' when '28.勞務成本' then '(五)' when '29.修理成本' then '(六)' when '30.加工成本' then '(七)' when '31.其他營業成本' then '(八)' end
-,case item when '01.期初存貨' then LEFT(item ,2) when '02.本期進貨' then LEFT(item ,2) when '03.期末存貨' then LEFT(item ,2) when '04.加：其他' then LEFT(item ,2) when '05.減：其他' then LEFT(item ,2)
-when '直接原料' then 6 when '間接原料' then 7 when '16.直接人工' then 8 when '17.製造費用' then 9
-when '18.期初在製品' then LEFT(item ,2)-8 when '19.期末在製品' then LEFT(item ,2)-8 when '20.加：其他' then LEFT(item ,2)-8 when '21.減：其他' then LEFT(item ,2)-8
-when '22.期初製成品' then LEFT(item ,2)-8 when '23.期末製成品' then LEFT(item ,2)-8 when '24.加：其他' then LEFT(item ,2)-8 when '25.減：其他' then LEFT(item ,2)-8
-when '26.外銷估列應收退稅或已收退稅款' then LEFT(item ,2)-8 when '27.產銷成本減項' then LEFT(item ,2)-8 end 
-,case item when '進銷成本' then '進銷成本：(1+2-3+4-5)'
-when '直接原料' then '直接原料(1)+(2)-(3)+(4)-(5)' when '間接原料' then '間接原料(6)+(7)-(8)+(9)-(10)'
-when '17.製造費用' then '製造費用(附明細表)' when '製造成本' then '製造成本6+7+8+9'
-when '製成品成本' then '製成品成本(二)+10-11+12-13' when '產銷成本' then '產銷成本(三)+14-15+16-17-18-19'
-when '營業成本' then '營業成本(一)+(四)+(五)+(六)+(七)+(八)+(九)' else item end
+,case item when '01.期初存貨' then '買賣業' when '(1)期初存料' then '製造業' when '(五)勞務成本' then '其他業用' end
+,case item when '01.期初存貨' then '01' when '02.本期進貨' then '02' when '03.期末存貨' then '03' when '(一)進銷成本：(1+2-3+4-5)' then '09' 
+when '(1)期初存料' then '10' when '(2)本期進料' then '11' when '(3)期末存料' then '12' when '6.直接原料(1)+(2)-(3)+(4)-(5)' then '13' 
+when '(6)期初存料' then '14' when '(7)本期進料' then '15' when '(8)期末存料' then '16' when '7.間接原料(6)+(7)-(8)+(9)-(10)' then '17' 
+when '8.直接人工' then '18' when '9.製造費用(附明細表)' then '19' when '(二)製造成本6+7+8+9' then '20' 
+when '10.期初在製品' then '21' when '11.期末在製品' then '22' when '(三)製成品成本(二)+10-11+12-13' then '30'
+when '14.期初製成品' then '31' when '15.期末製成品' then '32'
+when '18.(26)外銷估列應收退稅或已收退稅款' then '33' when '19.(27)產銷成本減項' then '40' when '(四)產銷成本(三)+14-15+16-17-18-19' then '50'  
+when '營業成本(一)+(四)+(五)+(六)+(七)+(八)+(九)' then '90' end
+,case item when '進銷成本' then '(一)' when '(一)進銷成本：(1+2-3+4-5)' then left(item,3) 
+when '(二)製造成本6+7+8+9' then left(item,3) when '(三)製成品成本(二)+10-11+12-13' then left(item,3)
+when '(四)產銷成本(三)+14-15+16-17-18-19' then left(item,3) when '(五)勞務成本' then left(item,3)
+when '(六)修理成本' then left(item,3)  when '(七)加工成本' then left(item,3) when '(八)其他營業成本' then left(item,3) end
+,case item when '01.期初存貨' then replace(LEFT(item ,3),0,'') when '02.本期進貨' then replace(LEFT(item ,3),0,'') when '03.期末存貨' then replace(LEFT(item ,3),0,'') 
+when '04.加：其他' then replace(LEFT(item ,3),0,'') when '05.減：其他' then replace(LEFT(item ,3),0,'') 
+when '6.直接原料(1)+(2)-(3)+(4)-(5)' then LEFT(item ,2) when '7.間接原料(6)+(7)-(8)+(9)-(10)' then LEFT(item ,2)
+when '8.直接人工' then LEFT(item ,2) when '9.製造費用(附明細表)' then LEFT(item ,2)
+when '10.期初在製品' then LEFT(item ,3) when '11.期末在製品' then LEFT(item ,3) when '12.加：其他' then LEFT(item ,3) when '13.減：其他' then LEFT(item ,3) 
+when '14.期初製成品' then LEFT(item ,3) when '15.期末製成品' then LEFT(item ,3) when '16.加：其他' then LEFT(item ,3) when '17.減：其他' then LEFT(item ,3) 
+when '18.(26)外銷估列應收退稅或已收退稅款' then LEFT(item ,3) when '19.(27)產銷成本減項' then LEFT(item ,3) end 
+,item
 ,money1,money2,money3,cast(left(a.mon,3)+1911 as nvarchar(4))+'/'+right(a.mon,2)+'/01'
 from acosts b left join acost a on a.noa=b.noa
 where a.mon=@t_mon 
@@ -439,7 +887,7 @@ set gno='1'
 where item='營業成本(一)+(四)+(五)+(六)+(七)+(八)+(九)'
 
 update @tmp 
-set mon=CONVERT(varchar(100),DATEADD(day,-1,DATEADD(mm,DATEDIFF(mm, '',mon)+1, '')),111)
+set mon=case when mon='1911//01' then '' else CONVERT(varchar(100),DATEADD(day,-1,DATEADD(mm,DATEDIFF(mm, '',mon)+1, '')),111) end
 
 insert @tmp(gno,noa,noq)
 select '2',noa,CHAR(255)
@@ -447,8 +895,7 @@ from @tmp
 group by noa
 
 select
-'中華民國'+cast(LEFT(mon,4)-1911 as nvarchar(3))+'年'+replace(right(mon,5),'/','月')+'日' title,
-s3+'.' s3,
+case when mon='' then '中華民國 年 月 日' else '中華民國'+cast(LEFT(mon,4)-1911 as nvarchar(3))+'年'+replace(right(mon,5),'/','月')+'日' end title,
 REPLICATE('0',2-LEN(s1)) + RTRIM(CAST(s1 AS CHAR)) s1,
 dbo.getComma(money1,2)money1,
 dbo.getComma(money2,2)money2,
