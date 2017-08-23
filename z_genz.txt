@@ -230,6 +230,90 @@ BEGIN
 END
 ;
 -------------------------------------------------------------------------------------------------------
+z_genz4:--z_genz4
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+declare @t_aberrant nvarchar(20)
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+set @t_aberrant = case when '#non'=[7] then '' else [7] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	pno nvarchar(50),
+	product nvarchar(100),
+	unit nvarchar(10),
+	datea nvarchar(10),
+	memo nvarchar(max),
+	rcmount float,
+	rcprice float,
+	rcmoney float,
+	vcgmount float,
+	vcgcost float,
+	vcmoney float,
+	vcprice float,
+	lmount float,
+	lprice float,
+	lmoney float,
+	mon nvarchar(10)
+)
+insert #tmp
+select '0',a.pr_invent,b.product,b.unit,a.date
+,case a.item+1 when 1 then '上期結轉' when 2 then '進料' when 3 then '進料退出' when 4 then '進料折讓' when 5 then a.invent when 6 then '直接銷售' end
+,a.inmount,a.inmoney/a.inmount,a.inmoney,a.mount,a.money,a.salemoney,a.salemoney/a.mount,a.blance,a.blance_mon/a.blance,a.blance_mon,LEFT(a.date,2)
+from acc13 a left join ucca b on a.pr_invent=b.noa
+where (b.noa between @t_bpno and @t_epno)
+
+if(@t_aberrant='1')
+begin
+	delete #tmp where isnull(lmoney,0)>=0 or isnull(lmount,0)>=0
+end
+
+insert #tmp(gno,pno,mon,rcmount,rcmoney,vcgmount,vcgcost,vcmoney)
+select '1',pno,mon,SUM(rcmount),SUM(rcmoney),SUM(vcgmount),SUM(vcgcost),SUM(vcmoney)
+from #tmp
+group by pno,mon
+
+insert #tmp(gno,pno,mon,rcmount,rcmoney,vcgmount,vcgcost,vcmoney,lmount,lprice,lmoney)
+select '2',pno,CHAR(255),SUM(rcmount),SUM(rcmoney),SUM(vcgmount),SUM(vcgcost),SUM(vcmoney),SUM(lmount),SUM(lmoney)/SUM(lmount),SUM(lmoney)
+from #tmp
+where gno='0'
+group by pno
+
+insert #tmp(gno,pno,mon)
+select '3',pno,CHAR(255)
+from #tmp
+group by pno
+
+select 
+'中華民國'+@accy+'年' title
+,dbo.getComma(rcmount,2)rcmount
+,dbo.getComma(rcprice,2)rcprice
+,dbo.getComma(rcmoney,2)rcmoney
+,dbo.getComma(vcgmount,2)vcgmount
+,dbo.getComma(vcgcost,2)vcgcost
+,dbo.getComma(vcmoney,2)vcmoney
+,dbo.getComma(vcprice,2)vcprice
+,dbo.getComma(lmount,2)lmount
+,dbo.getComma(lprice,2)lprice
+,dbo.getComma(lmoney,2)lmoney
+,* from #tmp
+order by pno,mon,datea
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
+
+-------------------------------------------------------------------------------------------------------
 z_genz5:--z_genz5
 SET QUOTED_IDENTIFIER OFF
 declare @accy nvarchar(10)='[1]'
@@ -314,6 +398,79 @@ dbo.getComma(inmount,2)inmount
 ,@accy+'年12月31日' title
 ,* from @tmp
 order by typea,page,gno,idno
+;
+-----------------------------------------------------------------------------------------------
+z_genz6:--z_genz6
+declare @p_time float=0.05
+declare @tzacc nvarchar(10)=(select 製造人工 from zacc where LEFT(結帳日期,3)='106' group by 製造人工)
+
+declare @tmp table(
+	gno nvarchar(1),
+	idno int,
+	page int,
+	noa nvarchar(50),
+	product nvarchar(100),
+	mount float,--約當數量
+	unit nvarchar(20),
+	price float,--平均單價
+	vcmount float,--加權產值
+	per float,--分攤率
+	price1 float,--直接人工
+	price2 float,--製造費用
+	timea float,--時間
+	timea2 float,--投入時間
+	Outmount float,
+	inmount float,
+	salemoney float,
+	total float --總產值 
+)
+insert @tmp
+select '0',0,0,noa,product,inmount,unit,case when isnull(salemoney,0)=0 then price else round(SaleMoney/OutMount,2) end
+,case when isnull(salemoney,0)=0 then price else round(SaleMoney/OutMount,2) end*inmount,0,costb,costc
+,case when CHARINDEX('P',noa)>0 then @p_time else 0 end
+,case when CHARINDEX('P',noa)>0 then @p_time else 0 end*inmount
+,outmount,inmount,salemoney
+,case when outmount=inmount then salemoney else inmount*(case when salemoney=0 then price else round(salemoney/outmount,2)end) end
+from ucca
+where (drcr=2 or drcr=3  or drcr=6 or drcr=7)
+
+declare @tinmount float=(select SUM(inmount) from @tmp)--總產量
+declare @ttotal float=(select SUM(total) from @tmp)--總產值
+declare @tprice1 float=(select SUM(price1) from @tmp)--總直接人工
+declare @tprice2 float=(select SUM(price2) from @tmp)--總製造費用
+declare @ttimea2 float=(select SUM(timea2) from @tmp)--總投入時間
+
+update @tmp
+set per=case when @tzacc='2' then inmount/@tinmount else (price*inmount)/@ttotal end
+from @tmp
+
+--頁數
+declare @pageline int = 1
+declare @tggno nvarchar(50) 
+declare @idno int
+declare @page int
+
+update a
+set idno=xidno,page=ceiling(cast(xidno as float)/@pageline)
+from (select idno,page,row_number()over(partition by gno order by noa) xidno from @tmp)a
+
+insert @tmp(gno,page,mount,vcmount,per,price1,price2)
+select '1',page,sum(mount),sum(vcmount),sum(per),sum(price1),sum(price2)
+from @tmp
+group by page
+
+insert @tmp(gno,page,mount,vcmount,per,price1,price2)
+select '2',max(page),sum(mount),sum(vcmount),sum(per),sum(price1),sum(price2)
+from @tmp
+where gno='0'
+
+insert @tmp(gno,page)
+select '3',page
+from @tmp
+group by page
+
+select * from @tmp
+order by page,gno
 ;
 -----------------------------------------------------------------------------------------------
 z_genz7:--z_genz7
