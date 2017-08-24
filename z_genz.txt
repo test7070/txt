@@ -401,6 +401,13 @@ order by typea,page,gno,idno
 ;
 -----------------------------------------------------------------------------------------------
 z_genz6:--z_genz6
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @t_bpno nvarchar(20)
+declare @t_epno nvarchar(20)
+set @t_bpno = case when '#non'=[4] then '' else [4] end
+set @t_epno = case when '#non'=[5] then char(255) else [5] end
+
 declare @p_time float=0.05
 declare @tzacc nvarchar(10)=(select 製造人工 from zacc where LEFT(結帳日期,3)='106' group by 製造人工)
 
@@ -432,7 +439,8 @@ select '0',0,0,noa,product,inmount,unit,case when isnull(salemoney,0)=0 then pri
 ,outmount,inmount,salemoney
 ,case when outmount=inmount then salemoney else inmount*(case when salemoney=0 then price else round(salemoney/outmount,2)end) end
 from ucca
-where (drcr=2 or drcr=3  or drcr=6 or drcr=7)
+where (drcr=2 or drcr=3  or drcr=6 or drcr=7) and inmount>0
+and (noa between @t_bpno and @t_epno)
 
 declare @tinmount float=(select SUM(inmount) from @tmp)--總產量
 declare @ttotal float=(select SUM(total) from @tmp)--總產值
@@ -445,7 +453,7 @@ set per=case when @tzacc='2' then inmount/@tinmount else (price*inmount)/@ttotal
 from @tmp
 
 --頁數
-declare @pageline int = 1
+declare @pageline int = 26
 declare @tggno nvarchar(50) 
 declare @idno int
 declare @page int
@@ -459,6 +467,16 @@ select '1',page,sum(mount),sum(vcmount),sum(per),sum(price1),sum(price2)
 from @tmp
 group by page
 
+update @tmp
+set mount=a.mount+isnull(b.mount,0)
+,vcmount=a.vcmount+isnull(b.vcmount,0)
+,per=a.per+isnull(b.per,0)
+,price1=a.price1+isnull(b.price1,0)
+,price2=a.price2+isnull(b.price2,0)
+from @tmp a 
+outer apply(select SUM(mount)mount,SUM(vcmount)vcmount,SUM(per)per,SUM(price1)price1,SUM(price2)price2 from @tmp where page<a.page and gno='1')b
+where gno='1'
+
 insert @tmp(gno,page,mount,vcmount,per,price1,price2)
 select '2',max(page),sum(mount),sum(vcmount),sum(per),sum(price1),sum(price2)
 from @tmp
@@ -469,7 +487,15 @@ select '3',page
 from @tmp
 group by page
 
-select * from @tmp
+select 
+@accy+'年12月31日' title
+,dbo.getComma(mount,2)mount
+,dbo.getComma(vcmount,2)vcmount
+,dbo.getComma(per,3)per
+,dbo.getComma(price,2)price
+,dbo.getComma(price1,2)price1
+,dbo.getComma(price2,2)price2
+,* from @tmp
 order by page,gno
 ;
 -----------------------------------------------------------------------------------------------
@@ -479,6 +505,7 @@ declare @t_bpno nvarchar(20)
 declare @t_epno nvarchar(20)
 set @t_bpno = case when '#non'=[4] then '' else [4] end
 set @t_epno = case when '#non'=[5] then char(255) else [5] end
+
 declare @tmp table(
 	gno nvarchar(1),
 	idno int,
@@ -520,8 +547,18 @@ from @tmp
 group by page,pno1,pno2,ptotal
 
 insert @tmp(gno,idno,page,mount,usemount,usetotal)
-select '2',99998,MAX(page)+1,sum(mount),sum(usemount),sum(usetotal)
+select '2',99998,page,sum(mount),sum(usemount),sum(usetotal)
 from @tmp
+where gno='0'
+group by page
+
+update @tmp
+set mount=a.mount+isnull(b.mount,0)
+,usemount=a.usemount+isnull(b.usemount,0)
+,usetotal=a.usetotal+isnull(b.usetotal,0)
+from @tmp a 
+outer apply(select SUM(mount)mount,SUM(usemount)usemount,SUM(usetotal)usetotal from @tmp where page<a.page and gno='2')b
+where gno='2'
 
 insert @tmp(gno,idno,page)
 select '3',99999,page
@@ -616,7 +653,7 @@ from #tmp
 where gno='9'
 
 insert #tmp(gno,drcr,pro_invent,product1,sum_mount,sum_money,ousemoney)
-select '3',drcr,pro_invent,product1,sum(sum_mount),sum(sum_money),sum(ousemoney)
+select '3',drcr,pro_invent,product1,sum(isnull(sum_mount,0)),sum(isnull(sum_money,0)),sum(isnull(ousemoney,0))
 from #tmp
 where gno='2'
 group by drcr,pro_invent,product1
@@ -654,6 +691,14 @@ select '6',drcr,page,CHAR(255),sum(sum_mount),sum(sum_money),sum(ousemoney)
 from #tmp
 where gno='3'
 group by drcr,page
+
+update #tmp
+set sum_mount=a.sum_mount+isnull(b.sum_mount,0)
+,sum_money=a.sum_money+isnull(b.sum_money,0)
+,ousemoney=a.ousemoney+isnull(b.ousemoney,0)
+from #tmp a 
+outer apply(select SUM(sum_mount)sum_mount,SUM(sum_money)sum_money,SUM(ousemoney)ousemoney from #tmp where page<a.page and gno='3')b
+where gno='6'
 
 insert #tmp(gno,drcr,page,pro_invent,sum_mount,sum_money,ousemoney)
 select '7',drcr,max(page),CHAR(255),sum(sum_mount),sum(sum_money),sum(ousemoney)
@@ -782,6 +827,21 @@ select '1',page,CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmon
 from #tmp
 group by page
 
+update #tmp
+set beginmount=a.beginmount+isnull(b.beginmount,0)
+,beginmoney=a.beginmoney+isnull(b.beginmoney,0)
+,inmount=a.inmount+isnull(b.inmount,0)
+,inmoney=a.inmoney+isnull(b.inmoney,0)
+,outmount=a.outmount+isnull(b.outmount,0)
+,salecost=a.salecost+isnull(b.salecost,0)
+,salemoney=a.salemoney+isnull(b.salemoney,0)
+,per=a.per+isnull(b.per,0)
+,lastmount=a.lastmount+isnull(b.lastmount,0)
+,lastmoney=a.lastmoney+isnull(b.lastmoney,0)
+from #tmp a 
+outer apply(select SUM(beginmount)beginmount,SUM(beginmoney)beginmoney,SUM(inmount)inmount,sum(inmoney)inmoney,sum(outmount)outmount,sum(salecost)salecost,sum(salemoney)salemoney,sum(per)per,sum(lastmount)lastmount,sum(lastmoney)lastmoney from #tmp where page<a.page and gno='1')b
+where gno='1'
+
 insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,salemoney,per,lastmount,lastmoney)
 select '2',MAX(page),CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(salemoney),sum(per),sum(lastmount),sum(lastmoney)
 from #tmp
@@ -873,6 +933,19 @@ select '1',page,CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmon
 from #tmp
 group by page
 
+update #tmp
+set beginmount=a.beginmount+isnull(b.beginmount,0)
+,beginmoney=a.beginmoney+isnull(b.beginmoney,0)
+,inmount=a.inmount+isnull(b.inmount,0)
+,inmoney=a.inmoney+isnull(b.inmoney,0)
+,outmount=a.outmount+isnull(b.outmount,0)
+,salecost=a.salecost+isnull(b.salecost,0)
+,lastmount=a.lastmount+isnull(b.lastmount,0)
+,lastmoney=a.lastmoney+isnull(b.lastmoney,0)
+from #tmp a 
+outer apply(select SUM(beginmount)beginmount,SUM(beginmoney)beginmoney,SUM(inmount)inmount,sum(inmoney)inmoney,sum(outmount)outmount,sum(salecost)salecost,sum(lastmount)lastmount,sum(lastmoney)lastmoney from #tmp where page<a.page and gno='1')b
+where gno='1'
+
 insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,lastmount,lastmoney)
 select '2',MAX(page),CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
 from #tmp
@@ -960,6 +1033,19 @@ insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost
 select '1',page,CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
 from #tmp
 group by page
+
+update #tmp
+set beginmount=a.beginmount+isnull(b.beginmount,0)
+,beginmoney=a.beginmoney+isnull(b.beginmoney,0)
+,inmount=a.inmount+isnull(b.inmount,0)
+,inmoney=a.inmoney+isnull(b.inmoney,0)
+,outmount=a.outmount+isnull(b.outmount,0)
+,salecost=a.salecost+isnull(b.salecost,0)
+,lastmount=a.lastmount+isnull(b.lastmount,0)
+,lastmoney=a.lastmoney+isnull(b.lastmoney,0)
+from #tmp a 
+outer apply(select SUM(beginmount)beginmount,SUM(beginmoney)beginmoney,SUM(inmount)inmount,sum(inmoney)inmoney,sum(outmount)outmount,sum(salecost)salecost,sum(lastmount)lastmount,sum(lastmoney)lastmoney from #tmp where page<a.page and gno='1')b
+where gno='1'
 
 insert #tmp(gno,page,noa,beginmount,beginmoney,inmount,inmoney,outmount,salecost,lastmount,lastmoney)
 select '2',MAX(page),CHAR(255),sum(beginmount),sum(beginmoney),sum(inmount),sum(inmoney),sum(outmount),sum(salecost),sum(lastmount),sum(lastmoney)
