@@ -214,3 +214,79 @@ begin
 	select @cngno cngno--,@workcno workcno
 	
 end;
+-------------------------------------------------------------------------------------------------------
+worklimport:--worklimport
+declare @t_datea nvarchar(100)=case when '#non'=[1] then '' else [1] end
+declare @t_storeno nvarchar(100)=case when '#non'=[2] then '' else [2] end
+declare @t_storeinno nvarchar(100)=case when '#non'=[3] then '' else [3] end
+declare @t_stationno nvarchar(100)=case when '#non'=[4] then '' else [4] end
+declare @t_tggno nvarchar(100)=case when '#non'=[5] then '' else [5] end
+declare @t_bdate nvarchar(100)=case when '#non'=[6] then '' else [6] end
+declare @t_edate nvarchar(100)=case when '#non'=[7] then char(255) else [7] end
+
+declare @tmp table(
+	productno nvarchar(MAX),
+	product nvarchar(MAX),
+	spec nvarchar(MAX),
+	style nvarchar(MAX),
+	unit nvarchar(50),
+	mount float,
+	gmount float,
+	smount float,
+	unmount float,
+	diffmount float,
+	stkmount float
+)
+
+--加總製令表身領料明細
+insert @tmp
+select b.productno,MAX(b.product),MAX(b.spec) spec,MAX(b.style) style,MAX(b.unit) unit
+,isnull(round(SUM(isnull(b.mount,0)),2),0) mount
+,isnull(round(SUM(isnull(b.gmount,0)),2),0) gmount
+,isnull((select SUM(mount) mount from stkucc (@t_datea,@t_storeinno,'') where productno=b.productno ),0) smount
+,0,0,0
+from view_work a left join view_works b on a.noa=b.noa left join station c on a.stationno=c.noa where 1=1 
+and isnull(a.enda,0)!='1' and isnull(a.isfreeze,0)!= '1' 
+and a.tggno=@t_tggno and a.cuadate between @t_bdate and @t_edate and a.noa like 'W[0-9]%'
+group by b.productno--,b.product 
+
+--需求量
+update @tmp set unmount=mount-gmount
+--現場餘料-需求量=需撥料量
+update @tmp set diffmount=(smount-unmount)*-1
+--刪除現場已足量
+delete @tmp where diffmount<0 or unmount<0
+
+--抓取其他倉庫庫存量
+declare @tmpa table(
+	productno nvarchar(MAX),
+	mount float,
+	weight float
+)
+if(LEN(@t_storeno)=0)
+begin
+	insert @tmpa
+	select productno,SUM(mount) mount,SUM(weight) weight 
+	from stkucc (@t_datea,'','') where storeno!=@t_storeinno and (mount>0 or weight>0) 
+	group by productno order by productno   
+end
+else
+begin
+	insert @tmpa
+	select productno,SUM(mount) mount,SUM(weight) weight 
+	from stkucc (@t_datea,'','') where storeno=@t_storeno and (mount>0 or weight>0) 
+	group by productno order by productno   
+end
+
+--寫入其他庫存量
+update a
+set stkmount=ISNULL(b.mount,0)
+from @tmp a outer apply (select SUM(mount)mount from @tmpa where productno=a.productno)b
+
+--刪除其他倉庫也無庫存的資料
+delete @tmp where stkmount<=0
+
+--其他庫存低於需求量時只撥其他庫存量
+update @tmp set diffmount=stkmount where stkmount<diffmount
+
+select * from @tmp order by productno;
