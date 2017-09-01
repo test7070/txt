@@ -250,32 +250,97 @@ create table #bbs(
 		noq nvarchar(10),
 		sssno nvarchar(20),
 		namea nvarchar(50),
+		clockindate nvarchar(50),
 		clockin nvarchar(50),
+		clockoutdate nvarchar(50),
 		clockout nvarchar(50),
 		memo nvarchar(50)
 )
 
-insert #bbm(noa)
-select datea from (
-	select datea from @tmp where typea='上班簽到' group by datea
-	union all
-	--隔天下班
-	select dbo.q_cdn(datea,-1)datea from @tmp where typea='下班簽退' and timea<='05:59' group by datea)tmp
-group by datea
+declare @datea nvarchar(MAX)
+declare @t_datea nvarchar(MAX)=''
+declare @timea nvarchar(MAX)
+declare @typea nvarchar(MAX)
+declare @t_typea nvarchar(MAX)=''
+declare @sssno nvarchar(MAX)
+declare @t_sssno nvarchar(MAX)='XXX'
+declare @namea nvarchar(MAX)
+declare @idno int
+declare @noq nvarchar(MAX)
+declare @t_noq nvarchar(MAX)
 
---抓到隔天下班時間
-insert #bbs (noa,noq,sssno,namea,clockindate,clockin,clockoutdate,clockout)
-select a.noa,right('000'+cast(ROW_NUMBER() over (partition by a.noa order by b.sssno) as nvarchar(10)),3) noq
-,b.sssno,b.namea,left(b.clockin,9)clockindate,right(b.clockin,5)clockin,left(b.clockout,9)clockoutdate,right(b.clockout,5)clockout
-from #bbm a outer apply (
-	select xa.barcode,xb.noa sssno,xb.namea
-	,MIN(case when xa.typea='上班簽到' then xa.datea+' '+xa.timea else CHAR(255) end)clockin
-	,MAX(case when xa.typea='下班簽退' then xa.datea+' '+xa.timea else '' end) clockout
-	from @tmp xa left join sss xb on xa.barcode=xb.barcode
-	where xa.datea+' '+xa.timea between a.noa+' 00:00' and dbo.q_cdn(a.noa,1)+' 05:59'
-	group by xa.barcode,xb.noa,xb.namea
-)b where b.sssno is not null 
-group by a.noa,b.sssno,b.namea,b.clockin,b.clockout
+--判斷同一天上下班
+declare @tin bit=0
+declare @tout bit=0
+
+declare cursor_table cursor for
+select a.datea,a.timea,a.typea,isnull(b.noa,''),b.namea 
+from @tmp a left join sss b on a.barcode=b.barcode where b.noa is not null 
+order by b.noa,a.datea,a.timea,a.typea
+open cursor_table
+fetch next from cursor_table
+into @datea,@timea,@typea,@sssno,@namea
+while(@@FETCH_STATUS <> -1)
+begin
+
+	if(@typea='下班簽退' and @sssno=@t_sssno)
+	begin
+		if(@tin=1)
+		begin
+			update #bbs
+			set clockout=@timea,clockoutdate=@datea
+			where noa=@t_datea and noq=@t_noq
+			
+			set @tout=1
+		end
+	end
+		
+	if(@typea='上班簽到')
+	begin
+		--不同員工 不同天
+		if((@t_sssno!=@sssno or @t_datea!=@datea))
+		begin
+			set @tin=0
+			set @tout=0
+			set @idno=1
+			set @noq=right('000'+CAST(@idno as nvarchar(50)),3)
+		end
+		
+		if(@tin=0)
+		begin
+			insert #bbs(noa,noq,sssno,namea,clockindate,clockin,clockoutdate,clockout)
+			select @datea,@noq,@sssno,@namea,@datea,@timea,'',''
+			set @idno=@idno+1
+			set @tin=1
+		end
+		
+		--同一天上班2次
+		if(@sssno=@t_sssno and @tin=1 and @tout=1)
+		begin
+			set @tin=1
+			set @tout=0
+			set @noq=right('000'+CAST(@idno as nvarchar(50)),3)
+			
+			insert #bbs(noa,noq,sssno,namea,clockindate,clockin,clockoutdate,clockout)
+			select @datea,@noq,@sssno,@namea,'','','',''
+			
+			set @idno=@idno+1
+		end
+	end
+	
+	set @t_typea=@typea
+	set @t_sssno=@sssno
+	set @t_datea=@datea
+	set @t_noq=@noq
+
+	fetch next from cursor_table
+	into @datea,@timea,@typea,@sssno,@namea
+end
+close cursor_table
+deallocate cursor_table
+
+insert #bbm(noa)
+select noa from #bbs group by noa
 
 --insert #bbm (noa)
 --select datea from @tmp group by datea
@@ -309,8 +374,8 @@ begin
 		insert salpresent(noa)
 		select @tdate
 		--新增bbs
-		insert salpresents(noa,noq,sssno,namea,clockin,clockout)
-		select noa,noq,sssno,namea,clockin,clockout from #bbs where noa=@tdate
+		insert salpresents(noa,noq,sssno,namea,clockindate,clockin,clockoutdate,clockout)
+		select noa,noq,sssno,namea,clockindate,clockin,clockoutdate,clockout from #bbs where noa=@tdate
 	end
 	else
 	begin
@@ -319,8 +384,8 @@ begin
 		where exists (select * from #bbs where noa=a.noa and sssno=a.sssno and noa=@tdate)
 		
 		--插入不存在員工紀錄
-		insert salpresents(noa,noq,sssno,namea,clockin,clockout)
-		select noa,'ZZ'+noq,sssno,namea,clockin,clockout from #bbs a where noa=@tdate
+		insert salpresents(noa,noq,sssno,namea,clockindate,clockin,clockoutdate,clockout)
+		select noa,'ZZ'+noq,sssno,namea,clockindate,clockin,clockoutdate,clockout from #bbs a where noa=@tdate
 		and not exists (select * from salpresents where noa=a.noa and sssno=a.sssno and noa=@tdate)
 		
 		--重新排序
