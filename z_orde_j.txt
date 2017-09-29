@@ -205,6 +205,7 @@ declare @result table(
 	salgrp nvarchar(50),
 	custno nvarchar(200),
 	comp nvarchar(200),
+	city nvarchar(50),
 	ordeno nvarchar(100),
 	custorde nvarchar(100),
 	ordcno nvarchar(50),
@@ -247,7 +248,7 @@ declare @result table(
 
 insert @result
 select '0' gno,a.sales,a.agent,c.salesgroup salgrp
-,a.custno,a.comp,a.noa ordeno,a.custorde,e.noa ordcno
+,a.custno,a.comp,m.country,a.noa ordeno,a.custorde,e.noa ordcno
 ,b.mount omount,isnull(f.mount,0) vmount,b.mount-isnull(f.mount,0) umount
 ,b.datea,a.date4,case when @t_len=4 and len(b.datea)=10 then DATEPART(ISO_WEEK,b.datea) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(b.datea)) end pwk
 ,case when isnull(h.sono,'')='' then  '' else 'Y' end shiporde,h.cldate
@@ -265,6 +266,7 @@ select '0' gno,a.sales,a.agent,c.salesgroup salgrp
 ,k.m1,k.m2,k.m3,k.m4,k.m5,k.m6,k.m7,k.m8,b.memo,k.noa cubno
 from view_orde a left join view_ordes b on a.noa=b.noa
 left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
+left join custm m on a.custno=m.noa
 outer apply (select top 1 noa from view_ordcs where ordeno=a.noa)e
 outer apply (select SUM(mount)mount from view_vccs where ordeno=a.noa and no2=b.no2 )f
 outer apply (select top 1 noa,datea from view_vcces where ordeno=a.noa and no2=b.no2)g
@@ -634,8 +636,8 @@ end
 
 if(@t_len='3')
 begin
-	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,2)+'/01')
-	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,2)+'/31')
+	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,3)+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,3)+'/31')
 end
 else 
 begin
@@ -656,6 +658,7 @@ create table #tmp(
 	mon nvarchar(10),
 	custno nvarchar(50),
 	comp nvarchar(150),
+	city nvarchar(50),
 	omount float,
 	vmount float,
 	umount float
@@ -704,19 +707,20 @@ end
 --	select DATEPART(ISO_WEEK,dbo.q_cdn(@t_bdate,-1)),dbo.q_cdn(@t_bdate,-7),dbo.q_cdn(@t_bdate,-1)
 --end
 
-insert #tmp(gno,week,bdate,edate,custno,omount,vmount)
-select '0',ta.week,ta.bdate,ta.edate,tb.custno,isnull(tb.omount,0),isnull(tb.vmount,0)
-from #tmp ta outer apply (
-select a.custno,SUM(b.mount)omount,SUM(c.vmount) vmount
-from view_orde a left join view_ordes b on a.noa=b.noa
-outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
-outer apply (select top 1 * from ucx where noa=b.productno)d
+insert #tmp(gno,week,bdate,edate,custno,city,omount,vmount) 
+select '0',ta.week,ta.bdate,ta.edate,tb.custno,tb.country,isnull(tb.omount,0),isnull(tb.vmount,0) 
+from #tmp ta outer apply ( 
+select a.custno,e.country,SUM(b.mount)omount,SUM(c.vmount) vmount 
+from view_orde a left join view_ordes b on a.noa=b.noa 
+left join custm e on a.custno=e.noa
+outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c 
+outer apply (select top 1 * from ucx where noa=b.productno)d 
 where a.odate between ta.bdate and ta.edate and (a.stype='3' or a.stype='4') 
-and a.custno between @t_bcust and @t_ecust
-and b.productno between @t_bpno and @t_epno
-and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
-group by a.custno )tb 
-where isnull(tb.vmount,0)!=0 --已出貨
+and a.custno between @t_bcust and @t_ecust 
+and b.productno between @t_bpno and @t_epno 
+and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano) 
+group by a.custno,e.country )tb 
+where isnull(tb.vmount,0)!=0 --已出貨 
 
 delete #tmp where gno='0' and isnull(custno,'')='' and omount=0 and vmount=0
 
@@ -790,15 +794,17 @@ create table #tmp(
 	datea nvarchar(10),
 	custno nvarchar(50),
 	comp nvarchar(150),
+	city nvarchar(50),
 	ordeno nvarchar(50),
 	omount float,
 	vmount float,
 	umount float
 	
 )
-insert #tmp(gno,datea,custno,ordeno,omount,vmount,umount)
-select '3',a.odate,a.custno,a.noa,sum(b.mount),sum(c.vmount),sum(isnull(b.mount,0)-isnull(c.vmount,0))
+insert #tmp(gno,datea,custno,city,ordeno,omount,vmount,umount)
+select '3',a.odate,a.custno,e.country,a.noa,sum(b.mount),sum(c.vmount),sum(isnull(b.mount,0)-isnull(c.vmount,0))
 from view_orde a left join view_ordes b on a.noa=b.noa
+left join custm e on a.custno=e.noa
 outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
 outer apply (select top 1 * from ucx where noa=b.productno)d
 where a.odate between @t_bdate and @t_edate
@@ -806,21 +812,21 @@ and a.custno between @t_bcust and @t_ecust
 and b.productno between @t_bpno and @t_epno
 and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
 and (a.stype='3' or a.stype='4') 
-group by a.odate,a.custno,a.noa
+group by a.odate,a.custno,a.noa,e.country
 
 delete #tmp where gno='3' and isnull(umount,0)=0
 if((select count(*) from #tmp)>0)
 begin
-	insert #tmp(gno,datea,custno,omount,vmount,umount)
-	select '2',datea,custno,sum(omount),sum(vmount),sum(umount)
-	from #tmp where gno='3' group by datea,custno
+	insert #tmp(gno,datea,custno,city,omount,vmount,umount)
+	select '2',datea,custno,city,sum(omount),sum(vmount),sum(umount)
+	from #tmp where gno='3' group by datea,city,custno
 	
 	insert #tmp(gno,datea,omount,vmount,umount)
 	select '1',datea,sum(omount),sum(vmount),sum(umount)
 	from #tmp where gno='3' group by datea
 	
-	insert #tmp(gno,datea,custno,omount,vmount,umount)
-	select '4',char(255),char(255),sum(omount),sum(vmount),sum(umount)
+	insert #tmp(gno,datea,custno,city,omount,vmount,umount)
+	select '4',char(255),char(255),char(255),sum(omount),sum(vmount),sum(umount)
 	from #tmp where gno='3'
 end
 
