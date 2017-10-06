@@ -7,12 +7,14 @@ declare @t_bfact nvarchar(100)
 declare @t_efact nvarchar(100)
 declare @t_len nvarchar(10) 
 declare @t_lenm nvarchar(10) 
+declare @t_show nvarchar(10)
 
 set @t_len='[3]'
 set @t_bmon = case when '#non' = [6] then '' else [6] end
 set @t_emon = case when '#non' = [7] then CHAR(255) else [7] end
 set @t_bfact = case when '#non' = [12] then '' else [12] end
 set @t_efact = case when '#non' = [13] then CHAR(255) else [13] end
+set @t_show = case when '#non' = [20] then '' else [20] end 
 ---*********************************************************************
 declare @now_date nvarchar(10)--現在日期 
 set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
@@ -63,8 +65,8 @@ end
 
 if(@t_len='3')
 begin
-	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,2)+'/01')
-	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,2)+'/31')
+	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,3)+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,3)+'/31')
 end
 else 
 begin
@@ -131,12 +133,33 @@ end
 --	select DATEPART(ISO_WEEK,dbo.q_cdn(@t_bdate,-1)),dbo.q_cdn(@t_bdate,-7),dbo.q_cdn(@t_bdate,-1)
 --end
 
-update a
-set gno='0'
-,mon=LEFT(bdate,@t_lenm)
-,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where date3=a.week and oa.odate<=a.edate and oa.odate>=dbo.q_cdn(a.edate,-200) and oa.gdate between @t_bfact and @t_efact and (oa.stype='3' or oa.stype='4')),0)
-,smount=isnull((select SUM(sb.mount) from supforecast sa left join supforecasts sb on sa.noa=sb.noa where sb.datea between a.bdate and a.edate and sa.factno between @t_bfact and @t_efact),0)
-from #tmp a
+if(@t_show='1')
+begin
+	update a
+	set gno='0'
+	,mon=LEFT(bdate,@t_lenm)
+	,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where date3=a.week and oa.odate<=a.edate and oa.odate>=dbo.q_cdn(a.edate,-200) and oa.gdate between @t_bfact and @t_efact and (oa.stype!='3' and oa.stype!='4')),0)
+	,smount=isnull((select SUM(sb.mount) from supforecast sa left join supforecasts sb on sa.noa=sb.noa where sb.datea between a.bdate and a.edate and sa.factno between @t_bfact and @t_efact),0)
+	from #tmp a
+end
+else if(@t_show='2')
+begin
+	update a
+	set gno='0'
+	,mon=LEFT(bdate,@t_lenm)
+	,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where date3=a.week and oa.odate<=a.edate and oa.odate>=dbo.q_cdn(a.edate,-200) and oa.gdate between @t_bfact and @t_efact and (oa.stype='3' or oa.stype='4')),0)
+	,smount=isnull((select SUM(sb.mount) from supforecast sa left join supforecasts sb on sa.noa=sb.noa where sb.datea between a.bdate and a.edate and sa.factno between @t_bfact and @t_efact),0)
+	from #tmp a
+end
+else
+begin
+	update a
+	set gno='0'
+	,mon=LEFT(bdate,@t_lenm)
+	,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where date3=a.week and oa.odate<=a.edate and oa.odate>=dbo.q_cdn(a.edate,-200) and oa.gdate between @t_bfact and @t_efact),0)
+	,smount=isnull((select SUM(sb.mount) from supforecast sa left join supforecasts sb on sa.noa=sb.noa where sb.datea between a.bdate and a.edate and sa.factno between @t_bfact and @t_efact),0)
+	from #tmp a
+end
 
 update #tmp
 set diff=smount-omount
@@ -205,6 +228,7 @@ declare @result table(
 	salgrp nvarchar(50),
 	custno nvarchar(200),
 	comp nvarchar(200),
+	city nvarchar(50),
 	ordeno nvarchar(100),
 	custorde nvarchar(100),
 	ordcno nvarchar(50),
@@ -244,14 +268,13 @@ declare @result table(
 	memo nvarchar(MAX),
 	cubno nvarchar(100)
 ) 
-
 insert @result
 select '0' gno,a.sales,a.agent,c.salesgroup salgrp
-,a.custno,a.comp,a.noa ordeno,a.custorde,e.noa ordcno
+,a.custno,a.comp,m.country,a.noa ordeno,a.custorde,e.noa ordcno
 ,b.mount omount,isnull(f.mount,0) vmount,b.mount-isnull(f.mount,0) umount
 ,b.datea,a.date4,case when @t_len=4 and len(b.datea)=10 then DATEPART(ISO_WEEK,b.datea) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(b.datea)) end pwk
-,case when isnull(h.sono,'')='' then  '' else 'Y' end shiporde,h.cldate
-,case when @t_len=4 then DATEPART(ISO_WEEK,h.cldate) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(h.cldate)) end clwk
+,case when isnull(h.sono,'')='' then  '' else 'Y' end shiporde,n.etcdate
+,case when @t_len=4 then DATEPART(ISO_WEEK,n.etcdate) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(h.cldate)) end clwk
 ,g.noa vcceno,g.datea vedate
 ,case when isnull(i.ucano,'')!='' then i.ucano else i.uccno end ucano
 ,b.productno ucxno,b.product,l.namea uccga,a.date2,a.trantype
@@ -265,6 +288,8 @@ select '0' gno,a.sales,a.agent,c.salesgroup salgrp
 ,k.m1,k.m2,k.m3,k.m4,k.m5,k.m6,k.m7,k.m8,b.memo,k.noa cubno
 from view_orde a left join view_ordes b on a.noa=b.noa
 left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
+left join custm m on a.custno=m.noa
+left join view_vcce n on a.noa=n.ordeno
 outer apply (select top 1 noa from view_ordcs where ordeno=a.noa)e
 outer apply (select SUM(mount)mount from view_vccs where ordeno=a.noa and no2=b.no2 )f
 outer apply (select top 1 noa,datea from view_vcces where ordeno=a.noa and no2=b.no2)g
@@ -282,6 +307,7 @@ and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
 and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
 and (a.stype='3' or a.stype='4')
 order by a.odate,a.noa,b.no2
+
 
 select 
 dbo.getComma(omount,-1)omount,
@@ -316,7 +342,8 @@ declare @t_bpno nvarchar(100)
 declare @t_epno nvarchar(100) 
 declare @t_uccgano nvarchar(100)
 declare @t_len nvarchar(10) 
-declare @t_lenm nvarchar(10) 
+declare @t_lenm nvarchar(10)
+declare @t_show nvarchar(10)  
 
 set @t_len='[3]'
 set @t_bdate = case when '#non' = [4] then '' else [4] end
@@ -331,6 +358,7 @@ set @t_salgrp = case when '#non' = [16] then '' else [16] end
 set @t_bpno = case when '#non' = [17] then '' else [17] end
 set @t_epno = case when '#non' = [18] then CHAR(255) else [18] end
 set @t_uccgano = case when '#non' = [19] then '' else [19] end
+set @t_show = case when '#non' = [20] then '' else [20] end 
 ---*********************************************************************
 if(@t_len='4')
 begin
@@ -361,7 +389,8 @@ declare @result table(
 	ucxno nvarchar(100),
 	product nvarchar(250),
 	spec nvarchar(150),
-	uccga nvarchar(100)
+	uccga nvarchar(100),
+	stype nvarchar(50)
 ) 
 
 insert @result
@@ -373,7 +402,7 @@ select '0' gno,a.sales,a.agent,c.salesgroup salgrp
 ,left(e.datea,@t_lenm),h.cldate
 ,g.noa vcceno,g.datea vedate
 ,case when isnull(i.ucano,'')!='' then i.ucano else i.uccno end ucano
-,b.productno ucxno,b.product,b.spec,j.namea uccga
+,b.productno ucxno,b.product,b.spec,j.namea uccga,a.stype
 from view_orde a left join view_ordes b on a.noa=b.noa
 left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
 outer apply (select noa,datea from view_vccs where ordeno=a.noa and no2=b.no2 )e
@@ -390,15 +419,39 @@ and b.productno between @t_bpno and @t_epno
 and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
 and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
 and e.noa is not null --已出貨
-and (a.stype='3' or a.stype='4')
 order by a.odate,a.noa,b.no2
 
-select 
-dbo.getComma(omount,-1)omount,
-dbo.getComma(vmount,-1)vmount,
-dbo.getComma(umount,-1)umount,
-* from @result
-order by sales,agent,ordeno
+
+if(@t_show='1')
+begin
+	select 
+	dbo.getComma(omount,-1)omount,
+	dbo.getComma(vmount,-1)vmount,
+	dbo.getComma(umount,-1)umount,
+	* from @result
+	where stype!='3' and stype!='4'
+	order by sales,agent,ordeno
+end
+else if(@t_show='2')
+begin
+	select 
+	dbo.getComma(omount,-1)omount,
+	dbo.getComma(vmount,-1)vmount,
+	dbo.getComma(umount,-1)umount,
+	* from @result
+	where stype='3' or stype='4'
+	order by sales,agent,ordeno
+end
+else
+begin
+	select 
+	dbo.getComma(omount,-1)omount,
+	dbo.getComma(vmount,-1)vmount,
+	dbo.getComma(umount,-1)umount,
+	* from @result
+	order by sales,agent,ordeno 
+end
+
 ;
 --****************************************************************************************************
 z_orde_j04:--z_orde_j04
@@ -409,13 +462,15 @@ declare @t_emon nvarchar(10)
 declare @t_bfact nvarchar(100) 
 declare @t_efact nvarchar(100)
 declare @t_len nvarchar(10) 
-declare @t_lenm nvarchar(10) 
+declare @t_lenm nvarchar(10)
+declare @t_show nvarchar(10) 
 
 set @t_len='[3]'
 set @t_bmon = case when '#non' = [6] then '' else [6] end
 set @t_emon = case when '#non' = [7] then CHAR(255) else [7] end
 set @t_bfact = case when '#non' = [12] then '' else [12] end
 set @t_efact = case when '#non' = [13] then CHAR(255) else [13] end
+set @t_show = case when '#non' = [20] then '' else [20] end 
 ---*********************************************************************
 declare @now_date nvarchar(10)--現在日期 
 set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
@@ -466,8 +521,8 @@ end
 
 if(@t_len='3')
 begin
-	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,2)+'/01')
-	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,2)+'/31')
+	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,3)+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,3)+'/31')
 end
 else 
 begin
@@ -534,12 +589,33 @@ end
 --	select DATEPART(ISO_WEEK,dbo.q_cdn(@t_bdate,-1)),dbo.q_cdn(@t_bdate,-7),dbo.q_cdn(@t_bdate,-1)
 --end
 
-update a
-set gno='0'
-,mon=LEFT(bdate,@t_lenm)
-,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact and (oa.stype='3' or oa.stype='4') ),0)
-,vmount=isnull((select SUM(vb.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa left join view_vccs vb on vb.ordeno=oa.noa and vb.no2=ob.no2 where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact and (oa.stype='3' or oa.stype='4') ),0)
-from #tmp a
+if(@t_show='1')
+begin
+	update a
+	set gno='0'
+	,mon=LEFT(bdate,@t_lenm)
+	,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact and (oa.stype!='3' and oa.stype!='4') ),0)
+	,vmount=isnull((select SUM(vb.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa left join view_vccs vb on vb.ordeno=oa.noa and vb.no2=ob.no2 where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact and (oa.stype!='3' and oa.stype!='4') ),0)
+	from #tmp a
+end
+else if(@t_show='2')
+begin
+	update a
+	set gno='0'
+	,mon=LEFT(bdate,@t_lenm)
+	,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact and (oa.stype='3' or oa.stype='4') ),0)
+	,vmount=isnull((select SUM(vb.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa left join view_vccs vb on vb.ordeno=oa.noa and vb.no2=ob.no2 where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact and (oa.stype='3' or oa.stype='4') ),0)
+	from #tmp a
+end
+else 
+begin
+	update a
+	set gno='0'
+	,mon=LEFT(bdate,@t_lenm)
+	,omount=isnull((select SUM(ob.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact),0)
+	,vmount=isnull((select SUM(vb.mount) from view_orde oa left join view_ordes ob on oa.noa=ob.noa left join view_vccs vb on vb.ordeno=oa.noa and vb.no2=ob.no2 where oa.odate between a.bdate and a.edate and oa.gdate between @t_bfact and @t_efact),0)
+	from #tmp a
+end
 
 update #tmp
 set umount=omount-vmount
@@ -574,7 +650,8 @@ declare @t_bpno nvarchar(100)
 declare @t_epno nvarchar(100) 
 declare @t_uccgano nvarchar(100)
 declare @t_len nvarchar(10) 
-declare @t_lenm nvarchar(10) 
+declare @t_lenm nvarchar(10)
+declare @t_show nvarchar(10) 
 
 set @t_len='[3]'
 set @t_bmon = case when '#non' = [6] then '' else [6] end
@@ -584,6 +661,7 @@ set @t_ecust = case when '#non' = [9] then CHAR(255) else [9] end
 set @t_bpno = case when '#non' = [17] then '' else [17] end
 set @t_epno = case when '#non' = [18] then CHAR(255) else [18] end
 set @t_uccgano = case when '#non' = [19] then '' else [19] end
+set @t_show = case when '#non' = [20] then '' else [20] end
 ---*********************************************************************
 declare @now_date nvarchar(10)--現在日期 
 set @now_date=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000 
@@ -634,8 +712,8 @@ end
 
 if(@t_len='3')
 begin
-	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,2)+'/01')
-	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,2)+'/31')
+	set @t_bweek=DATEPART(ISO_WEEK,@t_year+right(@t_bmon,3)+'/01')
+	set @t_eweek=DATEPART(ISO_WEEK,@t_year+right(@t_emon,3)+'/31')
 end
 else 
 begin
@@ -656,6 +734,7 @@ create table #tmp(
 	mon nvarchar(10),
 	custno nvarchar(50),
 	comp nvarchar(150),
+	city nvarchar(50),
 	omount float,
 	vmount float,
 	umount float
@@ -704,19 +783,57 @@ end
 --	select DATEPART(ISO_WEEK,dbo.q_cdn(@t_bdate,-1)),dbo.q_cdn(@t_bdate,-7),dbo.q_cdn(@t_bdate,-1)
 --end
 
-insert #tmp(gno,week,bdate,edate,custno,omount,vmount)
-select '0',ta.week,ta.bdate,ta.edate,tb.custno,isnull(tb.omount,0),isnull(tb.vmount,0)
-from #tmp ta outer apply (
-select a.custno,SUM(b.mount)omount,SUM(c.vmount) vmount
-from view_orde a left join view_ordes b on a.noa=b.noa
-outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
-outer apply (select top 1 * from ucx where noa=b.productno)d
-where a.odate between ta.bdate and ta.edate and (a.stype='3' or a.stype='4') 
-and a.custno between @t_bcust and @t_ecust
-and b.productno between @t_bpno and @t_epno
-and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
-group by a.custno )tb 
-where isnull(tb.vmount,0)!=0 --已出貨
+if (@t_show='1')
+begin
+	insert #tmp(gno,week,bdate,edate,custno,city,omount,vmount) 
+	select '0',ta.week,ta.bdate,ta.edate,tb.custno,tb.country,isnull(tb.omount,0),isnull(tb.vmount,0) 
+	from #tmp ta outer apply ( 
+	select a.custno,e.country,SUM(b.mount)omount,SUM(c.vmount) vmount 
+	from view_orde a left join view_ordes b on a.noa=b.noa 
+	left join custm e on a.custno=e.noa
+	outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c 
+	outer apply (select top 1 * from ucx where noa=b.productno)d 
+	where a.odate between ta.bdate and ta.edate and (a.stype!='3' and a.stype!='4') 
+	and a.custno between @t_bcust and @t_ecust 
+	and b.productno between @t_bpno and @t_epno 
+	and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano) 
+	group by a.custno,e.country )tb 
+	where isnull(tb.vmount,0)!=0 --已出貨
+end
+else if (@t_show='2')
+begin
+	insert #tmp(gno,week,bdate,edate,custno,city,omount,vmount) 
+	select '0',ta.week,ta.bdate,ta.edate,tb.custno,tb.country,isnull(tb.omount,0),isnull(tb.vmount,0) 
+	from #tmp ta outer apply ( 
+	select a.custno,e.country,SUM(b.mount)omount,SUM(c.vmount) vmount 
+	from view_orde a left join view_ordes b on a.noa=b.noa 
+	left join custm e on a.custno=e.noa
+	outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c 
+	outer apply (select top 1 * from ucx where noa=b.productno)d 
+	where a.odate between ta.bdate and ta.edate and (a.stype='3' or a.stype='4') 
+	and a.custno between @t_bcust and @t_ecust 
+	and b.productno between @t_bpno and @t_epno 
+	and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano) 
+	group by a.custno,e.country )tb 
+	where isnull(tb.vmount,0)!=0 --已出貨
+end
+else
+begin
+	insert #tmp(gno,week,bdate,edate,custno,city,omount,vmount) 
+	select '0',ta.week,ta.bdate,ta.edate,tb.custno,tb.country,isnull(tb.omount,0),isnull(tb.vmount,0) 
+	from #tmp ta outer apply ( 
+	select a.custno,e.country,SUM(b.mount)omount,SUM(c.vmount) vmount 
+	from view_orde a left join view_ordes b on a.noa=b.noa 
+	left join custm e on a.custno=e.noa
+	outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c 
+	outer apply (select top 1 * from ucx where noa=b.productno)d 
+	where a.odate between ta.bdate and ta.edate 
+	and a.custno between @t_bcust and @t_ecust 
+	and b.productno between @t_bpno and @t_epno 
+	and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano) 
+	group by a.custno,e.country )tb 
+	where isnull(tb.vmount,0)!=0 --已出貨
+end
 
 delete #tmp where gno='0' and isnull(custno,'')='' and omount=0 and vmount=0
 
@@ -767,7 +884,8 @@ declare @t_bpno nvarchar(100)
 declare @t_epno nvarchar(100) 
 declare @t_uccgano nvarchar(100)
 declare @t_len nvarchar(10) 
-declare @t_lenm nvarchar(10) 
+declare @t_lenm nvarchar(10)
+declare @t_show nvarchar(10)
 
 set @t_len='[3]'
 set @t_bdate = case when '#non' = [4] then '' else [4] end
@@ -777,6 +895,7 @@ set @t_ecust = case when '#non' = [9] then CHAR(255) else [9] end
 set @t_bpno = case when '#non' = [17] then '' else [17] end
 set @t_epno = case when '#non' = [18] then CHAR(255) else [18] end
 set @t_uccgano = case when '#non' = [19] then '' else [19] end
+set @t_show = case when '#non' = [20] then '' else [20] end 
 ---*********************************************************************
 
 IF OBJECT_ID('tempdb..#tmp')is not null
@@ -790,37 +909,71 @@ create table #tmp(
 	datea nvarchar(10),
 	custno nvarchar(50),
 	comp nvarchar(150),
+	city nvarchar(50),
 	ordeno nvarchar(50),
 	omount float,
 	vmount float,
 	umount float
 	
 )
-insert #tmp(gno,datea,custno,ordeno,omount,vmount,umount)
-select '3',a.odate,a.custno,a.noa,sum(b.mount),sum(c.vmount),sum(isnull(b.mount,0)-isnull(c.vmount,0))
-from view_orde a left join view_ordes b on a.noa=b.noa
-outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
-outer apply (select top 1 * from ucx where noa=b.productno)d
-where a.odate between @t_bdate and @t_edate
-and a.custno between @t_bcust and @t_ecust
-and b.productno between @t_bpno and @t_epno
-and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
-and (a.stype='3' or a.stype='4') 
-group by a.odate,a.custno,a.noa
+if(@t_show='1')
+begin
+	insert #tmp(gno,datea,custno,city,ordeno,omount,vmount,umount)
+	select '3',a.odate,a.custno,e.country,a.noa,sum(b.mount),sum(c.vmount),sum(isnull(b.mount,0)-isnull(c.vmount,0))
+	from view_orde a left join view_ordes b on a.noa=b.noa
+	left join custm e on a.custno=e.noa
+	outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
+	outer apply (select top 1 * from ucx where noa=b.productno)d
+	where a.odate between @t_bdate and @t_edate
+	and a.custno between @t_bcust and @t_ecust
+	and b.productno between @t_bpno and @t_epno
+	and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
+	and (a.stype!='3' and a.stype!='4') 
+	group by a.odate,a.custno,a.noa,e.country
+end
+else if(@t_show='2')
+begin
+	insert #tmp(gno,datea,custno,city,ordeno,omount,vmount,umount)
+	select '3',a.odate,a.custno,e.country,a.noa,sum(b.mount),sum(c.vmount),sum(isnull(b.mount,0)-isnull(c.vmount,0))
+	from view_orde a left join view_ordes b on a.noa=b.noa
+	left join custm e on a.custno=e.noa
+	outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
+	outer apply (select top 1 * from ucx where noa=b.productno)d
+	where a.odate between @t_bdate and @t_edate
+	and a.custno between @t_bcust and @t_ecust
+	and b.productno between @t_bpno and @t_epno
+	and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
+	and (a.stype='3' or a.stype='4') 
+	group by a.odate,a.custno,a.noa,e.country
+end
+else
+begin
+	insert #tmp(gno,datea,custno,city,ordeno,omount,vmount,umount)
+	select '3',a.odate,a.custno,e.country,a.noa,sum(b.mount),sum(c.vmount),sum(isnull(b.mount,0)-isnull(c.vmount,0))
+	from view_orde a left join view_ordes b on a.noa=b.noa
+	left join custm e on a.custno=e.noa
+	outer apply (select SUM(mount)vmount from view_vccs where ordeno=a.noa and no2=b.no2)c
+	outer apply (select top 1 * from ucx where noa=b.productno)d
+	where a.odate between @t_bdate and @t_edate
+	and a.custno between @t_bcust and @t_ecust
+	and b.productno between @t_bpno and @t_epno
+	and (len(@t_uccgano)=0 or isnull(d.groupano,'')=@t_uccgano)
+	group by a.odate,a.custno,a.noa,e.country
+end
 
 delete #tmp where gno='3' and isnull(umount,0)=0
 if((select count(*) from #tmp)>0)
 begin
-	insert #tmp(gno,datea,custno,omount,vmount,umount)
-	select '2',datea,custno,sum(omount),sum(vmount),sum(umount)
-	from #tmp where gno='3' group by datea,custno
+	insert #tmp(gno,datea,custno,city,omount,vmount,umount)
+	select '2',datea,custno,city,sum(omount),sum(vmount),sum(umount)
+	from #tmp where gno='3' group by datea,city,custno
 	
 	insert #tmp(gno,datea,omount,vmount,umount)
 	select '1',datea,sum(omount),sum(vmount),sum(umount)
 	from #tmp where gno='3' group by datea
 	
-	insert #tmp(gno,datea,custno,omount,vmount,umount)
-	select '4',char(255),char(255),sum(omount),sum(vmount),sum(umount)
+	insert #tmp(gno,datea,custno,city,omount,vmount,umount)
+	select '4',char(255),char(255),char(255),sum(omount),sum(vmount),sum(umount)
 	from #tmp where gno='3'
 end
 
@@ -855,7 +1008,8 @@ declare @t_bpno nvarchar(100)
 declare @t_epno nvarchar(100) 
 declare @t_uccgano nvarchar(100)
 declare @t_len nvarchar(10) 
-declare @t_lenm nvarchar(10) 
+declare @t_lenm nvarchar(10)
+declare @t_show nvarchar(10) 
 
 set @t_len='[3]'
 set @t_bdate = case when '#non' = [4] then '' else [4] end
@@ -868,6 +1022,7 @@ set @t_salgrp = case when '#non' = [16] then '' else [16] end
 set @t_bpno = case when '#non' = [17] then '' else [17] end
 set @t_epno = case when '#non' = [18] then CHAR(255) else [18] end
 set @t_uccgano = case when '#non' = [19] then '' else [19] end
+set @t_show = case when '#non' = [20] then '' else [20] end
 ---*********************************************************************
 if(@t_len='4')
 begin
@@ -882,20 +1037,53 @@ declare @result table(
 	comp nvarchar(200),
 	mount float
 ) 
-
-insert @result
-select '0' gno,0,c.salesgroup salgrp
-,a.custno,MAX(a.comp),sum(b.mount)
-from view_orde a left join view_ordes b on a.noa=b.noa
-left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
-where a.odate between @t_bdate and @t_edate
-and a.custno between @t_bcust and @t_ecust
-and a.salesno between @t_bsales and @t_esales
-and b.productno between @t_bpno and @t_epno
-and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
-and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
-and (a.stype='3' or a.stype='4')
-group by c.salesgroup,a.custno
+if(@t_show='1')
+begin
+	insert @result
+	select '0' gno,0,c.salesgroup salgrp
+	,a.custno,MAX(a.comp),sum(b.mount)
+	from view_orde a left join view_ordes b on a.noa=b.noa
+	left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
+	where a.odate between @t_bdate and @t_edate
+	and a.custno between @t_bcust and @t_ecust
+	and a.salesno between @t_bsales and @t_esales
+	and b.productno between @t_bpno and @t_epno
+	and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+	and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
+	and (a.stype!='3' and a.stype!='4')
+	group by c.salesgroup,a.custno
+end
+else if(@t_show='2')
+begin
+	insert @result
+	select '0' gno,0,c.salesgroup salgrp
+	,a.custno,MAX(a.comp),sum(b.mount)
+	from view_orde a left join view_ordes b on a.noa=b.noa
+	left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
+	where a.odate between @t_bdate and @t_edate
+	and a.custno between @t_bcust and @t_ecust
+	and a.salesno between @t_bsales and @t_esales
+	and b.productno between @t_bpno and @t_epno
+	and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+	and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
+	and (a.stype='3' or a.stype='4')
+	group by c.salesgroup,a.custno
+end
+else
+begin
+	insert @result
+	select '0' gno,0,c.salesgroup salgrp
+	,a.custno,MAX(a.comp),sum(b.mount)
+	from view_orde a left join view_ordes b on a.noa=b.noa
+	left join sss c on a.salesno=c.noa left join ucx d on b.productno=d.noa
+	where a.odate between @t_bdate and @t_edate
+	and a.custno between @t_bcust and @t_ecust
+	and a.salesno between @t_bsales and @t_esales
+	and b.productno between @t_bpno and @t_epno
+	and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
+	and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
+	group by c.salesgroup,a.custno
+end
 
 update a
 set rr=xrr
@@ -981,7 +1169,8 @@ declare @t_bpno nvarchar(100)
 declare @t_epno nvarchar(100) 
 declare @t_uccgano nvarchar(100)
 declare @t_len nvarchar(10) 
-declare @t_lenm nvarchar(10) 
+declare @t_lenm nvarchar(10)
+declare @t_show nvarchar(10) 
 
 set @t_len='[3]'
 set @t_bdate = case when '#non' = [4] then '' else [4] end
@@ -994,6 +1183,7 @@ set @t_salgrp = case when '#non' = [16] then '' else [16] end
 set @t_bpno = case when '#non' = [17] then '' else [17] end
 set @t_epno = case when '#non' = [18] then CHAR(255) else [18] end
 set @t_uccgano = case when '#non' = [19] then '' else [19] end
+set @t_show = case when '#non' = [20] then '' else [20] end 
 ---*********************************************************************
 if(@t_len='4')
 begin
@@ -1017,17 +1207,18 @@ declare @result table(
 	mount float,
 	datea nvarchar(50),
 	isordc nvarchar(50),
-	memo nvarchar(MAX)
+	memo nvarchar(MAX),
+	stypeno nvarchar(50)
 ) 
 
 insert @result
 select '0' gno,left(a.odate,@t_len)
 ,case when @t_len=4 and len(a.odate)=10 then DATEPART(ISO_WEEK,a.odate) else DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(a.odate)) end wk
 ,a.odate,c.salesgroup,a.custno,a.comp
-,case when a.stype='1' then '內銷' when a.stype='2' then '代工' when a.stype='5' then '計畫生產' else '' end
+,case when a.stype='1' then '內銷' when a.stype='2' then '代工' when a.stype='5' then '計畫生產'  when a.stype='3' then '外銷' when a.stype='4' then '樣品' else '' end 
 ,a.noa,b.no2,a.custorde,b.productno,b.product,b.mount,b.datea
 ,case when (select count(*) from view_ordcs where ordeno=a.noa)>0 then 'Y' else 'N' end
-,b.memo
+,b.memo,a.stype
 from view_orde a left join view_ordes b on a.noa=b.noa
 left join sss c on a.salesno=c.noa 
 left join ucx d on b.productno=d.noa
@@ -1037,11 +1228,29 @@ and a.salesno between @t_bsales and @t_esales
 and b.productno between @t_bpno and @t_epno
 and (len(@t_salgrp)=0 or c.salesgroup=@t_salgrp)
 and (len(@t_uccgano)=0 or d.groupano=@t_uccgano)
-and (a.stype!='3' and a.stype!='4')
 
-select 
-dbo.getComma(mount,-1)mount,
-* from @result
-order by odate,ordeno,no2
+if(@t_show='1')
+begin
+	select 
+	dbo.getComma(mount,-1)mount,'國內訂單明細表' title,
+	* from @result
+	where stypeno!='3' and stypeno!='4'
+	order by odate,ordeno,no2 
+end
+else if(@t_show='2')
+begin
+	select 
+	dbo.getComma(mount,-1)mount,'國外訂單明細表' title, 
+	* from @result
+	where stypeno='3' or stypeno='4'
+	order by odate,ordeno,no2 
+end
+else
+begin
+	select 
+	dbo.getComma(mount,-1)mount, '國內(外)訂單明細表' title, 
+	* from @result 
+	order by odate,ordeno,no2 
+end
 ;
 --****************************************************************************************************
