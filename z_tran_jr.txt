@@ -570,29 +570,31 @@ set @tmon=CONVERT(VARCHAR(7),DATEADD(m,-1,@tmon),12 )+0890000
 set @tmon=left(@tmon,3)+'/'+substring(@tmon,4,2)
 
 declare @tmp table( 
-gno nvarchar(1), 
-rr int, 
-page int, 
-recno int, 
-carno nvarchar(50), 
-datea nvarchar(10), 
-nick nvarchar(50), 
-straddr nvarchar(50), 
-product nvarchar(100), 
-weight float, 
-unit nvarchar(50), 
-price float, 
-total float, 
-item nvarchar(100),--修繕其他支出 
-datea1 nvarchar(10), 
-total2 float, 
-memo nvarchar(max), 
-datea2 nvarchar(10),--助手加班 
-[day] nvarchar(10), 
-total3 float,
-total4 float,
-total5 float,
-total6 float
+	gno nvarchar(1), 
+	rr int, 
+	page int, 
+	recno int, 
+	carno nvarchar(50), 
+	datea nvarchar(10), 
+	nick nvarchar(50), 
+	straddr nvarchar(50), 
+	product nvarchar(100), 
+	weight float, 
+	unit nvarchar(50), 
+	price float, 
+	total float, 
+	item nvarchar(100),--修繕其他支出 
+	datea1 nvarchar(10), 
+	total2 float, 
+	memo nvarchar(max), 
+	datea2 nvarchar(10),--助手加班 
+	[day] nvarchar(10), 
+	total3 float,
+	total4 float,
+	total5 float,--comp承上期負擔
+	total6 float,--car承上期負擔
+	total7 float,--tran總負擔
+	total8 float--chg總負擔
 ) 
 
 --tran 明細 
@@ -612,7 +614,7 @@ select '1',carno,memo,right(datea,5),plusitem,sum(plusmoney),memo
 from carchg b
 where (datea between @t_bdate and @t_edate) 
 and (driverno between @t_bdriverno and @t_edriverno)
-and ISNULL(plusmoney,0)!=0 
+and ISNULL(plusmoney,0)!=0 and plusitem!='承上期未給'
 group by cno,carno,memo,datea,plusitem,memo
 
 --司機減項明細 
@@ -621,7 +623,8 @@ select '2',carno,minusitem,right(datea,5),sum(minusmoney),memo
 from carchg b 
 where (datea between @t_bdate and @t_edate) 
 and (driverno between @t_bdriverno and @t_edriverno) 
-and ISNULL(minusmoney,0)!=0 and (minusitem not like '%助手%') and (minusitem not like '%加班%') 
+and ISNULL(minusmoney,0)!=0 and (minusitem not like '%助手%') and (minusitem not like '%加班%')
+and minusitem!='承上期負擔' 
 group by cno,carno,datea,minusitem,memo
 
 --修繕明細 
@@ -647,16 +650,39 @@ select '4','1',carno,minusitem,right(datea,5),sum(minusmoney)
 from carchg 
 where (datea between @t_bdate and @t_edate) 
 and (driverno between @t_bdriverno and @t_edriverno) 
-and ISNULL(minusmoney,0)!=0 and (minusitemno='0022') 
+and ISNULL(minusmoney,0)!=0 and (minusitemno='0022')  
 group by cno,carno,datea,minusitem 
 
 update a 
 set rr=rx 
 from (select ROW_NUMBER()over(partition by carno,gno order by gno,datea)rx,rr from @tmp)a 
 
-update @tmp
-set total5=b.total1,total6=b.total2
-from @tmp a outer apply(select SUM(isnull(plusmoney,0))total1,SUM(isnull(minusmoney,0))total2 from carchg where left(datea,6)=@tmon and carno=a.carno)b
+insert @tmp(gno,carno,datea,total5,total6)
+select '9',carno,datea,a.plusmoney,a.minusmoney
+from carchg a
+where a.minusitem='承上期負擔' and a.plusitem='承上期負擔'
+
+insert @tmp(gno,carno,total7)
+select '9',a.carno,sum(a.total2)*0.97
+from view_trans a
+left join view_tran b on a.noa=b.noa
+where b.datea>='106/09/01' and b.datea<@t_bdate
+group by a.carno
+
+insert @tmp(gno,carno,total8)
+select '9',carno,sum(plusmoney-minusmoney)
+from carchg
+where datea>='106/09/01' and datea<@t_bdate
+and minusitem!='承上期負擔' and plusitem!='承上期負擔'
+group by carno
+
+insert @tmp(gno,carno,total5,total6,total7,total8)
+select '8',carno,sum(isnull(total5,0)),sum(isnull(total6,0)),sum(isnull(total7,0)),sum(isnull(total8,0))
+from @tmp
+where gno='9'
+group by carno
+
+delete @tmp where gno='9'
 
 update @tmp 
 set rr=rr+23 
@@ -775,28 +801,36 @@ set gno=case rr when 22 then 3 when 23 then 4 else gno end
 insert @result(gno,rr,page,carno,total,total2,total3,tax) 
 select '5',9996,page,carno,SUM(isnull(total,0)),SUM(isnull(total2,0)),SUM(isnull(total3,0)),SUM(isnull(total,0))*0.03 
 from @tmp 
-where gno!='3' 
+where gno!='3' and gno!='8'
 group by page,carno 
 
 insert @result(gno,rr,page,carno,total,total2,btotal,ttotal) 
-select '6',9997,max(page),carno,total+tax,b.total2,'',total+tax-b.total2 
+select '6',9997,max(page),carno,total-tax-b.total2,b.total2,'',total-tax-b.total2
 from @result a 
 outer apply(select SUM(isnull(total3,0))+SUM(isnull(total2,0))total2 from @tmp where carno=a.carno and page=a.page)b
 where gno='5'
 group by carno,total,tax,b.total2
 
 update @result
-set btotal=(b.total*0.03)+b.total
-from @result a
-outer apply(select carno,(total4+total5-total6)total from @tmp where a.carno=carno group by carno,total4,total5,total6)b
-where gno='6'
+set btotal=a.plusmoney,ttotal=ttotal+a.plusmoney
+from carchg a
+where gno='6' and plusitem='承上期未給' and (a.datea between @t_bdate and @t_edate)
 
-insert @result(gno,rr,page,carno,driver,total,btotal,ttotal,ntotal,nbtotal,nttotal) 
-select '7',9998,page,a.carno,d.namea,ttotal*0.6,btotal*0.6,ttotal*0.6-btotal*0.6,ttotal*0.4,btotal*0.4,ttotal*0.4-btotal*0.4 
+insert @result(gno,rr,page,carno,driver,total,ntotal,btotal,nbtotal,ttotal,nttotal) 
+select '7',9998,page,a.carno,d.namea,a.ttotal*0.6,a.ttotal*0.4,'','',a.ttotal*0.6,a.ttotal*0.4
 from @result a 
 left join car2 c on a.carno=c.noa 
 left join driver d on c.driverno=d.noa 
 where gno='6'
+
+update @result
+set btotal=case when @t_bdate='106/09/01' then b.total5 else total5+((total7+total8)*0.6) end
+,nbtotal=case when @t_bdate='106/09/01' then b.total5 else total6+((total7+total8)*0.4) end
+,ttotal=ttotal+case when @t_bdate='106/09/01' then b.total5 else total5+((total7+total8)*0.6) end
+,nttotal=nttotal+case when @t_bdate='106/09/01' then b.total5 else total6+((total7+total8)*0.4) end
+from @result a
+left join @tmp b on a.carno=b.carno
+where b.gno='8' and a.gno='7'
 
 insert @result(gno,rr,page,carno) 
 select '8',9999,page,carno 

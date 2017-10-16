@@ -253,20 +253,12 @@ tranpaybjr:--tranpaybjr
 SET QUOTED_IDENTIFIER OFF
 declare @t_key nvarchar(10) = [1]
 declare @t_mon nvarchar(10) = [2]
+declare @t_tggno nvarchar(50) = [3]
 
-IF OBJECT_ID('tempdb..#tmp')is not null
-BEGIN
-	drop table #tmp
-END
-IF OBJECT_ID('tempdb..#result')is not null
-BEGIN
-	drop table #tmp
-END
-
-
-	create table #tmp(
+	declare @tmpa table(
 		gno nvarchar(1),
 		rr int,
+		noa nvarchar(50),
 		cno nvarchar(50),
 		acomp nvarchar(100),
 		po nvarchar(50),
@@ -276,34 +268,35 @@ END
 		price float,
 		total float	
 	)
-	insert #tmp
-	select '2','',isnull(a.cno,''),isnull(a.acomp,''),b.po,b.straddrno,c.comp,sum(b.weight2),isnull(b.price2,0),sum(b.price3)
+	insert @tmpa
+	select '2','','',isnull(a.cno,''),isnull(a.acomp,''),b.po,b.straddrno,c.comp,sum(b.weight2),isnull(b.price2,0),sum(b.price3)
 	from view_tran a left join view_trans b on a.noa=b.noa
 	left join tgg c on b.straddrno=c.noa
-	where left(a.datea,6)=@t_mon
+	where left(a.datea,6)=@t_mon and (len(@t_tggno)=0 or @t_tggno=b.straddrno)
 	group by a.cno,a.acomp,b.po,b.straddrno,c.comp,b.price2
+	order by a.cno,b.po,b.straddrno
 	
 	update a
 	set rr=rx
-	from (select ROW_NUMBER()over(partition by cno,tggno order by cno,tggno,po)rx,rr from #tmp where gno='2')a
+	from (select ROW_NUMBER()over(partition by cno,tggno order by cno,tggno,po)rx,rr from @tmpa)a
 	
-	insert #tmp(gno,cno,acomp,tggno,tgg)
+	insert @tmpa(gno,cno,acomp,tggno,tgg)
 	select '1',cno,acomp,tggno,tgg
-	from #tmp
+	from @tmpa
 	group by cno,acomp,tggno,tgg
 	
 	update a
 	set rr=rx
-	from (select ROW_NUMBER()over(partition by gno order by cno,tggno) rx,rr from #tmp where gno='1')a
+	from (select ROW_NUMBER()over(partition by gno order by cno,tggno) rx,rr from @tmpa where gno='1')a
 	
 	--是否以立帳
-	create table #result(
+	declare @result table(
 		noa nvarchar(50),
 		cno nvarchar(50),
 		tggno nvarchar(50),
 		mon nvarchar(10)
 	)
-	insert #result
+	insert @result
 	select noa,cno,tggno,mon
 	from payb 
 	where vccno='tran' and mon=@t_mon
@@ -313,77 +306,62 @@ END
 	set @datea=cast(cast(left(@datea,4) as int)-1911 as nvarchar(10))+'/'+RIGHT(@datea,5)
 	declare @paybnoa nvarchar(50)=(select MAX(noa) from payb where datea=@datea)
 	
-declare @n int
+	update @tmpa
+	set noa=case when isnull(@paybnoa,'')!='' then @t_key+cast(cast(right(@paybnoa,10) as int)+rr as nvarchar(50)) else 
+	@t_key+replace(@datea,'/','')+REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR)) end
+	where gno='1'
 	
-declare @tmp table(
-	msg nvarchar(max)
-)
+	update @tmpa
+	set noa=b.noa
+	from @tmpa a
+	outer apply(select noa from @tmpa where isnull(a.cno,'')=isnull(cno,'') and isnull(tggno,'')=isnull(a.tggno,'') and gno='1')b
+	where gno='2'
 
-Begin Transaction [Trans_Name]
-begin try
-	
-	--新增
-	if(isnull(@paybnoa,'')='')
-	begin
-		insert payb(noa,cno,acomp,datea,mon,tggno,comp,bdate,edate,vccno)
-		select  @t_key+replace(@datea,'/','')+REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
-			   ,cno,acomp,@datea,LEFT(@datea,6),tggno,tgg,LEFT(@datea,6)+'/01',@datea,'tran'
-		from #tmp a
-		where gno='1' and not exists(select cno,tggno from #result)
-		order by cno,tggno,rr
+	declare @n int
 		
+	declare @tmp table(
+		msg nvarchar(max)
+	)
+
+	Begin Transaction [Trans_Name]
+	begin try	
+		--新增
+		
+		if(isnull(@paybnoa,'')='')
+		begin
+			insert payb(noa,cno,acomp,datea,mon,tggno,comp,bdate,edate,vccno)
+			select noa,cno,acomp,@datea,LEFT(@datea,6),tggno,tgg,LEFT(@datea,6)+'/01',@datea,'tran'
+			from @tmpa a
+			where gno='1' and not exists(select cno,tggno from @result)
+			order by cno,tggno,rr
+			
+			insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
+			select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
+				   ,b.po,'費用',b.mount,b.price,b.total,b.total,'tran'
+			from payb a left join @tmpa b on a.cno=b.cno and a.tggno=b.tggno
+			where b.gno='2'	and not exists(select cno,tggno from @result)
+			order by b.noa,rr	
+		end
+		
+		--更新
+		delete paybs where noa in(select noa from @tmpa)
 		insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
 		select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
-			   ,b.po,'費用',b.mount,b.price,b.price,b.price,'tran'
-		from payb a left join #tmp b on a.cno=b.cno and a.tggno=b.tggno
-		where b.gno='2'	and not exists(select cno,tggno from #result)
-		order by noa,rr	
-	end
-	else
-	begin
-		insert payb(noa,cno,acomp,datea,mon,tggno,comp,bdate,edate,vccno)
-		select @t_key+cast(cast(right(@paybnoa,10) as int)+rr as nvarchar(50))
-			   ,cno,acomp,@datea,LEFT(@datea,6),tggno,tgg,LEFT(@datea,6)+'/01',@datea,'tran'
-		from #tmp
-		where gno='1' and not exists(select cno,tggno from #result)
-		order by cno,tggno,rr
+				,b.po,'費用',b.mount,b.price,b.total,b.total,'tran'
+		from payb a left join @tmpa b on a.noa=b.noa
+		where b.gno='2' and a.noa in(select noa from @tmpa)
 		
-		insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
-		select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
-			   ,b.po,'費用',b.mount,b.price,b.price,b.price,'tran'
-		from payb a left join #tmp b on a.cno=b.cno and a.tggno=b.tggno
-		where b.gno='2'	and not exists(select cno,tggno from #result)
-		order by noa,rr
-	end
-	
-	--更新
-	delete paybs where noa in(select noa from #result)
-	insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
-	select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
-			,b.po,'費用',b.mount,b.price,b.price,b.price,'tran'
-	from payb a left join #tmp b on a.cno=b.cno and a.tggno=b.tggno
-	where b.gno='2'	and exists(select cno,tggno from #result)
-	
-	set @n=(select count(*) from #tmp where gno='1')
-	
-Commit Transaction [Trans_Name]
-insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
-end try
-begin catch
-	Rollback Transaction [Trans_Name]
-	insert into @tmp(msg)values(error_message())
-end catch
+		set @n=(select count(*) from @tmpa where gno='1')
+		
+	Commit Transaction [Trans_Name]
+	insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name]
+		insert into @tmp(msg)values(error_message())
+	end catch
 
-select * from @tmp
-
-IF OBJECT_ID('tempdb..#tmp')is not null
-BEGIN
-	drop table #tmp
-END
-IF OBJECT_ID('tempdb..#result')is not null
-BEGIN
-	drop table #result
-END
+	select * from @tmp
 ;
 ----------------------------------------------------------------------------------------------------------------------
 tranvccewj2tranwj:--tranvccewj2tranwj
@@ -430,12 +408,14 @@ create table #tmp(
 	price3 float,
 	total float,
 	total2 float,
-	datea nvarchar(10)
+	datea nvarchar(10),
+	product2 nvarchar(50),--加項品名
+	plus float
 )
 insert #tmp 
 select '1','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno))) + RTRIM(CAST(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno) AS CHAR))
 ,a.noa,noq,a.carno,driverno,driver,conn,custno,cust,productno,product,a.addrno,a.addr,addrno2,addr2,edate
-,volume,mount,round(weight/1000,3),lng2,tvolume,theight,total,total2,b.datea
+,volume,mount,round(weight/1000,3),lng2,tvolume,theight,total,total2,b.datea,a.product2,a.height
 from view_tranvcces a 
 left join view_tranvcce b on a.noa=b.noa
 where chk3='1'
@@ -483,8 +463,8 @@ begin try
 	from #tmp where gno='0'")
 
 	exec("
-	insert trans"+@accy+"(noa,noq,ordeno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,endaddrno,endaddr,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2)
-	select noa,noq,orderno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,endaddrno,endaddr,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2
+	insert trans"+@accy+"(noa,noq,ordeno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,endaddrno,endaddr,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,timea,plus)
+	select noa,noq,orderno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,endaddrno,endaddr,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,product2,plus
 	from #tmp
 	where gno='1'
 	")
