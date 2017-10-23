@@ -118,3 +118,199 @@ left(datea,3)+'年'+RIGHT(datea,2)+'月單價表' title
 from @tmp
 order by datea,strnick,gno
 ;
+-----------------------------------------------------------------------------------------------
+z_tran_nv3:--z_tran_nv3
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bcustno nvarchar(20)
+declare @t_ecustno nvarchar(20)
+declare @t_bcarno nvarchar(20)
+declare @t_ecarno nvarchar(20)
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+set @t_bcustno = case when '#non'=[6] then '' else [6] end
+set @t_ecustno = case when '#non'=[7] then char(255) else [7] end
+set @t_bcarno = case when '#non'=[8] then '' else [8] end
+set @t_ecarno = case when '#non'=[9] then char(255) else [9] end
+
+
+declare @tmp table(
+	gno nvarchar(1),
+	rr int,
+	datea nvarchar(10),
+	strnick nvarchar(50),
+	straddr nvarchar(50),
+	endnick nvarchar(50),
+	endaddr nvarchar(50),
+	timea nvarchar(50),
+	carno nvarchar(50),
+	mount float,
+	memo nvarchar(max)
+
+)
+insert @tmp
+select '0',ROW_NUMBER()over(partition by datea order by noa),left(datea,3)+'年'+REPLACE(RIGHT(datea,5),'/','月')+'日',custno,nick,straddrno,straddr,dtime
+,carno,mount2,memo
+from view_trans
+where (datea between @t_bdate and @t_edate)
+and (custno between @t_bcustno and @t_ecustno)
+and (carno between @t_bcarno and @t_ecarno)
+order by noa,datea
+
+insert @tmp(gno,rr,datea,mount)
+select '1','99997',datea,MAX(rr)
+from @tmp
+group by datea
+
+insert @tmp(gno,rr,datea)
+select '2','99998',datea
+from @tmp
+group by datea
+
+select * from @tmp
+order by datea,rr
+;
+----------------------------------------------------------------------------------------------
+z_tran_nv4:--z_tran_nv4
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_bdate = case when '#non'=[2] then '' else [2] end
+set @t_edate = case when '#non'=[3] then char(255) else [3] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+
+declare @tmp table(
+	gno nvarchar(1),
+	rr int,
+	recno int,
+	carno nvarchar(50),
+	datea nvarchar(10),
+	straddr nvarchar(100),
+	mount float
+)
+--tran
+insert @tmp(gno,carno,datea,straddr,mount)
+select '9',a.carno,a.datea,case when ISNULL(caseuse,'')='' then a.straddr else caseuse end
+,case when isnull(a.stime,'')!='' then -1 else isnull(mount2,-1) end
+from view_trans a
+where ISNULL(carno,'')!=''
+and (datea between @t_bdate and @t_edate) 
+
+insert @tmp(gno,carno,datea,straddr,mount)
+select '8',carno,datea,straddr,SUM(mount)
+from @tmp
+group by carno,datea,straddr
+
+delete @tmp where gno='9'
+
+update a
+set rr=rx,recno=case when rx%3=0 and rx>=3 then rx/3-1 else rx/3 end
+from (select ROW_NUMBER()over(partition by datea,carno order by datea,carno)rx,rr,recno from @tmp)a
+
+create table #tmp(
+	gno nvarchar(1),
+	rr int,
+	recno int,
+	line int,
+	linecount int,
+	carno nvarchar(50),
+	datea nvarchar(10),
+	straddr nvarchar(100),
+	straddr2 nvarchar(100),
+	straddr3 nvarchar(100)
+)
+insert #tmp(gno,rr,carno,datea,straddr)
+select '1',recno,carno,datea,straddr+' '+replace(cast(mount as nvarchar(20)),'-1','')
+from @tmp
+where rr%3=1
+group by recno,carno,datea,straddr,mount
+
+update #tmp
+set straddr2=b.straddr+' '+replace(cast(mount as nvarchar(20)),'-1','')
+from #tmp a left join @tmp b on a.carno=b.carno and a.datea=b.datea and a.rr=b.recno
+where b.rr%3=2
+
+update #tmp
+set straddr3=b.straddr+' '+replace(cast(mount as nvarchar(20)),'-1','')
+from #tmp a left join @tmp b on a.carno=b.carno and a.datea=b.datea and a.rr=b.recno
+where b.rr%3=0
+
+update a
+set rr=rx,recno=case when rx%72=0 and rx>=72 then rx/72-1 else rx/72 end
+from (select ROW_NUMBER()over(partition by gno,datea order by carno)rx,rr,recno,line from #tmp)a
+
+update a
+set line=case when rx%24=0 and rx>=24 then rx/24-1 else rx/24 end
+from (select ROW_NUMBER()over(partition by gno,datea,recno order by carno)rx,line from #tmp)a
+
+update a
+set linecount=rx
+from (select ROW_NUMBER()over(partition by gno,datea,recno,line order by carno)rx,linecount from #tmp)a
+
+
+create table #tmpa(
+	gno nvarchar(1),
+	rr int,
+	recno int,
+	line int,
+	datea nvarchar(20),
+	weeka nvarchar(20),
+	carno1 nvarchar(50),
+	st11 nvarchar(100),
+	st12 nvarchar(100),
+	st13 nvarchar(100),
+	carno2 nvarchar(50),
+	st21 nvarchar(100),
+	st22 nvarchar(100),
+	st23 nvarchar(100),
+	carno3 nvarchar(50),
+	st31 nvarchar(100),
+	st32 nvarchar(100),
+	st33 nvarchar(100)
+) 
+insert #tmpa(gno,rr,line,recno,datea,weeka,carno1,st11,st12,st13)
+select '0',recno,line,linecount,datea,DATEPART(WEEKDAY,cast(cast(left(datea,3)+1911 as nvarchar(10))+right(datea,6)as nvarchar(10)))-1,carno,dbo.charbr(straddr,14),dbo.charbr(straddr2,14),dbo.charbr(straddr3,14)
+from #tmp
+where line=0
+
+update #tmpa
+set carno2=b.carno,st21=dbo.charbr(straddr,14),st22=dbo.charbr(straddr2,14),st23=dbo.charbr(straddr3,14)
+from #tmpa a left join #tmp b on a.datea=b.datea and a.rr=b.recno and a.recno=b.linecount
+where b.line=1
+
+update #tmpa
+set carno3=b.carno,st13=dbo.charbr(straddr,14),st23=dbo.charbr(straddr2,14),st33=dbo.charbr(straddr3,14)
+from #tmpa a left join #tmp b on a.datea=b.datea and a.rr=b.recno and a.recno=b.linecount
+where b.line=2
+
+insert #tmpa(gno,rr,datea)
+select '1',rr,datea
+from #tmpa
+group by rr,datea
+
+select 
+left(datea,3)+'年'+REPLACE(RIGHT(datea,5),'/','月')+'日' datea
+,'星期'+case weeka when 0 then '日' when 1 then '一'  when 2 then '二'  when 3 then '三'  when 4 then '四'  when 5 then '五' when 6 then '六' end weeka
+,* from #tmpa a
+order by a.datea,rr,gno,recno
+
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+;
