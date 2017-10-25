@@ -690,6 +690,95 @@ select '' procs
 where (select count(*) from view_work where a.workno like '%'+noa+'%' and (stationno between @t_bstation and @t_estation) and isnull(mount,0)-isnull(inmount,0)>0) >0
 order by cuano,cuanoq,idno;
 --*************************************************************************************************
+z_workg_jo03:--z_workg_jo03
+SET QUOTED_IDENTIFIER OFF
+declare @t_datea nvarchar(10) --工作日
+declare @t_stationno nvarchar(50) --工作線
+declare @t_realwork nvarchar(10) --排除模擬製令
+declare @t_xshownowork nvarchar(50) --未完工
+
+set @t_datea = case when '#non' = [12] then '' else [12] end 
+set @t_stationno = case when '#non' = [13] then '' else [13] end 
+set @t_realwork = case when '#non' = [11] then '' else [11] end 
+set @t_xshownowork = case when '#non' = [7] then '' else [7] end 
+
+declare @tmp table(
+	gno nvarchar(10),
+	idno int,
+	datea nvarchar(10),
+	productno nvarchar(90),
+	product nvarchar(max),
+	stationno nvarchar(90),
+	station nvarchar(max),
+	gen nvarchar(max),
+	ordeno nvarchar(max),
+	workno nvarchar(max),
+	mount float,
+	c1 float,
+	notv float,
+	hours float,
+	btime nvarchar(50),
+	etime nvarchar(50),
+	cuano nvarchar(50),
+	cuanoq nvarchar(50)
+)
+insert @tmp
+select '0' gen,0,a.datea,c.productno,c.product,a.stationno,b.station
+	,case when isnull(d.minutes,0)=0 and isnull(d.sec,0)=0 then null when isnull(d.sec,0)>0 then cast(round(isnull(d.sec,0),3) as nvarchar) + ' Sec.' when isnull(d.minutes,0)>0 then cast(round(isnull(d.minutes,0),3) as nvarchar) + ' Min.' end
+	+case when len(d.unit)>0 then '/ '+d.unit else '' end
+	,e.ordeno,a.workno,a.mount,isnull(f.inmount,0) c1,a.mount-isnull(f.inmount,0) notv
+	,a.hours,'','',e.cuano,e.cuanoq
+	from view_cugu a left join station b on (a.stationno=b.noa) left join view_work c on (a.workno=c.noa)
+	outer apply(select case when isnull(minutes,0)>isnull(hminutes,0) then minutes else hminutes end minutes
+	,case when isnull(sec,0)>isnull(hsec,0) then sec else hsec end sec
+	,unit from uca where noa=c.productno) d
+	--當天排產數量-當天或提前入庫數量(之後入庫的不算)
+	--outer apply (select SUM(mount)inmount from view_workbs where workno=a.workno and datea<=a.datea)f
+	--106/08/23 不管是甚麼時候入庫
+	outer apply (select * from view_work where noa=a.workno)e
+	outer apply (select SUM(mount)inmount from view_workbs where workno=a.workno)f
+	where (a.datea=@t_datea) 
+	and (a.stationno=@t_stationno) 
+	and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+	and (left(isnull(c.productno,''),5)!='D4302')
+	and (len(@t_xshownowork)=0 or isnull(c.enda,0)!=1 )
+
+update a 
+set idno=rr,btime=case when rr=1 then '08:00:00' else '' end
+from (select idno,btime,ROW_NUMBER()over (partition by stationno order by stationno,workno)rr from @tmp) a
+
+update a
+set etime=RIGHT(CONVERT(NVARCHAR,DATEADD(SS,thours*60*60,CAST(CONVERT(NVARCHAR, GETDATE(), 111)+' 08:00' as DATETIME)),120),8)
+from @tmp a outer apply (select SUM(hours)thours from @tmp where idno<=a.idno)b
+
+update a
+set btime=b.etime
+from @tmp a outer apply (select etime from @tmp where idno=a.idno-1)b
+where a.idno>1
+
+--中午增加1小時
+update @tmp 
+set btime=case when btime>='12:00' then 
+cast(cast(LEFT(btime,2) as int)+1 as nvarchar(10))+RIGHT(btime,6) else btime end
+,etime=case when etime>='12:00' then 
+cast(cast(LEFT(etime,2) as int)+1 as nvarchar(10))+RIGHT(etime,6) else etime end
+where ('12:00' between left(btime,5) and left(etime,5) 
+or left(btime,5)>='12:00') and left(etime,5)!='12:00'
+
+insert @tmp (gno,datea,stationno,station,mount,c1,notv,hours)
+select '1',datea,stationno,MAX(station),SUM(mount),SUM(c1),SUM(notv),SUM(hours) 
+from @tmp group by datea,stationno
+
+select 
+productno pno,
+dbo.getComma(hours,3)thours,
+dbo.getComma(mount,-1)mount,
+dbo.getComma(c1,-1)c1,
+dbo.getComma(notv,-1)notv,
+replace(replace(replace("〈button id='"+workno+"' style='font-size: medium"+char(59)+"width: 30px"+char(59)+"white-space:pre-wrap"+char(59)+"' onclick='workshow(this)' 〉.〈/button〉 " ,'〈','<'),'〉','>'),'◎@','&#010')btnwork,
+* from @tmp order by datea,stationno,gno,idno
+;
+--*************************************************************************************************
 workg_jo_put:--workg_jo_put 流程卡入庫
 SET QUOTED_IDENTIFIER OFF 
 declare @t_workno nvarchar(50)=[1]
