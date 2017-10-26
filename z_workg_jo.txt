@@ -720,14 +720,17 @@ declare @tmp table(
 	btime nvarchar(50),
 	etime nvarchar(50),
 	cuano nvarchar(50),
-	cuanoq nvarchar(50)
+	cuanoq nvarchar(50),
+	nom nvarchar(50),
+	nos nvarchar(50),
+	noq nvarchar(50)
 )
 insert @tmp
 select '0' gen,0,a.datea,c.productno,c.product,a.stationno,b.station
 	,case when isnull(d.minutes,0)=0 and isnull(d.sec,0)=0 then null when isnull(d.sec,0)>0 then cast(round(isnull(d.sec,0),3) as nvarchar) + ' Sec.' when isnull(d.minutes,0)>0 then cast(round(isnull(d.minutes,0),3) as nvarchar) + ' Min.' end
 	+case when len(d.unit)>0 then '/ '+d.unit else '' end
 	,e.ordeno,a.workno,a.mount,isnull(f.inmount,0) c1,a.mount-isnull(f.inmount,0) notv
-	,a.hours,'','',e.cuano,e.cuanoq
+	,a.hours,'','',e.cuano,e.cuanoq,a.nom,a.nos,a.noq
 	from view_cugu a left join station b on (a.stationno=b.noa) left join view_work c on (a.workno=c.noa)
 	outer apply(select case when isnull(minutes,0)>isnull(hminutes,0) then minutes else hminutes end minutes
 	,case when isnull(sec,0)>isnull(hsec,0) then sec else hsec end sec
@@ -756,6 +759,11 @@ set btime=b.etime
 from @tmp a outer apply (select etime from @tmp where idno=a.idno-1)b
 where a.idno>1
 
+--開工時間接近中午12點
+update @tmp
+set btime='12:00:00'
+where left(btime,5)='11:59'
+
 --中午增加1小時
 update @tmp 
 set btime=case when btime>='12:00' then 
@@ -771,13 +779,109 @@ from @tmp group by datea,stationno
 
 select 
 productno pno,
+stationno sno,
 dbo.getComma(hours,3)thours,
 dbo.getComma(mount,-1)mount,
 dbo.getComma(c1,-1)c1,
 dbo.getComma(notv,-1)notv,
-replace(replace(replace("〈button id='"+workno+"' style='font-size: medium"+char(59)+"width: 30px"+char(59)+"white-space:pre-wrap"+char(59)+"' onclick='workshow(this)' 〉.〈/button〉 " ,'〈','<'),'〉','>'),'◎@','&#010')btnwork,
+replace(replace(replace("〈button id='"+workno+"##"+datea+"##"+nos+"##"+nom+"##"+noq+"##"+btime+"##"+etime+"' style='font-size: medium"+char(59)+"width: 30px"+char(59)+"white-space:pre-wrap"+char(59)+"' onclick='workshow(this)' 〉→〈/button〉 " ,'〈','<'),'〉','>'),'◎@','&#010')btnwork,
+replace(replace(replace("〈button id='"+workno+"' style='font-size: medium"+char(59)+"width: 30px"+char(59)+"white-space:pre-wrap"+char(59)+"' onclick='workin(this)' 〉↓〈/button〉 " ,'〈','<'),'〉','>'),'◎@','&#010')btnin,
 * from @tmp order by datea,stationno,gno,idno
 ;
+--*************************************************************************************************
+showworkg:--showworkg --現場流程卡
+SET QUOTED_IDENTIFIER OFF 
+declare @t_workno nvarchar(50)=[1]
+declare @t_datea nvarchar(50)=[2]
+declare @t_nos nvarchar(50)=[3]
+declare @t_nom nvarchar(50)=[4]
+declare @t_noq nvarchar(50)=[5]
+
+declare @tmp table(
+	workno nvarchar(50),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	ordedatea nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(MAX),
+	cuano nvarchar(50),
+	ordeodate nvarchar(50),
+	wdate nvarchar(50),
+	productno nvarchar(50),--製成品
+	spec nvarchar(MAX),--型號
+	bmount float,
+	omount float,
+	productno2 nvarchar(50),--半成品
+	uca nvarchar(MAX),
+	memo1 nvarchar(MAX),
+	memo2 nvarchar(MAX),
+	processno nvarchar(MAX),
+	process nvarchar(MAX),
+	stationno nvarchar(MAX),
+	station nvarchar(MAX)
+)
+
+insert @tmp
+select a.workno,b.noa ordeno,b.no2,c.datea ordedatea,d.custno,d.comp,b.cuano+'-'+b.cuanoq cuano
+,d.odate,a.datea,c.productno,c.spec,b.mount bmount,e.ordemount,b.productno,b.product
+,'<BR>總工時：'+cast(round(isnull((select SUM(hours) from view_work where cuano=b.cuano and cuanoq=b.cuanoq and a.workno like '%'+noa+'%'),0)/60/60,4) as nvarchar(50))
+,replace(STUFF(isnull((
+select '#*#'+wb.productno+', '+wb.product+', '+CAST(case when isnull(wa.mount,0)=0 then 0 else round(wb.mount/wa.mount,4) end as nvarchar(50))+', '+CAST(wb.mount as nvarchar(50)) 
+from view_work wa left join view_works wb on wa.noa=wb.noa 
+where wa.noa=a.workno for xml path('')),''),1,3,''),'#*#','<BR>')
+,b.processno,b.process,b.stationno,b.station
+from view_cugu a left join view_work b on a.workno=b.noa
+left join view_ordes c on b.ordeno=c.noa and b.no2=c.no2
+left join view_orde d on c.noa=d.noa
+outer apply (select SUM(mount)bmount,SUM(ordemount)ordemount from view_workgs where noa=b.cuano and noq=b.cuanoq)e
+
+where a.workno=@t_workno and a.datea=@t_datea and a.nos=@t_nos and a.nom=@t_nom and a.noq=@t_noq
+
+update a
+	set memo1='包裝說明及正側嘜：<BR>'+isnull(d.packinglistmemo,'')
+	+case when len(isnull(d.main,''))>0 then '正嘜：'+REPLACE(d.main,'chr(10)','<BR>') else '' end
+	+case when len(isnull(d.side,''))>0 then '側嘜：'+REPLACE(d.side,'chr(10)','<BR>') else '' end
+	+a.memo1
+	,uca=
+	isnull('半成品件號:'+stuff((select ','+productno from view_work where a.workno like '%'+noa+'%' and productno!=a.productno order by noa desc FOR XML PATH('')),1,1,'')+'<BR>','')+
+	-------------------------------------------------------------------------------------------
+	case when a.productno=a.productno2 then 
+	isnull((select N'件號中文名稱：型號:'+xa.spec
+	+isnull(N',車縫:'+(select mon from adsize where noa=xa.groupeno),'')
+	+isnull(N',車縫線顏色:'+(select mon from adspec where noa=c.ucolor),'')
+	+isnull(N',護片:'+(select mon from adsss where noa=xa.groupfno),'')
+	+isnull(N',皮料1:'+(select mon from adly where noa=c.scolor),'')
+	+isnull(N',皮料2:'+(select mon from adly where noa=c.class),'')
+	+isnull(N',皮料3:'+(select mon from adly where noa=c.classa),'')
+	+isnull(N',皮料4:'+(select mon from adly where noa=c.zinc),'')
+	+isnull(N',網烙印:'+(select mon from adoth where noa=c.sizea),'')
+	+isnull(N',轉印:'+(select mon from adpro where noa=c.source),'')
+	+isnull(N',大弓:'+(select mon from adknife where noa=xa.groupgno),'')
+	+isnull(N',中束:'+(select mon from adpipe where noa=xa.grouphno),'')
+	+isnull(N',座管:'+(select mon from adtran where noa=xa.groupino),'')
+	+isnull(N',電鍍:' +(select mon from addime where noa=c.hard),'')
+	+N'<BR>件號越文名稱：Mã hàng:'+xa.spec
+	+isnull(N',Đường may:'+(select memo2 from adsize where noa=xa.groupeno),'')
+	+isnull(N',Màu chỉ may:'+(select memo2 from adspec where noa=c.ucolor),'')
+	+isnull(N',Phụ kiện:'+(select memo2 from adsss where noa=xa.groupfno),'')
+	+isnull(N',Da1:'+(select memo2 from adly where noa=c.scolor),'')
+	+isnull(N',Da2:'+(select memo2 from adly where noa=c.class),'')
+	+isnull(N',Da3:'+(select memo2 from adly where noa=c.classa),'')
+	+isnull(N',Da4:'+(select memo2 from adly where noa=c.zinc),'')
+	+isnull(N',In ép:'+(select memo2 from adoth where noa=c.sizea),'')
+	+isnull(N',In ủi:'+(select memo2 from adpro where noa=c.source),'')
+	+isnull(N',Gọng:'+(select memo2 from adknife where noa=xa.groupgno),'')
+	+isnull(N',Bông:'+(select memo2 from adpipe where noa=xa.grouphno),'')
+	+isnull(N',Ống yên:'+(select memo2 from adtran where noa=xa.groupino),'')
+	+isnull(N',mạ:' +(select memo2 from addime where noa=c.hard),'')
+	from uca xa where noa=a.productno),'')
+	else a.uca end
+	from @tmp a left join view_orde b on a.ordeno=b.noa
+	left join view_ordes c on a.ordeno=c.noa and a.no2=c.no2
+	left join view_ordei d on b.noa=d.noa
+
+select * from @tmp;
+
 --*************************************************************************************************
 workg_jo_put:--workg_jo_put 流程卡入庫
 SET QUOTED_IDENTIFIER OFF 
