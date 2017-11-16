@@ -462,18 +462,24 @@ where a.type = 'P'
 AND number BETWEEN 0 AND (select DATEDIFF(dd,@t_bdate1,@t_edate2))
 
 insert #tmp
-select '0',b.custno,a.datea,b.oilbase,b.earnest,bcontdate,econtdate
+select '8',b.custno,a.datea,'','',case when a.datea>=b.changecontdate and LEFT(a.datea,6)=LEFT(b.changecontdate,6) then b.changecontdate else case when b.bcontdate<a.datea then b.bcontdate else '' end end,''
 from #tmp a
 outer apply(select * from contdc where (@t_bdate between bcontdate and econtdate) or (@t_edate between bcontdate and econtdate)
 or (bcontdate between @t_bdate and  @t_edate) or (econtdate between @t_bdate and @t_edate )
 )b
-group by b.custno,a.datea,b.oilbase,b.earnest,bcontdate,econtdate
 
-delete #tmp where gno='9'
+insert #tmp
+select '0',custno,datea,'','',MAX(bdatea),MAX(edatea)
+from #tmp
+where gno='8'
+group by custno,datea
+
+delete #tmp where gno='9' or gno='8'
 
 update #tmp
-set price=case when (datea<bdatea and left(datea,5)=left(bdatea,5)) or (datea>edatea and left(datea,5)=left(edatea,5)) then '' else price end
-,pmount=case when (datea<bdatea and left(datea,5)=left(bdatea,5)) or (datea>edatea and left(datea,5)=left(edatea,5)) then '' else pmount end
+set price=b.oilbase,pmount=b.total,edatea=b.econtdate
+from #tmp a
+outer apply(select * from contdc where a.custno=custno and a.bdatea=bcontdate)b
 
 create table #tmpa(
     gno nvarchar(1),
@@ -583,10 +589,19 @@ create table #tmpb(
 	total float
 )
 insert #tmpb
-select '0',ROW_NUMBER()over(partition by a.custno order by a.datea),a.custno,c.comp,c.addr_comp,c.tel,c.fax,c.serial,a.datea,a.price,a.pmount,a.price*a.pmount,r1,r2,r3,v1,v2,v3,p1,p2,p3,t1,t2,t3,0,0,0,0,0,0,0,0,0
+select '0',ROW_NUMBER()over(partition by a.custno order by a.datea),a.custno,c.comp,c.addr_comp
+,c.tel,c.fax,c.serial,a.datea,isnull(a.price,0),isnull(a.pmount,0),isnull(a.price,0)*isnull(a.pmount,0)
+,isnull(r1,0),isnull(r2,0),isnull(r3,0),isnull(v1,0),isnull(v2,0),isnull(v3,0),isnull(p1,0),isnull(p2,0),isnull(p3,0)
+,isnull(t1,0),isnull(t2,0),isnull(t3,0),0,0,0,0,0,0,0,0,0
 from #tmp a left join #tmpa b on a.custno=b.custno and a.datea=b.datea
 left join cust c on a.custno=c.noa
 where (a.custno between @t_bcustno and @t_ecustno)
+
+insert #tmpb(gno,rr,custno,ptotal,p1,p2,p3,money,tax,total)
+select '1','9998',custno,SUM(ptotal),SUM(p1),SUM(p2),SUM(p3),SUM(ptotal)+SUM(p1)+SUM(p2)+SUM(p3)
+,(SUM(ptotal)+SUM(p1)+SUM(p2)+SUM(p3))*0.05,(SUM(ptotal)+SUM(p1)+SUM(p2)+SUM(p3))*1.05
+from #tmpb a
+group by custno
 
 --累計
 update #tmpb
@@ -596,7 +611,7 @@ outer apply(select
 case when sb.unit='M' then SUM(sb.mount) else 0 end r1 
 ,case when sb.unit='T' then SUM(sb.mount) else 0 end r2 
 ,case when sb.unit='材' then SUM(sb.mount) else 0 end r3 
-from view_ina sa left join view_inas sb on sa.noa=sb.noa where sa.custno=a.custno and sa.datea<'106/10/01'
+from view_ina sa left join view_inas sb on sa.noa=sb.noa where sa.custno=a.custno and sa.datea<@t_bdate
 group by unit)b
 
 update #tmpb
@@ -606,19 +621,13 @@ outer apply(select
 case when sb.unit='M' then SUM(sb.mount) else 0 end v1 
 ,case when sb.unit='T' then SUM(sb.mount) else 0 end v2 
 ,case when sb.unit='材' then SUM(sb.mount) else 0 end v3 
-from view_get sa left join view_gets sb on sa.noa=sb.noa where sa.custno=a.custno and sa.datea<'106/10/01'
+from view_get sa left join view_gets sb on sa.noa=sb.noa where sa.custno=a.custno and sa.datea<@t_bdate
 group by unit)b
 
-insert #tmpb(gno,rr,custno,ptotal,p1,p2,p3,money,tax,total)
-select '1','9998',custno,SUM(ptotal),SUM(p1),SUM(p2),SUM(p3),SUM(ptotal)+SUM(p1)+SUM(p2)+SUM(p3)
-,(SUM(ptotal)+SUM(p1)+SUM(p2)+SUM(p3))*0.05,(SUM(ptotal)+SUM(p1)+SUM(p2)+SUM(p3))*1.05
-from #tmpb a
-group by custno
-
 update a 
-set t1=isnull(tr1,0)-isnull(tv1,0)+(select SUM(t1)t1 from #tmpb where a.custno=custno and rr<=a.rr)
-,t2=isnull(tr2,0)-isnull(tv2,0)+(select SUM(t2)t2 from #tmpb where a.custno=custno and rr<=a.rr) 
-,t3=isnull(tr3,0)-isnull(tv3,0)+(select SUM(t3)t3 from #tmpb where a.custno=custno and rr<=a.rr)
+set t1=isnull(tr1,0)-isnull(tv1,0)+(select SUM(isnull(t1,0))t1 from #tmpb where a.custno=custno and rr<=a.rr)
+,t2=isnull(tr2,0)-isnull(tv2,0)+(select SUM(isnull(t2,0))t2 from #tmpb where a.custno=custno and rr<=a.rr) 
+,t3=isnull(tr3,0)-isnull(tv3,0)+(select SUM(isnull(t3,0))t3 from #tmpb where a.custno=custno and rr<=a.rr)
 from #tmpb a 
 
 insert #tmpb(gno,rr,custno)
