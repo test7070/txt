@@ -887,6 +887,8 @@ set @t_accy = [1] --預設年度
 set @t_noa = [2] --訂單號
 set @t_datea = [3] --今天日期 由前端帶入
 set @t_worker = [4] --操作者
+declare @q_ip nvarchar(50)=[5]
+declare @q_proj nvarchar(50)=[6]
 
 --1050726 增加產生越南訂單
 declare @t_ip nvarchar(50) --IP
@@ -905,6 +907,9 @@ set @t_acomp = isnull((select (select case when isnull(nick,'')!='' then nick el
 set @t_custno = isnull((select custno from view_orde a where noa=@t_noa),'')
 set @t_cno = isnull((select cno from view_orde a where noa=@t_noa),'')
 
+if(@q_ip=@t_ip)
+	set @t_ip='127.0.0.1'
+
 declare @cmd nvarchar(max) 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -916,15 +921,26 @@ declare @err nvarchar(50)='採購單產生完畢!!'
 declare @berr nvarchar(MAX)='' --越南錯誤訊息
 declare @accy nvarchar(90)=@t_accy
 
+declare @tmp table(
+	accy nvarchar(50),
+	ordcno nvarchar(50)
+)
+
 BEGIN TRY
 	--Begin Transaction --沒有開放DTC所以暫時不使用
 
 	--刪除已產生的採購單
-	while ((select count(*) from view_ordc where quatno=@t_noa)>0)
+	while ((select count(*) from view_ordc where quatno=@t_noa and not exists (select * from @tmp where noa=ordcno))>0)
 	begin
 		set @accy=isnull((select top 1 accy from view_ordc where quatno=@t_noa),@t_accy)
 		EXEC("delete a from ordcs"+@accy+" a left join ordc"+@accy+" b on a.noa=b.noa where b.quatno='"+@t_noa+"' ")
-		EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
+		--表頭不清除
+		--EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
+		
+		insert @tmp 
+		EXEC("select '"+@accy+"',noa from ordc"+@accy+" where quatno='"+@t_noa+"' ")
+		
+		EXEC("update ordc"+@accy+" set money=0,tax=0,total=0,memo='',floata=0,totalus=0,coin='',worker2='"+@t_worker+"'")
 	end
 	
 	create table #tmp(
@@ -954,7 +970,7 @@ BEGIN TRY
 	,a.noa,b.no2
 	from view_orde a left join view_ordes b on a.noa=b.noa
 	left join ucx c on b.productno=c.noa
-	where a.noa=@t_noa
+	where a.noa=@t_noa and isnull(b.cancel,0)!=1
 	
 	declare @tggno nvarchar(90)
 	declare @custno nvarchar(90)
@@ -976,18 +992,41 @@ BEGIN TRY
 		begin
 					
 			--新的採購單號
-			select @ordcno=MAX(noa) from view_ordc where noa like 'P'+REPLACE(@t_datea,'/','')+'%'
-			set @ordcno='P'+REPLACE(@t_datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@ordcno,'000'),3) as int)+1 as nvarchar(10)),3)
-			
-			EXEC("insert ordc"+@accy+"(noa,quatno,kind,odate,datea,cno,acomp,tggno,tgg,nick,trantype,salesno,sales,paytype,tel,fax
-			,post,addr,money,taxtype,tax,total,floata,totalus,isproj,cancel,enda,worker,trandate)
-			select '"+@ordcno+"' noa,'"+@t_noa+"' quatno,'1' kind,'"+@t_datea+"' odate
-			,dbo.q_cdn('"+@t_datea+"',20)datea,(select top 1 noa from acomp where noa='"+@t_cno+"' order by noa)cno,(select top 1 acomp from acomp where noa='"+@t_cno+"' order by noa )acomp
-			,noa tggno,comp tgg,nick nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp
-			,0 money,'0' taxtype,0 tax,0 total,0 floata,0 totalus,1 isproj,0 cancel,0 enda,'"+@t_worker+"' worker,''
-			from (select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
-			union all select '','','','','','','','','','','' )tmp
-			where noa='"+@tggno+"'")
+			if((select count(*) from @tmp)>0)
+			begin
+				select top 1 @ordcno=ordcno,@accy=accy 
+				from @tmp order by ordcno
+				
+				delete @tmp where ordcno=@ordcno and @accy=accy	
+				
+				EXEC("update a
+					set tggno=b.noa,tgg=b.comp,nick=b.nick,trantype=b.trantype,salesno=b.salesno,sales=b.sales
+					,paytype=b.paytype,tel=b.tel,fax=b.fax,post=b.zip_comp,addr=b.addr_comp
+					,money=0,taxtype='0',tax=0,total=0,floata=0,totalus=0,isproj=1,cancel=0,enda=0,worker2='"+@t_worker+"',trandate=''
+					from ordc"+@accy+" a outer apply(
+					select * from (
+						select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
+						union all select '','','','','','','','','','','' )tmp where noa='"+@tggno+"'
+					)b
+				")
+			end
+			else
+			begin
+				select @ordcno=MAX(noa) from view_ordc where noa like 'P'+REPLACE(@t_datea,'/','')+'%'
+				set @ordcno='P'+REPLACE(@t_datea,'/','')+right('000'+cast(cast(RIGHT(isnull(@ordcno,'000'),3) as int)+1 as nvarchar(10)),3)			
+				
+				set @accy=@t_accy
+				
+				EXEC("insert ordc"+@accy+"(noa,quatno,kind,odate,datea,cno,acomp,tggno,tgg,nick,trantype,salesno,sales,paytype,tel,fax
+				,post,addr,money,taxtype,tax,total,floata,totalus,isproj,cancel,enda,worker,trandate)
+				select '"+@ordcno+"' noa,'"+@t_noa+"' quatno,'1' kind,'"+@t_datea+"' odate
+				,dbo.q_cdn('"+@t_datea+"',20)datea,(select top 1 noa from acomp where noa='"+@t_cno+"' order by noa)cno,(select top 1 acomp from acomp where noa='"+@t_cno+"' order by noa )acomp
+				,noa tggno,comp tgg,nick nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp
+				,0 money,'0' taxtype,0 tax,0 total,0 floata,0 totalus,1 isproj,0 cancel,0 enda,'"+@t_worker+"' worker,''
+				from (select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
+				union all select '','','','','','','','','','','' )tmp
+				where noa='"+@tggno+"'")
+			end
 			
 			EXEC("insert ordcs"+@accy+"(noa,no2,productno,product,spec,unit,mount,omount,stdmount,price
 			,total,c1,notv,cancel,enda,tggno,datea,trandate,ordbno,no3)
@@ -997,7 +1036,8 @@ BEGIN TRY
 			,a.mount notv,0 cancel,0 enda,'"+@tggno+"' tggno
 			,dbo.q_cdn('"+@t_datea+"',20)datea,a.datea trandate,a.ordeno,a.no2
 			from #tmp a left join ucx b on a.productno=b.noa 
-			outer apply (select top 1 xb.* from ucctgg xa left join ucctgg xb on xa.noa=xb.noa where xa.productno=a.productno and xb.tggno='"+@tggno+"' and isnull(xb.mount,0)<=a.mount order by xb.mount) c
+			--outer apply (select top 1 xb.* from ucctgg xa left join ucctggs xb on xa.noa=xb.noa where xa.productno=a.productno and xa.tggno='"+@tggno+"' and xa.pricedate<'"+@t_datea+"' and isnull(xb.mount,0)<=a.mount order by xa.pricedate desc,xb.mount) c
+			outer apply (select top 1 * from ucctggs where productno=a.productno and tggno='"+@tggno+"' and pricedate<'"+@t_datea+"' order by pricedate desc) c
 			where a.tggno='"+@tggno+"'")
 			
 			EXEC(" update ordc"+@accy+" 
@@ -1144,7 +1184,7 @@ BEGIN TRY
 		--where ta.tggno=isnull((select tggno from factory where noa='"+@t_factno+"'),'') and tb.productno=a.productno order by ta.pricedate desc ) c
 		outer apply (select * from ["+@t_ip+",1799]."+@t_db+".dbo.custm where noa='"+@t_custno+"')d
 		outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno='"+@t_custno+"' and productno=b.ucano) e
-		where a.noa='"+@t_noa+"' ")
+		where a.noa='"+@t_noa+"' and isnull(a.cancel,0)!=1 ")
 		
 		EXEC(" update ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" 
 		set money=isnull((select sum(total) from ["+@t_ip+",1799]."+@t_db+".dbo.view_ordes where noa='"+@ordeno+"'),0) 
