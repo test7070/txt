@@ -3,9 +3,10 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 	declare @cmd nvarchar(max)
 	declare @t_noa nvarchar(20) = [1]
 	declare @t_date nvarchar(10) = [2]
-	declare @t_btrandate nvarchar(10) = [3]
-	declare @t_etrandate nvarchar(10) = [4]
-	declare @t_driverno nvarchar(max) = [5]
+	declare @t_btrandate nvarchar(20)= [3]
+	declare @t_etrandate nvarchar(20)= [4]
+	declare @t_carteamno nvarchar(20)= [5]
+	declare @t_driverno nvarchar(20)= [6]
 	----------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#trans_tre_nr')is not null
 	BEGIN
@@ -14,6 +15,7 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 	create table #trans_tre_nr(
 		sel int identity(1,1)
 		,noa nvarchar(20)
+		,carteamno nvarchar(20)
 		,driverno nvarchar(20)
 		,driver nvarchar(20)
 		,datea nvarchar(10)
@@ -56,10 +58,11 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 		,memo nvarchar(max)
 		,tranno nvarchar(20)
 		,trannoq nvarchar(10)
+		,carteamno nvarchar(20)
 	)
-	insert into #trans_tre_nrs(carno,driverno,driver,noa,noq,datea,trandate,custno,cust,straddrno,straddr,endaddrno,endaddr
+	insert into #trans_tre_nrs(carno,carteamno,driverno,driver,noa,noq,datea,trandate,custno,cust,straddrno,straddr,endaddrno,endaddr
 		,productno,product,unit,mount,[weight],price,[money],memo,tranno,trannoq)
-	select isnull(a.carno,''),isnull(a.driverno,''),a.driver,a.noa,a.noq,a.datea,a.trandate,a.custno,a.nick,a.straddrno,a.straddr
+	select isnull(a.carno,''),isnull(a.carteamno,''),isnull(a.driverno,''),a.driver,a.noa,a.noq,a.datea,a.trandate,a.custno,a.nick,a.straddrno,a.straddr
 		,a.endaddrno,a.endaddr,a.uccno,a.product
 		,a.unit2
 		,a.mount3,a.mount4
@@ -70,11 +73,28 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 	left join view_tres b on a.noa=b.tranno and a.noq=b.trannoq
 	where (b.noa is null or b.noa=@t_noa)
 	and a.trandate between @t_btrandate and @t_etrandate
+	and (len(@t_carteamno)=0 or CHARINDEX(','+a.carteamno+',',','+@t_carteamno+',')>0)
 	and (len(@t_driverno)=0 or CHARINDEX(','+a.driverno+',',','+@t_driverno+',')>0)
 	----------------------------------------------------------------------------------------------------
+	--沒有出車單,但有加減項的
+	insert into #trans_tre_nrs(carteamno,driverno)
+	select a.carteamno,b.driverno
+	from(
+	select isnull(a.carteamno,'') carteamno,isnull(a.driverno,'') driverno
+	from carchg a 
+	where not(isnull(plusmoney,0)=0 and isnull(minusmoney,0)=0)
+	and not exists(select top 1 noa from view_tre where charindex(a.noa,carchgno)>0) --排除已立帳的加減項
+	and a.datea between @t_btrandate and @t_etrandate 
+	and (len(@t_carteamno)=0 or CHARINDEX(','+a.carteamno+',',','+@t_carteamno+',')>0)
+	and (len(@t_driverno)=0 or CHARINDEX(','+a.driverno+',',','+@t_driverno+',')>0)
+	group by isnull(a.carteamno,''),isnull(a.driverno,'')) a
+	left join (select carteamno,driverno from #trans_tre_nrs group by carteamno,driverno) b on a.carteamno=b.carteamno and a.driverno = b.driverno
+	where b.carteamno is null
+	
 	declare @sel int
 	--declare @carno nvarchar(20)
 	declare @driverno nvarchar(20)
+	declare @carteamno nvarchar(20)
 	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
 	declare @key nvarchar(20) = 'BJ'
 	declare @maxno1 nvarchar(20) = ''
@@ -93,10 +113,10 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 	declare @minusmoney float
 
 	declare cursor_table cursor for
-	select driverno from #trans_tre_nrs group by driverno
+	select driverno,carteamno from #trans_tre_nrs group by driverno,carteamno
 	open cursor_table
 	fetch next from cursor_table
-	into @driverno
+	into @driverno,@carteamno
 	while(@@FETCH_STATUS <> -1)
 	begin
 		select @maxno2='',@noa=''
@@ -125,6 +145,7 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 		and not exists(select top 1 noa from view_tre where charindex(a.noa,carchgno)>0) 
 		and not exists(select top 1 noa from #trans_tre_nr where charindex(a.noa,carchgno)>0) 
 		and a.datea between @t_btrandate and @t_etrandate 
+		and a.carteamno=@carteamno
 		open cursor_table2
 		fetch next from cursor_table2
 		into @tmpnoa,@money1,@money2
@@ -139,8 +160,8 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 		close cursor_table2
 		deallocate cursor_table2
 		----------------------------------------------------------------------
-		insert into #trans_tre_nr(noa,driverno,datea,mon,carchgno,plusmoney,minusmoney)
-		select @noa,@driverno,@t_date,'',@carchgno,@plusmoney,@minusmoney
+		insert into #trans_tre_nr(noa,carteamno,driverno,datea,mon,carchgno,plusmoney,minusmoney)
+		select @noa,@carteamno,@driverno,@t_date,'',@carchgno,@plusmoney,@minusmoney
 		----------------------------------------------------------------------
 		declare cursor_table2 cursor for
 		select sel,row_number()over(order by trandate,tranno,trannoq) from #trans_tre_nrs 
@@ -161,7 +182,7 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 		
 		
 		fetch next from cursor_table
-		into @driverno
+		into @driverno,@carteamno
 	end
 	close cursor_table
 	deallocate cursor_table
@@ -184,8 +205,8 @@ tre_import_nr:-- tre.txt/tre_import_nr    整批
 	
 	begin try
 		set @cmd ="
-		insert into tre"+@accy+"(noa,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total)
-		select noa,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total
+		insert into tre"+@accy+"(noa,carteamno,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total)
+		select noa,carteamno,driverno,driver,datea,mon,carchgno,[money],plusmoney,minusmoney,total
 		from #trans_tre_nr"
 		execute sp_executesql @cmd
 	end try
