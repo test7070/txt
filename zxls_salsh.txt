@@ -1,0 +1,95 @@
+﻿zxls_salsh:--zxls_salsh指紋打卡上傳 
+declare @workerno nvarchar(MAX)=[1] --上傳人編號
+declare @worker nvarchar(MAX)=[2]--上傳人姓名
+
+declare @tmp table(
+	idno int IDENTITY(1,1),
+	Noa nvarchar(MAX),
+	TMNo nvarchar(MAX),
+	EnNo nvarchar(MAX),
+	Name nvarchar(MAX),
+	INOUT nvarchar(MAX),
+	Mode nvarchar(MAX),
+	DateTimea nvarchar(MAX)
+)
+insert @tmp
+select dbo.split(a,'&#09'+CHAR(59),0) No
+,dbo.split(a,'&#09'+CHAR(59),1) TMNo
+,dbo.split(a,'&#09'+CHAR(59),2) EnNo
+,dbo.split(a,'&#09'+CHAR(59),3) Name
+,dbo.split(a,'&#09'+CHAR(59),4) INOUT
+,dbo.split(a,'&#09'+CHAR(59),5) Mode
+,dbo.split(a,'&#09'+CHAR(59),6) DateTime
+from ztmpxls where dbo.split(a,'&#09'+CHAR(59),0)!='No'  order by cast(noa as int)
+
+declare @tmpa table(
+	sssno nvarchar(MAX),
+	namea nvarchar(MAX),
+	cardno nvarchar(MAX),
+	datea nvarchar(MAX),
+	btime nvarchar(MAX),
+	etime nvarchar(MAX)
+)
+
+insert @tmpa
+select b.noa,b.namea,a.EnNo,left(DateTimea,10),MIN(DateTimea),MAX(DateTimea) from @tmp a 
+outer apply (select top 1 * from sss where barcode=a.EnNo order by noa)b
+group by b.noa,b.namea,a.EnNo,left(DateTimea,10)
+
+update @tmpa
+set btime=RIGHT(btime,8),etime=RIGHT(etime,8)
+,datea=dbo.AD2ChineseEraName(datea)
+
+declare @datea nvarchar(10)
+
+declare @ecount int=0
+
+declare cursor_table cursor for
+select datea from @tmpa group by datea
+open cursor_table
+fetch next from cursor_table
+into @datea
+while(@@FETCH_STATUS <> -1)
+begin
+	
+	--判斷是否有新增過
+	if((select COUNT(*) from salpresent where noa=@datea)=0)
+	begin
+		insert salpresent(noa,w133,w166,w100,w200,w266,hr_special,mount,workerno,worker)
+		select @datea,0,0,0,0,0,0,(select count(*) from @tmpa where datea=@datea),@workerno,@worker
+		--新增bbs
+		insert salpresents(noa,noq,sssno,namea,clockin,clockout,clockindate,clockoutdate,cardno
+		,w133,w166,w100,w200,w266,hr_special,memo)
+		select datea,right('000'+cast(ROW_NUMBER() over (order by sssno) as nvarchar(10)),3)
+		,sssno,namea,btime,etime,datea,datea,cardno,0,0,0,0,0,0,'' from @tmpa
+		where datea=@datea
+	end
+	else
+	begin
+		--更新已存在員工上下班時間
+		update a
+		set clockin=b.btime,clockout=b.etime,clockindate=@datea,clockoutdate=@datea
+		from salpresents a 
+		outer apply (select * from @tmpa where sssno=a.sssno and datea=a.noa) b
+		where exists (select * from @tmpa where sssno=a.sssno and datea=@datea)	and noa=@datea
+		
+		set @ecount=(select count(*) from salpresents where noa=@datea)
+		
+		--新增未存在員工上下班時間
+		insert salpresents(noa,noq,sssno,namea,clockin,clockout,clockindate,clockoutdate,cardno
+		,w133,w166,w100,w200,w266,hr_special,memo)
+		select datea,right('000'+cast(ROW_NUMBER() over (order by sssno)+@ecount as nvarchar(10)),3)
+		,sssno,namea,btime,etime,datea,datea,cardno,0,0,0,0,0,0,'' from @tmpa a
+		where datea=@datea and  not exists (select * from @tmpa where sssno=a.sssno and datea=@datea) 
+		
+		set @ecount=(select count(*) from salpresents where noa=@datea)
+		
+		update salpresent set mount=@ecount where noa=@datea
+	end
+
+	fetch next from cursor_table
+	into @datea
+end
+close cursor_table
+deallocate cursor_table
+;
