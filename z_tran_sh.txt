@@ -106,10 +106,15 @@ where a.recno=b.recno
 
 delete @tmp where rr%6!=1
  
+insert @tmp(gno,datea)
+select '2',datea
+from @tmp
+group by datea
+ 
 select 
 mount+unit mount 
 ,* from @tmp 
-order by datea,no2
+order by datea,gno,no2
 ; 
 --------------------------------------------------------------------------------------------------------
 z_tran_sh2:--z_tran_sh2
@@ -127,34 +132,38 @@ declare @t_chk1 nvarchar(20) = case when '#non'=[14] then '' else [14] end
 declare @t_chk2 nvarchar(20) = case when '#non'=[15] then '' else [15] end
 
 declare @tmp table( 
-	gno nvarchar(10), 
+	gno nvarchar(10),
+	rr int,
+	page int,
+	noa nvarchar(50),
+	no2 nvarchar(50), 
 	custno nvarchar(50),
-	cust nvarchar(50),							
-	tel nvarchar(50),	
+	comp nvarchar(50),							
+	fax nvarchar(50),	
 	datea nvarchar(10),
-	productno nvarchar(50),						
-	product nvarchar(50),
 	mount float,
 	volume float,
+	weight float,
 	addrno nvarchar(50), 
-	addr nvarchar(50),
+	addr nvarchar(max),
 	addrno2 nvarchar(50),
-	addr2 nvarchar(50),
-	tranno nvarchar(50),
-	productno2 nvarchar(50),
+	addr2 nvarchar(max),
 	total float,
 	memo nvarchar(max),
 	addrno3 nvarchar(50),
 	addr3 nvarchar(50),
-	te12 nvarchar(50),
+	te1 nvarchar(50),
 	address nvarchar(max),							
 	worker nvarchar(50),
 	driverno nvarchar(50),
-	driver nvarchar(200)
+	driver nvarchar(200),
+	driver2 nvarchar(200),
+	driver3 nvarchar(200),
+	driver4 nvarchar(200)
 ) 
 insert @tmp 
-select '0',custno,cust,c.tel,time1,productno,product,mount,volume,a.addrno,a.addr,addrno2
-,addr2,tranno,productno2,total,a.memo,isnull(addrno3,''),addr3,d.tel,d.addr_comp,b.worker,driverno,driver
+select '0',ROW_NUMBER()over(partition by a.noa,no2 order by no2),'',a.noa,a.no2,custno,cust,c.fax,time1,mount,volume,a.weight,a.addrno,a.addr,addrno2
+,addr2,total,a.memo,isnull(addrno3,''),addr3,d.tel,d.addr_comp,b.worker,driverno,driver,'','',''
 from view_tranvcces a
 left join view_tranvcce b on a.noa=b.noa
 left join cust c on a.custno=c.noa
@@ -164,20 +173,73 @@ and (custno between @t_bcustno and @t_ecustno)
 and ((a.addrno between @t_baddr1 and @t_eaddr1) or (a.addr between @t_baddr1 and @t_eaddr1))
 and ((addrno2 between @t_baddr2 and @t_eaddr2) or (addr2 between @t_baddr2 and @t_eaddr2))
 and (driverno between @t_bdriver and @t_edriver)
+and custno!='1'
 
-insert @tmp(gno,custno,datea,addrno3,te12,address,driverno,worker,driver)
-select '1',custno,datea,addrno3,te12,address,driverno,worker,driver
-from @tmp
-group by custno,datea,addrno3,te12,address,driverno,worker,driver
+update @tmp 
+set driver2=b.driver
+from @tmp a 
+outer apply(select * from @tmp where a.noa=noa and a.no2=no2 and rr%4=2)b
 
-insert @tmp(gno,custno,datea,addrno3,driverno,worker,driver)
-select '2',custno,datea,addrno3,driverno,worker,driver
+update @tmp 
+set driver3=b.driver
+from @tmp a 
+outer apply(select * from @tmp where a.noa=noa and a.no2=no2 and rr%4=3)b
+
+update @tmp 
+set driver4=b.driver
+from @tmp a 
+outer apply(select * from @tmp where a.noa=noa and a.no2=no2 and rr%4=0)b
+
+delete @tmp where rr%4!=1
+
+declare @pageline int =3--一頁個品項
+declare @custno nvarchar(50)
+declare @noa nvarchar(50)
+declare @no2 nvarchar(50) 
+declare @idno int
+declare @page int
+
+--補空白行
+declare cursor_table cursor for 
+select noa,no2,custno,MAX(rr),MAX(page) from @tmp group by custno,noa,no2
+open cursor_table 
+fetch next from cursor_table 
+into @noa,@no2,@custno,@idno,@page
+while(@@FETCH_STATUS <> -1) 
+begin
+	while ((@idno)%@pageline>0)
+	begin
+		set @idno=@idno+1
+		insert @tmp(gno,noa,no2,custno,rr,page)
+		select '1',@noa,@no2,@custno,@idno,@page
+	end
+
+	fetch next from cursor_table 
+	into @noa,@no2,@custno,@idno,@page
+end 
+close cursor_table 
+deallocate cursor_table
+
+insert @tmp(gno,noa,no2,addr3,address,te1,worker)
+select '2',noa,no2,addr3,address,te1,worker
 from @tmp
-group by custno,datea,addrno3,driverno,worker,driver
+where gno='1'
+group by noa,no2,addr3,address,te1,worker
+
+update @tmp
+set driver=isnull(b.driver,'')+' '+isnull(b.driver2,'')+' '+isnull(b.driver3,'')+' '+isnull(b.driver4,'')
+from @tmp a
+outer apply(select * from @tmp where a.noa=noa and a.no2=no2 and gno='0')b
+where a.gno='2'
+
+insert @tmp(gno,noa,no2)
+select '3',noa,no2
+from @tmp
+group by noa,no2
 
 select 
 * from @tmp
-order by custno,datea,addrno3,driverno,gno
+order by noa,no2,gno
 ;
 --------------------------------------------------------------------------------------------------
 z_tran_sh3:--z_tran_sh3
