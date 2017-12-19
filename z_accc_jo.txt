@@ -1,0 +1,250 @@
+﻿z_accc_jo1:--z_accc_jo1
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+	
+	declare @t_proj nvarchar(10) = '[1]'
+	declare @t_rank nvarchar(20) = '[2]'
+	declare @t_bdate nvarchar(10) = case when '#non'=[3] then '090/01/01' else [3] end
+	declare @t_edate nvarchar(10) = case when '#non'=[4] then '999/12/31' else [4] end
+	declare @t_bacc1 nvarchar(20) = case when '#non'=[5] then '' else [5] end
+	declare @t_eacc1 nvarchar(20) = case when '#non'=[6] then char(255) else [6] end
+	declare @t_part nvarchar(max) = case when '#non'=[9] then '' else [9] end
+	declare @t_bproject nvarchar(max) = case when '#non'=[11] then '' else [11] end
+	declare @t_eproject nvarchar(max) = case when '#non'=[12] then char(255) else [12] end
+	declare @t_len nvarchar(20) = '[13]' --3民國 4 西元
+	if(@t_len=4)
+	begin
+		set @t_bdate = case when @t_bdate='090/01/01' then '2001/01/01' else @t_bdate end
+		set @t_edate = case when @t_edate='999/12/31' then '2910/12/31' else @t_edate end
+		--set @t_bdate=dbo.AD2ChineseEraName(@t_bdate)
+		--set @t_edate=dbo.AD2ChineseEraName(@t_edate)
+		set @t_bdate=right('000'+cast(cast(left(@t_bdate,4) as int)-1911  as nvarchar(10)),3)+right(@t_bdate,6)
+		set @t_edate=right('000'+cast(cast(left(@t_edate,4) as int)-1911  as nvarchar(10)),3)+right(@t_edate,6)
+	end
+	declare @t_project nvarchar(max) = case when '#non'=[14] then '' else [14] end
+	declare @t_accc7 nvarchar(MAX) = case when '#non'=[15] then '' else [15] end
+	declare @btime datetime
+	
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%'
+	
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and LEFT(@t_edate,3))
+
+	declare @tmp table(
+		gno nvarchar(1),
+		year nvarchar(10),
+		mon nvarchar(10),
+		datea nvarchar(10),
+		noa nvarchar(50),
+		noq nvarchar(50),
+		acc6 nvarchar(100),
+		detail nvarchar(100),
+		part nvarchar(50),
+		vccno nvarchar(50),
+		country nvarchar(100),
+		comp nvarchar(100),
+		tgg nvarchar(100),
+		worker nvarchar(50),
+		etd nvarchar(10),
+		invo nvarchar(50),
+		ordcno nvarchar(50),
+		ordeno nvarchar(50),
+		proj nvarchar(50),
+		accc7 nvarchar(max),
+		dmoney float,
+		cmoney float
+	)
+	
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @tableacc nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),replace(tablea,'accc','acc'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@tableacc,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin
+	
+		insert @tmp
+		exec("select '0',cast("+@yy+"+1911 as nvarchar(10))
+		,case left(a.accc2,2) when '01' then 'Jan' when '02' then 'Feb' when '03' then 'Mar' when '04' then 'Apr' when '05' then 'May' 
+		when '06' then 'Jun' when '07' then 'Jul'when '08' then 'Aug' when '09' then 'Sep' when '10' then 'Oct' when '11' then 'Nov' when '12' then 'Dec' end
+		,'"+@yy+"'+'/'+a.accc2,a.accc3,a.noq
+		,case when CHARINDEX('-',a.accc6) !=0 then SUBSTRING(a.accc6,0,CHARINDEX('-',a.accc6)) else a.accc6 end
+		,SUBSTRING(a.accc6,CHARINDEX('-',a.accc6)+1,LEN(a.accc6)-CHARINDEX('-',a.accc6)),d.part,a.bal,e.country,c.comp
+		,f.gtime,b.worker,g.cldate,case when isnull(c.invo,'')!='' then c.invo else c.invono end,f.ordcno,c.ordeno,b.proj
+		,a.accc7,a.dmoney,a.cmoney
+		from "+@tableas+" a
+		left join "+@tablea+" b on a.accc3=b.accc3
+		left join acpart"+@accy+" d on a.part=d.noa
+		left join view_vcc c on a.bal=c.noa
+		left join custm e on c.custno=e.noa
+		left join view_orde f on c.ordeno=f.noa
+		left join boaj g on c.noa=g.noa
+		where isnull(b.accc3,'')!=''
+		and ( len('"+@t_part+"')=0 
+			or ( charindex('zzzzz','"+@t_part+"')>0 and len(ISNULL(a.part,''))=0) --zzzzz@無部門
+			or ( len('"+@t_part+"')>0 and charindex(','+a.part+',',','+'"+@t_part+"'+',')>0 ))
+		and '"+@yy+"' between left('"+@t_bdate+"',3) and left('"+@t_edate+"',3)
+		and '"+@yy+"'+'/'+b.accc2 <= '"+@t_edate+"'
+		and '"+@yy+"'+'/'+b.accc2 >= '"+@t_bdate+"'
+		and (('"+@islock+"'=0) or ('"+@islock+"'=1 and isnull(b.lok,0)=0))
+		and a.accc5 between '"+@t_bacc1+"' and '"+@t_eacc1+"'
+		and isnull(a.proj,'') between '"+@t_bproject+"' and '"+@t_eproject+"'
+		and (len('"+@t_project+"')=0 or charindex(','+a.proj+',',','+'"+@t_project+"'+',')>0 )
+		and (len('"+@t_accc7+"')=0 or a.accc7 like '%'+'"+@t_accc7+"'+'%')
+		")		
+
+		fetch next from cursor_table
+		into @tablea,@tableas,@tableacc,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	select 
+	dbo.getComma(dmoney,-1)dmoney
+	,dbo.getComma(cmoney,-1)cmoney
+	,* from @tmp
+	order by datea,noa,noq
+;
+-----------------------------------------------------------------------------------------------------------
+z_accc_jo2:--z_accc_jo2
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @islock int
+	
+	declare @t_proj nvarchar(10) = '[1]'
+	declare @t_rank nvarchar(20) = '[2]'
+	declare @t_bdate nvarchar(10) = case when '#non'=[3] then '090/01/01' else [3] end
+	declare @t_edate nvarchar(10) = case when '#non'=[4] then '999/12/31' else [4] end
+	declare @t_bacc1 nvarchar(20) = case when '#non'=[5] then '' else [5] end
+	declare @t_eacc1 nvarchar(20) = case when '#non'=[6] then char(255) else [6] end
+	declare @t_part nvarchar(max) = case when '#non'=[9] then '' else [9] end
+	declare @t_bproject nvarchar(max) = case when '#non'=[11] then '' else [11] end
+	declare @t_eproject nvarchar(max) = case when '#non'=[12] then char(255) else [12] end
+	declare @t_len nvarchar(20) = '[13]' --3民國 4 西元
+	if(@t_len=4)
+	begin
+		set @t_bdate = case when @t_bdate='090/01/01' then '2001/01/01' else @t_bdate end
+		set @t_edate = case when @t_edate='999/12/31' then '2910/12/31' else @t_edate end
+		--set @t_bdate=dbo.AD2ChineseEraName(@t_bdate)
+		--set @t_edate=dbo.AD2ChineseEraName(@t_edate)
+		set @t_bdate=right('000'+cast(cast(left(@t_bdate,4) as int)-1911  as nvarchar(10)),3)+right(@t_bdate,6)
+		set @t_edate=right('000'+cast(cast(left(@t_edate,4) as int)-1911  as nvarchar(10)),3)+right(@t_edate,6)
+	end
+	declare @t_project nvarchar(max) = case when '#non'=[14] then '' else [14] end
+	declare @t_accc7 nvarchar(MAX) = case when '#non'=[15] then '' else [15] end
+	declare @btime datetime
+
+	declare @listaccc table(
+		tablea nvarchar(20),
+		accy nvarchar(20),
+		yy nvarchar(10)
+	)
+	insert into @listaccc(tablea,accy,yy)
+	SELECT TABLE_NAME 
+	,replace(TABLE_NAME,'accc','')
+	,substring(replace(TABLE_NAME,'accc',''),1,CHARINDEX('_',replace(TABLE_NAME,'accc',''))-1)
+	FROM INFORMATION_SCHEMA.TABLES 
+	where TABLE_NAME like 'accc[0-9][0-9][0-9]%'
+	
+	delete @listaccc where not(yy between LEFT(@t_bdate,3) and LEFT(@t_edate,3))
+	
+	
+
+	declare @tmp table(
+		gno nvarchar(1),
+		custno nvarchar(100),
+		datea nvarchar(10),
+		noa nvarchar(50),
+		noq nvarchar(50),
+		accc5 nvarchar(50),
+		accc6 nvarchar(50),
+		vccno nvarchar(50),
+		accc7 nvarchar(max),
+		dmoney float,
+		cmoney float,
+		money float,
+		total float
+	)
+
+	declare @tablea nvarchar(20)
+	declare @tableas nvarchar(20)
+	declare @tableacc nvarchar(20)
+	declare @accy nvarchar(10)
+	declare @yy nvarchar(10)
+	
+	declare cursor_table cursor for
+	select tablea,replace(tablea,'accc','acccs'),replace(tablea,'accc','acc'),accy,yy from @listaccc
+	open cursor_table
+	fetch next from cursor_table
+	into @tablea,@tableas,@tableacc,@accy,@yy
+	while(@@FETCH_STATUS <> -1)
+	begin
+	
+		insert @tmp
+		exec("select '2',c.custno+'('+c.comp+')',a.accc2,a.accc3,a.noq,left(accc5,4)
+		,case when CHARINDEX('-',a.accc6) !=0 then SUBSTRING(a.accc6,0,CHARINDEX('-',a.accc6)) else a.accc6 end,a.bal,a.accc7,a.dmoney,a.cmoney
+		,case when isnull(a.dmoney,'')!='' then a.dmoney else a.cmoney end,case when isnull(a.dmoney,'')!='' then a.dmoney else a.cmoney end
+		from "+@tableas+" a
+		left join "+@tablea+" b on a.accc3=b.accc3
+		left join umm c on a.accc3=c.accno
+		where isnull(b.accc3,'')!=''
+		and ( len('"+@t_part+"')=0 
+			or ( charindex('zzzzz','"+@t_part+"')>0 and len(ISNULL(a.part,''))=0) --zzzzz@無部門
+			or ( len('"+@t_part+"')>0 and charindex(','+a.part+',',','+'"+@t_part+"'+',')>0 ))
+		and '"+@yy+"' between left('"+@t_bdate+"',3) and left('"+@t_edate+"',3)
+		and '"+@yy+"'+'/'+b.accc2 <= '"+@t_edate+"'
+		and '"+@yy+"'+'/'+b.accc2 >= '"+@t_bdate+"'
+		and (('"+@islock+"'=0) or ('"+@islock+"'=1 and isnull(b.lok,0)=0))
+		and a.accc5 between '"+@t_bacc1+"' and '"+@t_eacc1+"'
+		and isnull(a.proj,'') between '"+@t_bproject+"' and '"+@t_eproject+"'
+		and (len('"+@t_project+"')=0 or charindex(','+a.proj+',',','+'"+@t_project+"'+',')>0 )
+		and (len('"+@t_accc7+"')=0 or a.accc7 like '%'+'"+@t_accc7+"'+'%')
+		")
+
+		fetch next from cursor_table
+		into @tablea,@tableas,@tableacc,@accy,@yy
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+
+	insert @tmp(gno,accc5,accc6)
+	select '1',accc5,accc6
+	from @tmp
+	group by gno,accc5,accc6
+	
+	insert @tmp(gno,custno,accc5,accc6,total)
+	select '3',custno,accc5,accc6,SUM(total)
+	from @tmp
+	where gno='2'
+	group by custno,accc5,accc6
+	
+	insert @tmp(gno,accc5,accc6)
+	select '4',accc5,accc6
+	from @tmp
+	where gno='2'
+	group by accc5,accc6
+
+	select 
+	@t_bdate bdate,@t_edate edate,@t_bacc1+' ~ '+@t_eacc1 acno
+	,dbo.getComma(money,-1)money
+	,dbo.getComma(total,-1)total
+	,* from @tmp
+	order by accc5,accc6,custno,gno,datea,noa,noq
+;
