@@ -30,19 +30,28 @@ if (@r_len='4')
 
 --------------------------------------------------
 --設定小數點--4表示無小數點--2表示小數點1位---0表示小數點2位--
-declare @mount_decimal int = 0
-declare @weight_decimal int = 0
-declare @price_decimal int = 0
-declare @total_decimal int = 4
+--後面改為根據小數點位來看
+declare @mount_decimal int = 2
+declare @weight_decimal int = 2
+declare @price_decimal int = 2
+declare @total_decimal int = 0
 
 if(charindex('永勝',@t_acomp)>0)
 begin
-	set @mount_decimal =4
-	set @weight_decimal =4
-	set @price_decimal =4
+	set @mount_decimal =0
+	set @weight_decimal =0
+	set @price_decimal =0
 end
 if(charindex('英特瑞',@t_acomp)>0 or charindex('安美得',@t_acomp)>0)
-	set @mount_decimal =4
+	set @mount_decimal =0
+	
+if(charindex('彩虹',@t_acomp)>0)
+begin
+	set @mount_decimal =0
+	set @weight_decimal =0
+	set @price_decimal = 3
+	set @total_decimal = 0
+end
 --------------------------------------------------
 if(charindex('英特瑞',@t_acomp)>0 or charindex('安美得',@t_acomp)>0)
 	set @qhref_acomp='_it'
@@ -81,7 +90,12 @@ set @t_multucc = case when '#non' = [27] then '' else [27]+',' end
 --***********************************************************************************
 SET QUOTED_IDENTIFIER OFF
 
-declare @result table(
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #result
+END
+
+create table #result(
 	gno nvarchar(10),
 	noa nvarchar(30),
 	noq nvarchar(10),
@@ -105,11 +119,12 @@ declare @result table(
 	itotal float
 )
 
-	insert into @result
+	insert into #result
 	select '91' gno, a.noa noa, b.noq noq, a.typea typea, a.datea datea, (case when a.mon='' then left(a.datea,@r_lenm) else a.mon end), a.custno, a.comp
 		,dbo.charbr(b.productno,10), b.product+(case when @isspec='1' then '<BR>&nbsp'+isnull(b.spec,'') else '' end), b.unit, 
 		   b.mount, b.weight, b.price, b.total,'vcc'+@qhref_acomp+'?noa=$noa?'+a.accy
-		   ,a.invono,v.datea,v.money,v.tax,v.total
+		   ,a.invono+(case when charindex('彩虹',@t_acomp)>0 and len(isnull(a.part2,''))>0 then+'#'+a.part2 else '' end)
+		   ,v.datea,v.money,v.tax,v.total
 	from view_vccs b
 	left join view_vcc a on a.noa = b.noa
 	left join view_ucaucc c on b.productno = c.noa
@@ -132,43 +147,70 @@ declare @result table(
 	
 if(@t_showinvono='1')
 begin
-	insert into @result(gno,datea,noa,noq,invono,idate,imoney,itax,itotal)
-	select '92',datea,noa,'ZZZ',invono,idate,imoney,itax,itotal
-	from @result group by datea,noa,invono,idate,imoney,itax,itotal
+		
+	if(charindex('彩虹',@t_acomp)>0) --多張發票 也要抓vcct
+	begin
+		insert #result(gno,datea,noa,noq,invono,idate,imoney,itax,itotal)
+		select '92',a.datea,a.noa,'ZZZ',b.noa,b.datea,b.money,b.tax,b.total
+		from vcca b outer apply (select top 1 * from #result where charindex(b.noa,invono)>0)a
+		where b.datea >= dbo.q_cdn(@t_bdate,-61) --加快速度 最多取前2個月
+		and exists (select * from #result where charindex(b.noa,invono)>0)
+		
+		insert #result(gno,datea,noa,noq,invono,idate,imoney,itax,itotal)
+		select '92',a.datea,a.noa,'ZZZ',b.noa,b.datea,b.money,b.tax,b.total
+		from vcct b outer apply (select top 1 * from #result where charindex(b.noa,invono)>0)a
+		where b.typea='2' and kind!='33' and kind!='34' and kind!='38' 
+		and b.datea >= dbo.q_cdn(@t_bdate,-61) --加快速度 最多取前2個月
+		and not exists (select * from #result where gno='92' and invono=b.noa) --排除以寫入的vcca
+		and exists (select * from #result where gno='91' and charindex(b.noa,invono)>0)
+	end
+	else
+	begin
+		insert into #result(gno,datea,noa,noq,invono,idate,imoney,itax,itotal)
+		select '92',datea,noa,'ZZZ',invono,idate,imoney,itax,itotal
+		from #result group by datea,noa,invono,idate,imoney,itax,itotal
+	end
+	
 end
 	
-insert into @result(gno,datea,noa,mount,price,total)
+insert into #result(gno,datea,noa,mount,price,total)
 	select '93',datea,'ZZZZZZZZZZZZ',
 		sum((case typea when '1' then mount else (-1)*mount end)),
 		sum((case typea when '1' then price else (-1)*price end)),
 		sum((case typea when '1' then total else (-1)*total end))
-	from @result group by datea
+	from #result group by datea
 	
-insert into @result(gno,datea,noa,mount,price,total)
+insert into #result(gno,datea,noa,mount,price,total)
 	select '94',left(datea,@r_lenm)+'z','ZZZZZZZZZZZZ',sum(mount),sum(price),sum(total)
-	from @result a where gno='93' group by left(datea,@r_lenm)
+	from #result a where gno='93' group by left(datea,@r_lenm)
 --*************************************************************************	
-update @result set typea = (case typea when '1' then '出' else '退' end) where typea ='1' or typea = '2'
-update @result set gno='0' where gno='91'
-update @result set gno='1' where gno='92'
-update @result set gno='2' where gno='93'
-update @result set gno='3' where gno='94'
+update #result set typea = (case typea when '1' then '出' else '退' end) where typea ='1' or typea = '2'
+update #result set gno='0' where gno='91'
+update #result set gno='1' where gno='92'
+update #result set gno='2' where gno='93'
+update #result set gno='3' where gno='94'
 
-
-update @result
+update #result
 set mount=mount*-1,total=total*-1
 where typea='退'
 
 select gno, noa, noq, typea, datea, LEFT(datea,@r_lenm) xdatea, mon, custno, left(comp,10) comp, productno, xproduct,unit,qhref
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),@mount_decimal,30)) mount 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,weight),1)),@weight_decimal,30)) weight 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,price),1)),@price_decimal,30)) price 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,total),1)),@total_decimal,30)) total 
+	,dbo.getComma(mount,@mount_decimal) mount 
+	,dbo.getComma(weight,@weight_decimal) weight 
+	,dbo.getComma(price,@price_decimal) price 
+	,dbo.getComma(total,@total_decimal) total 
 	,invono,idate
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,imoney),1)),@total_decimal,30)) imoney 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,itax),1)),@total_decimal,30)) itax 
-	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,itotal),1)),@total_decimal,30)) itotal 
-from @result order by datea,noa,noq;
+	,dbo.getComma(imoney,@total_decimal) imoney 
+	,dbo.getComma(itax,@total_decimal) itax 
+	,dbo.getComma(itotal,@total_decimal) itotal  
+from #result order by datea,noa,noq
+
+IF OBJECT_ID('tempdb..#result')is not null
+BEGIN
+	drop table #result
+END
+
+;
 --*********************************************************************************************************
 z_vcc2:--z_vcc2
 	declare @t_bdate nvarchar(10)
