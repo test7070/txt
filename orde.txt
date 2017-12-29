@@ -929,8 +929,10 @@ declare @tmp table(
 
 declare @t_allordc nvarchar(MAX)='' --全部的採購單號
 
-declare @t_del bit --產生單子刪除 --106/12/29
-set @t_del = isnull((select cancel from view_orde a where noa=@t_noa),0)
+declare @bmenda nvarchar(10) --bbm
+declare @bmcancel nvarchar(10) --bbm
+set @bmenda = cast(isnull((select enda from view_orde a where noa=@t_noa),0) as nvarchar(10))
+set @bmcancel = cast(isnull((select cancel from view_orde a where noa=@t_noa),0) as nvarchar(10))
 
 BEGIN TRY
 	--Begin Transaction --沒有開放DTC所以暫時不使用
@@ -940,18 +942,13 @@ BEGIN TRY
 	begin
 		set @accy=isnull((select top 1 accy from view_ordc where quatno=@t_noa),@t_accy)
 		EXEC("delete a from ordcs"+@accy+" a left join ordc"+@accy+" b on a.noa=b.noa where b.quatno='"+@t_noa+"' ")
-		
 		--表頭不清除
-		--106/12/29 訂單表頭取消會刪除
-		if(@t_del=1)
-			EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
-		else
-		begin
-			insert @tmp 
-			EXEC("select '"+@accy+"',noa from ordc"+@accy+" where quatno='"+@t_noa+"' ")
-			
-			EXEC("update ordc"+@accy+" set money=0,tax=0,total=0,memo='',floata=0,totalus=0,coin='',worker2='"+@t_worker+"'")
-		end
+		--EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
+		
+		insert @tmp 
+		EXEC("select '"+@accy+"',noa from ordc"+@accy+" where quatno='"+@t_noa+"' ")
+		
+		EXEC("update ordc"+@accy+" set money=0,tax=0,total=0,memo='',floata=0,totalus=0,coin='',worker2='"+@t_worker+"'")
 	end
 	
 	create table #tmp(
@@ -962,6 +959,8 @@ BEGIN TRY
 		tggno nvarchar(50),
 		ordeno nvarchar(50),
 		no2 nvarchar(50),
+		enda bit,
+		cancel bit
 	)
 	--105/05/20 不管 是不是原料
 	--insert #tmp
@@ -978,10 +977,10 @@ BEGIN TRY
 	select b.productno,b.product,b.mount,
 	case when len(b.datea)>0 then dbo.q_cdn(b.datea,-1) else dbo.q_cdn(@t_datea,1) end
 	,case when len(@t_factno)>0 then isnull((select tggno from factory where noa=@t_factno),'') else c.tggno end
-	,a.noa,b.no2
+	,a.noa,b.no2,b.enda,b.cancel
 	from view_orde a left join view_ordes b on a.noa=b.noa
 	left join ucx c on b.productno=c.noa
-	where a.noa=@t_noa and isnull(b.cancel,0)!=1
+	where a.noa=@t_noa --106/12/29 全部匯入 但根據訂單 顯示結案或取消 and isnull(b.cancel,0)!=1
 	
 	declare @tggno nvarchar(90)
 	declare @custno nvarchar(90)
@@ -1013,7 +1012,8 @@ BEGIN TRY
 				EXEC("update a
 					set tggno=b.noa,tgg=b.comp,nick=b.nick,trantype=b.trantype,salesno=b.salesno,sales=b.sales
 					,paytype=b.paytype,tel=b.tel,fax=b.fax,post=b.zip_comp,addr=b.addr_comp
-					,money=0,taxtype='0',tax=0,total=0,floata=0,totalus=0,isproj=1,cancel=0,enda=0,worker2='"+@t_worker+"',trandate=''
+					,money=0,taxtype='0',tax=0,total=0,floata=0,totalus=0,isproj=1
+					,cancel="+@bmcancel+",enda="+@bmenda+",worker2='"+@t_worker+"',trandate=''
 					from ordc"+@accy+" a outer apply(
 					select * from (
 						select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
@@ -1033,7 +1033,7 @@ BEGIN TRY
 				select '"+@ordcno+"' noa,'"+@t_noa+"' quatno,'1' kind,'"+@t_datea+"' odate
 				,dbo.q_cdn('"+@t_datea+"',20)datea,(select top 1 noa from acomp where noa='"+@t_cno+"' order by noa)cno,(select top 1 acomp from acomp where noa='"+@t_cno+"' order by noa )acomp
 				,noa tggno,comp tgg,nick nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp
-				,0 money,'0' taxtype,0 tax,0 total,0 floata,0 totalus,1 isproj,0 cancel,0 enda,'"+@t_worker+"' worker,''
+				,0 money,'0' taxtype,0 tax,0 total,0 floata,0 totalus,1 isproj,"+@bmcancel+" cancel,"+@bmenda+" enda,'"+@t_worker+"' worker,''
 				from (select noa,comp,nick,trantype,salesno,sales,paytype,tel,fax,zip_comp,addr_comp from tgg 
 				union all select '','','','','','','','','','','' )tmp
 				where noa='"+@tggno+"'")
@@ -1044,7 +1044,7 @@ BEGIN TRY
 			select '"+@ordcno+"',right('000'+cast(ROW_NUMBER() over (order by a.productno) as nvarchar(10)),3)
 			,a.productno,a.product,b.spec,b.unit,a.mount,a.mount omount,b.stdmount,isnull(c.price,b.cost)
 			,a.mount*isnull(c.price,b.cost) total,0 c1
-			,a.mount notv,0 cancel,0 enda,'"+@tggno+"' tggno
+			,a.mount notv,a.cancel cancel,a.enda enda,'"+@tggno+"' tggno
 			,dbo.q_cdn('"+@t_datea+"',20)datea,a.datea trandate,a.ordeno,a.no2
 			from #tmp a left join ucx b on a.productno=b.noa 
 			--outer apply (select top 1 xb.* from ucctgg xa left join ucctggs xb on xa.noa=xb.noa where xa.productno=a.productno and xa.tggno='"+@tggno+"' and xa.pricedate<'"+@t_datea+"' and isnull(xb.mount,0)<=a.mount order by xa.pricedate desc,xb.mount) c
@@ -1089,16 +1089,11 @@ BEGIN TRY
 			')
 			
 			delete a from ["+@t_ip+",1799]."+@t_db+".dbo.ordes"+@accy+" a where a.noa=@ordeno
-			
-			--表頭不砍掉
-			--106/12/29 訂單表頭取消會刪除
-			if(@t_del=1)
-			begin
-				delete ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" where memo2='"+@t_noa+"'
-			end		
 		end
 		"
-		execute sp_executesql @cmd,N'@t_del bit,@accy nvarchar(90) output,@ordeno nvarchar(90) output',@t_del=@t_del,@accy=@accy output,@ordeno=@ordeno output
+		--表頭不砍掉
+		--delete ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" where memo2='"+@t_noa+"'
+		execute sp_executesql @cmd,N'@accy nvarchar(90) output,@ordeno nvarchar(90) output',@accy=@accy output,@ordeno=@ordeno output
 		
 	end
 	
@@ -1174,17 +1169,18 @@ BEGIN TRY
 			(noa,odate,stype,cno,acomp,custno,comp,nick,paytype,tel,fax,agentno,agent
 			,post,addr,post2,addr2,payterms,trantype,custorde,salesno,sales,taxtype
 			,money,tax,total,worker,isproj,memo,memo2,postname,custno2,cust2
-			,casetype,casemount,cuft,cuftnotv,date1,date2,date3,date4)
+			,casetype,casemount,cuft,cuftnotv,date1,date2,date3,date4,enda,cancel)
 			select '"+@ordeno+"','"+@t_datea+"','3',b.noa,b.acomp
 			,a.custno,a.comp,a.nick,a.paytype,a.tel,a.fax,a.agentno,a.agent
 			,a.post,a.addr,a.post2,a.addr2,a.payterms,a.trantype,a.custorde
 			,a.salesno,a.sales,a.taxtype,0,0,0,'"+@t_worker+"',1,'由"+@t_acomp+"訂單【"+@t_noa+"】與採購單【"+@t_allordc+"】轉來chr(10)'+a.memo
 			,'"+@t_noa+"' memo2,'"+@t_ip+"'+'##'+'"+@t_db+"'postname
 			,c.custno,a.cust2,a.casetype,a.casemount,a.cuft,a.cuftnotv,a.date1,a.date2,a.date3,a.date4
+			,a.enda,a.cancel
 			from view_orde a
 			outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@t_db+"' or not exists (select * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@t_db+"'))b
 			outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@q_db+"' or not exists (select * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@q_db+"'))c
-			where a.noa='"+@t_noa+"' and isnull(a.cancel,0)=0
+			where a.noa='"+@t_noa+"'
 			")
 		end
 		else
@@ -1223,6 +1219,7 @@ BEGIN TRY
 			,casetype=b.casetype,casemount=b.casemount,cuft=b.cuft,cuftnotv=b.cuftnotv
 			,date1=b.date1,date2=b.date2,date3=b.date3,date4=b.date4
 			,cno=c.noa,acomp=c.acomp,memo='由"+@t_acomp+"訂單【"+@t_noa+"】與採購單【"+@t_allordc+"】轉來chr(10)'+b.memo
+			,enda=b.enda,cancel=b.cancel
 			from ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" a 
 			outer apply (select top 1* from view_orde where noa='"+@t_noa+"')b
 			outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@t_db+"' or not exists (select * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@t_db+"'))c
@@ -1265,11 +1262,11 @@ BEGIN TRY
 		,b.ucano,a.product,a.spec,a.unit
 		,a.ucolor,a.scolor,a.class,a.classa,a.zinc,a.sizea,a.source,a.hard
 		,a.mount,isnull(e.cost,0),isnull(e.price2,0),isnull(a.mount*e.price2,0),a.payterms
-		,a.packwayno,a.packway,a.cuft,0,a.mount,a.memo,a.noa,a.no2,a.datea,0,0,a.custno
+		,a.packwayno,a.packway,a.cuft,0,a.mount,a.memo,a.noa,a.no2,a.datea,a.enda,a.cancel,a.custno
 		from view_ordes a left join ucx b on a.productno=b.noa
 		outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@q_db+"' or not exists (select * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@q_db+"'))c
 		outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.custprices where custno=c.custno and productno=b.ucano) e
-		where a.noa='"+@t_noa+"' and isnull(a.cancel,0)!=1 ")
+		where a.noa='"+@t_noa+"' ") --106/12/29 全部匯入 但根據訂單 顯示結案或取消 and isnull(a.cancel,0)!=1
 		
 		EXEC(" update ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" 
 		set money=isnull((select sum(total) from ["+@t_ip+",1799]."+@t_db+".dbo.view_ordes where noa='"+@ordeno+"'),0) 
