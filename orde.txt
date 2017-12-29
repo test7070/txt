@@ -929,6 +929,9 @@ declare @tmp table(
 
 declare @t_allordc nvarchar(MAX)='' --全部的採購單號
 
+declare @t_del bit --產生單子刪除 --106/12/29
+set @t_del = isnull((select cancel from view_orde a where noa=@t_noa),0)
+
 BEGIN TRY
 	--Begin Transaction --沒有開放DTC所以暫時不使用
 
@@ -937,13 +940,18 @@ BEGIN TRY
 	begin
 		set @accy=isnull((select top 1 accy from view_ordc where quatno=@t_noa),@t_accy)
 		EXEC("delete a from ordcs"+@accy+" a left join ordc"+@accy+" b on a.noa=b.noa where b.quatno='"+@t_noa+"' ")
+		
 		--表頭不清除
-		--EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
-		
-		insert @tmp 
-		EXEC("select '"+@accy+"',noa from ordc"+@accy+" where quatno='"+@t_noa+"' ")
-		
-		EXEC("update ordc"+@accy+" set money=0,tax=0,total=0,memo='',floata=0,totalus=0,coin='',worker2='"+@t_worker+"'")
+		--106/12/29 訂單表頭取消會刪除
+		if(@t_del=1)
+			EXEC("delete ordc"+@accy+" where quatno='"+@t_noa+"' ")
+		else
+		begin
+			insert @tmp 
+			EXEC("select '"+@accy+"',noa from ordc"+@accy+" where quatno='"+@t_noa+"' ")
+			
+			EXEC("update ordc"+@accy+" set money=0,tax=0,total=0,memo='',floata=0,totalus=0,coin='',worker2='"+@t_worker+"'")
+		end
 	end
 	
 	create table #tmp(
@@ -1081,11 +1089,16 @@ BEGIN TRY
 			')
 			
 			delete a from ["+@t_ip+",1799]."+@t_db+".dbo.ordes"+@accy+" a where a.noa=@ordeno
+			
+			--表頭不砍掉
+			--106/12/29 訂單表頭取消會刪除
+			if(@t_del=1)
+			begin
+				delete ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" where memo2='"+@t_noa+"'
+			end		
 		end
 		"
-		--表頭不砍掉
-		--delete ["+@t_ip+",1799]."+@t_db+".dbo.orde"+@accy+" where memo2='"+@t_noa+"'
-		execute sp_executesql @cmd,N'@accy nvarchar(90) output,@ordeno nvarchar(90) output',@accy=@accy output,@ordeno=@ordeno output
+		execute sp_executesql @cmd,N'@t_del bit,@accy nvarchar(90) output,@ordeno nvarchar(90) output',@t_del=@t_del,@accy=@accy output,@ordeno=@ordeno output
 		
 	end
 	
@@ -1171,7 +1184,7 @@ BEGIN TRY
 			from view_orde a
 			outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@t_db+"' or not exists (select * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@t_db+"'))b
 			outer apply (select top 1 * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@q_db+"' or not exists (select * from ["+@t_ip+",1799]."+@t_db+".dbo.acomp where dbname='"+@q_db+"'))c
-			where a.noa='"+@t_noa+"'
+			where a.noa='"+@t_noa+"' and isnull(a.cancel,0)=0
 			")
 		end
 		else
