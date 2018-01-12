@@ -1379,3 +1379,192 @@ tre_tb:--tre_tb
 		--donothing
 		print ERROR_MESSAGE()
 	end catch;
+----------------------------------------------------------------------------------------------------
+tranwj2tre:--tranwj2tre
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)='[1]'
+declare @key nvarchar(20) = [2]--'BJ'
+declare @t_mon nvarchar(20)=[3]
+
+IF OBJECT_ID('tempdb..#tre_sh')is not null
+BEGIN
+	drop table #tre_sh
+END
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+--tran
+create table #tre_sh(
+	rr int,
+	noa nvarchar(50),
+	noq nvarchar(50),
+	custno nvarchar(50),
+	nick nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	carno nvarchar(50),
+	uccno nvarchar(50),
+	product nvarchar(50),
+	addr nvarchar(50),
+	trandate nvarchar(50),
+	mount float,
+	volume float,
+	weight float,
+	unit nvarchar(50),
+	total2 float,
+	caseno nvarchar(50),
+	ordeno nvarchar(50),
+	memo nvarchar(max),
+	carteamno nvarchar(50) 
+)
+insert #tre_sh
+select ROW_NUMBER()over(partition by a.carno order by a.driverno,a.noa,noq),a.noa,noq,custno,nick,a.driverno,a.driver,a.carno,uccno,product,straddr+ case when isnull(endaddr,'')!='' then '-'+endaddr else '' end addr
+,a.trandate,a.mount,a.volume,a.weight,unit,a.total2,caseno,ordeno,a.memo,b.port
+from view_trans a left join view_tran b on a.noa=b.noa 
+where (left(a.trandate,6)=@t_mon)
+and (ISNULL(a.carno,'')!='' or ISNULL(a.driverno,'')!='') and ISNULL(a.total2,0)!=0
+and not exists (select * from view_tre where a.carno=a.carno and a.driverno=driverno and mon=@t_mon)
+
+--加減項
+declare @tmpb table(
+	gno nvarchar(1),
+	noa nvarchar(max),
+	carno nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	minusmoney float,
+	plusmoney float
+)
+insert @tmpb 
+select '9',noa,carno,driverno,driver,minusmoney,plusmoney 
+from carchg a 
+where (left(datea,6)=@t_mon) 
+and (ISNULL(carno,'')!='' or ISNULL(driverno,'')!='') 
+and not exists (select * from view_tre where a.carno=a.carno and a.driverno=driverno and mon=@t_mon) 
+
+insert @tmpb
+select '0',(SELECT noa+',' FROM @tmpb b WHERE a.carno=b.carno and a.driverno=b.driverno and a.driver=b.driver FOR XML PATH('')
+),carno,driverno,driver,sum(a.minusmoney),sum(a.plusmoney)
+from @tmpb a
+group by carno,driverno,driver
+
+delete @tmpb where gno='9'
+
+declare @maxnoa nvarchar(50)=(select MAX(noa) from view_tre where mon=@t_mon)
+declare @datea nvarchar(10)=cast(cast(left(@t_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@t_mon,2)+'/15' 
+set @datea= CONVERT(varchar(100),DATEADD(MONTH, DATEDIFF(MONTH, -1, @datea ),-1),111) 
+set @datea=cast(cast(left(@datea,4) as int)-1911 as nvarchar(10))+'/'+RIGHT(@datea,5)
+declare @bdate nvarchar(10)=left(@datea,6)+'/01'
+
+create table #tmp(
+	gno nvarchar(1),
+	noa nvarchar(50),
+	noq nvarchar(50),
+	carno nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	carchgno nvarchar(max),
+	minusmoney float,
+	plusmoney float,
+	uccno nvarchar(50),
+	product nvarchar(50),
+	addr nvarchar(50),
+	trandate nvarchar(50),
+	mount float,
+	volume float,
+	weight float,
+	unit nvarchar(50),
+	total2 float,
+	caseno nvarchar(50),
+	ordeno nvarchar(50),
+	memo nvarchar(max),
+	money float,
+	tax float,
+	taxrate float,
+	weight2 float,
+	total float,
+	tranno nvarchar(50),
+	trannoq nvarchar(50),
+	bdate nvarchar(50),
+	edate nvarchar(50),
+	carteamno nvarchar(50),
+	custno  nvarchar(50),
+	comp nvarchar(50),
+)
+insert #tmp(gno,carno,driverno,driver,carchgno,minusmoney,plusmoney,carteamno,bdate,edate)
+select '0',carno,driverno,driver,max(carchgno),sum(minusmoney),sum(plusmoney),max(carteamno),@bdate,@datea
+from (select carno,driverno,driver,'' carchgno,0 minusmoney,0 plusmoney,carteamno,@bdate bdate,@datea edate from #tre_sh
+	  union all
+	  select carno,driverno,driver,substring(noa,0,len(noa)) carchgno,minusmoney,plusmoney plusmoney,'' carteamno,@bdate bdate,@datea edate from @tmpb)a
+group by carno,driverno,driver
+
+update a
+set noa=case when isnull(@maxnoa,'')='' then REPLACE(@datea,'/','')+REPLICATE('0',3-LEN(rx)) + RTRIM(CAST(rx AS CHAR)) 
+else REPLACE(@datea,'/','')+REPLICATE('0',3-LEN(RIGHT(@maxnoa,3)+rx)) + RTRIM(CAST(RIGHT(@maxnoa,3)+rx AS CHAR)) end
+from (select ROW_NUMBER()over(partition by gno order by driverno,carno)rx,noa from #tmp)a
+
+insert #tmp
+select '1',a.noa,REPLICATE('0',3-LEN(b.rr)) + RTRIM(CAST(b.rr AS CHAR)) ,a.carno,a.driverno,a.driver,'','','',b.uccno,b.product,b.addr,b.trandate,b.mount,b.volume,b.weight,b.unit,b.total2,b.caseno,b.ordeno,b.memo,0,0,0,0,0,b.noa,b.noq,'','','',b.custno,nick
+from #tmp a left join #tre_sh b on a.carno=b.carno and a.driver=b.driver
+where ISNULL(b.carno,'')!=''
+
+update #tmp
+set money=b.total2,tax=round(b.total2*0.05,0),taxrate=round(b.total2*0.07,0)
+,total=isnull(b.total2,0)+isnull(a.plusmoney,0)-isnull(minusmoney,0)-isnull(round(b.total2*0.05,0),0)-isnull(round(b.total2*0.07,0),0)
+from #tmp a 
+outer apply(select SUM(total2)total2 from #tmp where gno='1' and a.noa=noa)b
+where gno='0'
+
+declare @curtime datetime = getdate()	
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+Begin Transaction [Trans_Name]
+begin try
+	
+	exec("insert tre"+@accy+"(noa,datea,driverno,driver,money,total,tax,taxrate,bdate,edate,carno,carteamno,plusmoney,minusmoney,carchgno,mon)
+	select noa,edate,driverno,driver,money,total,tax,taxrate,bdate,edate,carno,carteamno,plusmoney,minusmoney,carchgno,left(edate,6)
+	from #tmp where gno='0'")
+	
+	exec("insert tres"+@accy+"(noa,noq,ordeno,tranno,trannoq,trandate,straddr,money,caseno,memo,mount,driverno,driver,comp,product,unit,volume,weight,carno)
+	select noa,noq,ordeno,tranno,trannoq,trandate,addr,total2,caseno,memo,mount,driverno,driver,comp,product,unit,volume,weight,carno
+	from #tmp where gno='1'")
+	
+	--mess
+	INSERT INTO mess (datea,qtime,[tables],data,usera,act) 
+	select replace(CONVERT(nvarchar,@curtime,120),'-','')
+		,noa+' '+replace(CONVERT(nvarchar,@curtime,120),':','') qtime
+		,'tre_post.post' [tables]
+		,@accy+','+noa+',1'
+		,'erp'
+		,7
+	from #tmp
+	where gno='0'
+
+	set @n=(select count(*) from #tmp where gno='0')
+	
+	Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+		
+end try
+begin catch
+	Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	insert into @tmp(msg)values(error_message())
+end catch
+
+select * from @tmp
+
+IF OBJECT_ID('tempdb..#tre_sh')is not null
+BEGIN
+	drop table #tre_sh
+END
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
+
