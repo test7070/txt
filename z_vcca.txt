@@ -1,4 +1,329 @@
-﻿z_vcca07:--z_vcca07
+﻿z_vcca08:--z_vcca08
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_worker nvarchar(max) = '[2]'
+	declare @t_bmon nvarchar(10) = case when '#non'=[3] then '' else [3] end
+	declare @t_emon nvarchar(10) = case when '#non'=[4] then CHAR(255) else [4] end
+	declare @t_bdate nvarchar(10) = case when '#non'=[5] then '' else [5] end
+	declare @t_edate nvarchar(10) = case when '#non'=[6] then CHAR(255) else [6] end
+	declare @t_bcustno nvarchar(20) = case when '#non'=[7] then '' else [7] end
+	declare @t_ecustno nvarchar(20) = case when '#non'=[8] then CHAR(255) else [8] end
+	declare @t_bproductno nvarchar(20) = case when '#non'=[9] then '' else [9] end
+	declare @t_eproductno nvarchar(20) = case when '#non'=[10] then CHAR(255) else [10] end
+	declare @t_type nvarchar(max) = case when '#non'=[11] then '' else [11] end
+	declare @t_cno nvarchar(max) = case when '#non'=[12] then '' else [12] end
+	declare @t_sbtype nvarchar(10) = case when '#non'=[18] then '' else [18] end
+	declare @t_len nvarchar(10) ='[19]'
+	declare @t_lenm int =cast(@t_len as int)+3
+	declare @t_option nvarchar(max) = case when '#non'=[21] then '' else [21] end
+	------------------------------------------------------------
+	declare @n int
+	
+	declare @tmp table(
+		gno nvarchar(3),
+		noa nvarchar(20),
+		no2 nvarchar(10),
+		cno nvarchar(20),
+		acomp nvarchar(max),
+		datea nvarchar(10),
+		invono nvarchar(10),
+		serial nvarchar(8),
+		buyerno nvarchar(20),
+		buyer nvarchar(40),
+		custno nvarchar(20),
+		cust nvarchar(40),
+		[money] float,
+		tax float,
+		total float,
+		memo nvarchar(max)
+		,issend bit
+		,issendconfirm bit
+		,iscancel bit
+		,iscancelconfirm bit
+		
+		,invoice_year nvarchar(20)
+		,invoice_identifier nvarchar(30)
+		,tnk_type nvarchar(max)
+		--B2B 交換
+		,a0101 nvarchar(20) --開立
+		,a0201 nvarchar(20) --作廢
+		,a0301 nvarchar(20) --退回
+		,b0101 nvarchar(20) --折讓
+		,b0201 nvarchar(20) --折讓作廢
+		--B2B 存證
+		,a0401 nvarchar(20) --開立
+		,a0501 nvarchar(20) --作廢
+		,a0601 nvarchar(20) --退回
+		,b0401 nvarchar(20) --折讓
+		,b0501 nvarchar(20) --折讓作廢
+		--B2C 存證
+		,c0401 nvarchar(20) --開立
+		,c0501 nvarchar(20) --作廢
+		,c0601 nvarchar(20) --退回
+		,c0701 nvarchar(20) --註銷
+		,d0401 nvarchar(20) --折讓
+		,d0501 nvarchar(20) --折讓作廢
+	)
+	declare @noa nvarchar(20)
+	declare @no2 nvarchar(10)
+	declare @cno nvarchar(20)
+	declare @acomp nvarchar(max)
+	declare @datea nvarchar(10)
+	declare @binvono nvarchar(10)
+	declare @einvono nvarchar(10)
+	declare @taxtype nvarchar(10)
+	declare @invono nvarchar(10)
+	declare @serial nvarchar(8)
+	declare @buyerno nvarchar(20)
+	declare @buyer nvarchar(40)
+	declare @custno nvarchar(20)
+	declare @cust nvarchar(40)
+	declare @money float
+	declare @tax float
+	declare @total float
+	declare @memo nvarchar(max)
+	declare @cancel bit
+	declare @issend bit
+	declare @issendconfirm bit
+	declare @iscancel bit
+	declare @iscancelconfirm bit
+	declare @year nvarchar(20)
+	
+	declare @m int
+	declare cursor_table cursor for
+	select a.noa,b.no2,a.cno,a.acomp+''+b.binvono+'~'+b.einvono ,b.binvono,b.einvono,cast(Year(dbo.ChineseEraName2AD('107/01/08')) as nvarchar) 
+	from vccar a
+	left join vccars b on a.noa=b.noa
+	where  len(b.binvono)=10
+	and ((LEFT(a.bdate,@t_lenm) between @t_bmon and @t_emon) or (LEFT(a.edate,@t_lenm) between @t_bmon and @t_emon))
+	and (len(@t_type)=0 or @t_type=a.invoicetype)
+	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@no2,@cno,@acomp,@binvono,@einvono,@year
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @n = 0, @m = 0
+		while(@n<50)
+		begin	
+			set @invono = SUBSTRING(@binvono,1,8)+ right('0'+cast(cast(SUBSTRING(@binvono,9,2) as int)+@n as nvarchar),2)
+			select @serial='',@buyerno='',@buyer='',@custno='',@cust='',@money=0,@tax=0,@total=0,@memo='',@datea=''
+			--若有指定客戶 只顯示那個客戶
+			if exists(select noa from vcca where noa=@invono and (len(@t_sbtype)=0 or isnull(type,'')=@t_sbtype)
+				and ((len(@t_bdate)=0 and @t_edate=CHAR(255)) or datea between @t_bdate and @t_edate)
+				and (len(@t_bcustno)=0 or (len(@t_bcustno)>0 and custno between @t_bcustno and @t_ecustno)))
+			begin
+				select @cancel=ISNULL(cancel,0),@taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno
+				,@buyer=case when isnull(a.buyer,'')!=isnull(a.comp,'') then isnull(a.buyer,'') else '' end
+				,@custno=a.custno,@cust=case when len(isnull(b.nick,''))>0 then b.nick else left(a.comp,4)end
+				,@money=a.[money],@tax=a.tax,@total=a.total,@memo=a.memo,@datea=isnull(a.datea,'')
+				,@issend=ISNULL(issend,0),@issendconfirm=ISNULL(issendconfirm,0)
+				,@iscancel=ISNULL(iscancel,0),@iscancelconfirm=ISNULL(iscancelconfirm,0)
+				from vcca a
+				left join cust b on a.custno=b.noa
+				where a.noa=@invono and (len(@t_sbtype)=0 or isnull(type,'')=@t_sbtype)
+				and ((len(@t_bdate)=0 and @t_edate=CHAR(255)) or a.datea between @t_bdate and @t_edate)
+				if(@taxtype='6' or @cancel=1)
+				begin
+					insert into @tmp(gno,noa,no2,cno,acomp,invono,invoice_year,datea,serial,memo,issend,issendconfirm,iscancel,iscancelconfirm)
+					values('1',@noa,@no2,@cno,@acomp,@invono,@year,@datea,'作廢',@memo,@issend,@issendconfirm,@iscancel,@iscancelconfirm)
+				end
+				else if( CHARINDEX(',01,',','+@t_option+',')=0)--@t_option=01  只顯示作廢
+				begin
+				    insert into @tmp(gno,noa,no2,cno,acomp,invono,invoice_year,datea,serial,buyerno,buyer,custno,cust,[money],tax,total,memo,issend,issendconfirm,iscancel,iscancelconfirm)
+					values('1',@noa,@no2,@cno,@acomp,@invono,@year,@datea,@serial,@buyerno,@buyer,@custno,@cust,@money,@tax,@total,@memo,@issend,@issendconfirm,@iscancel,@iscancelconfirm)  
+				end
+				 set @m = @m + 1
+			end
+			else
+			begin
+				if len(@t_bcustno)=0 and CHARINDEX(',01,',','+@t_option+',')=0
+				begin
+					insert into @tmp(gno,noa,no2,cno,acomp,invono,invoice_year,datea)values('1',@noa,@no2,@cno,@acomp,@invono,@year,@datea)
+					set @m = @m + 1
+				end
+			end
+			set @n = @n + 1
+		end
+		if(@m>0)
+		begin
+			select @money=0,@tax=0,@total=0
+			select @money=SUM(ISNULL([money],0)),@tax=SUM(ISNULL(tax,0)),@total=SUM(ISNULL(total,0)) from @tmp where noa=@noa and no2=@no2
+			insert into @tmp(gno,noa,no2,cno,acomp,[money],tax,total,invono)values('2',@noa,@no2,@cno,@acomp,@money,@tax,@total,CHAR(255))
+		end
+		fetch next from cursor_table
+		into @noa,@no2,@cno,@acomp,@binvono,@einvono,@year
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	----------------------------------------------------------------------------------------------------------
+	--發票上傳狀態
+	update @tmp set tnk_type='',invoice_identifier = invono+[invoice_year]
+	
+	--select * from @tmp where invono='ZV09666022'
+	/*
+	P：資料處理中
+	G：資料上傳或下載完畢
+	C：資料上傳完畢，且已收到整合服務平台回覆之存證或交換處理成功訊息。上傳作業的資料要變為此狀態，才代表此資料上傳成功。
+	I：資料處理過程中被中斷，當程式重新執行或錯誤問題排除後，可自動繼續執行
+	E：資料上傳前發生格式或簽章錯誤，或是資料已上傳後，收到整合服務平台回覆之錯誤
+	*/
+	--B2B 交換
+	update @tmp set
+		a0101=isnull(b.[status],'') --開立
+		,a0201=isnull(c.[status],'') --作廢
+		,a0301=isnull(d.[status],'') --退回
+		,b0101=isnull(e.[status],'') --折讓
+		,b0201=isnull(f.[status],'') --折讓作廢
+	from @tmp a
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'A0101'+a.invoice_identifier+'%'
+		order by message_dts desc ) b
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'A0201'+a.invoice_identifier+'%'
+		order by message_dts desc ) c
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'A0301'+a.invoice_identifier+'%'
+		order by message_dts desc ) d
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'B0101'+a.invoice_identifier+'%'
+		order by message_dts desc ) e
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'B0201'+a.invoice_identifier+'%'
+		order by message_dts desc ) f
+	where a.gno='1'
+	 
+	--B2B 存證	
+	update @tmp set 
+		a0401=isnull(g.[status],'') --開立
+		,a0501=isnull(h.[status],'') --作廢
+		,a0601=isnull(i.[status],'') --退回
+		,b0401=isnull(j.[status],'') --折讓
+		,b0501=isnull(k.[status],'') --折讓作廢
+	from @tmp a
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'A0401'+a.invoice_identifier+'%'
+		order by message_dts desc ) g
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'A0501'+a.invoice_identifier+'%'
+		order by message_dts desc ) h
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'A0601'+a.invoice_identifier+'%'
+		order by message_dts desc ) i
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'B0401'+a.invoice_identifier+'%'
+		order by message_dts desc ) j
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'B0501'+a.invoice_identifier+'%'
+		order by message_dts desc ) k	
+	where a.gno='1' 
+	--B2C 存證
+	update @tmp set 
+		c0401=isnull(l.[status],'') --開立
+		,c0501=isnull(m.[status],'') --作廢
+		,c0601=isnull(n.[status],'') --退回
+		,c0701=isnull(o.[status],'') --註銷
+		,d0401=isnull(p.[status],'') --折讓
+		,d0501=isnull(q.[status],'') --折讓作廢
+	from @tmp a
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'C0401'+a.invoice_identifier+'%'
+		order by message_dts desc ) l
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'C0501'+a.invoice_identifier+'%'
+		order by message_dts desc ) m
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'C0601'+a.invoice_identifier+'%'
+		order by message_dts desc ) n
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'C0701'+a.invoice_identifier+'%'
+		order by message_dts desc ) o
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'D0401'+a.invoice_identifier+'%'
+		order by message_dts desc ) p
+	outer apply(select top 1 * 
+		from [127.0.0.1,1798].TNK.dbo.TURNKEY_MESSAGE_LOG
+		where invoice_identifier like 'D0501'+a.invoice_identifier+'%'
+		order by message_dts desc ) q
+	where a.gno='1'
+	
+	--交換、存證不能亂用
+	update @tmp set tnk_type='B2B' 
+	where len(a0101+a0201+a0301+b0101+b0201)>0
+	update @tmp set tnk_type='B2B' 
+	where len(a0401+a0501+a0601+b0401+b0501)>0
+	update @tmp set tnk_type='B2C' 
+	where len(c0401+c0501+c0601+c0701+d0401+d0501)>0
+	update @tmp set tnk_type='異常' 
+	where (len(a0101+a0201+a0301+b0101+b0201)>0 and len(a0401+a0501+a0601+b0401+b0501)>0)
+	or(len(a0101+a0201+a0301+b0101+b0201)>0 and len(c0401+c0501+c0601+c0701+d0401+d0501)>0)
+	or(len(a0401+a0501+a0601+b0401+b0501)>0 and len(c0401+c0501+c0601+c0701+d0401+d0501)>0)
+	
+	--只顯示異常
+	if( CHARINDEX(',02,',','+@t_option+',')>0)
+	begin
+		delete @tmp where not(tnk_type='異常' 
+			or not(ISNULL(a0101,'')='C' or len(ISNULL(a0101,''))=0) 
+			or not(ISNULL(a0201,'')='C' or len(ISNULL(a0201,''))=0) 
+			or not(ISNULL(a0301,'')='C' or len(ISNULL(a0301,''))=0) 
+			or not(ISNULL(b0101,'')='C' or len(ISNULL(b0101,''))=0) 
+			or not(ISNULL(b0201,'')='C' or len(ISNULL(b0201,''))=0) 
+			
+			or not(ISNULL(a0401,'')='C' or len(ISNULL(a0401,''))=0)
+			or not(ISNULL(a0501,'')='C' or len(ISNULL(a0501,''))=0) 
+			or not(ISNULL(a0601,'')='C' or len(ISNULL(a0601,''))=0) 
+			or not(ISNULL(b0401,'')='C' or len(ISNULL(b0401,''))=0) 
+			or not(ISNULL(b0501,'')='C' or len(ISNULL(b0501,''))=0) 
+			
+			or not(ISNULL(c0401,'')='C' or len(ISNULL(c0401,''))=0)
+			or not(ISNULL(c0501,'')='C' or len(ISNULL(c0501,''))=0) 
+			or not(ISNULL(c0601,'')='C' or len(ISNULL(c0601,''))=0)
+			or not(ISNULL(c0701,'')='C' or len(ISNULL(c0701,''))=0)  
+			or not(ISNULL(d0401,'')='C' or len(ISNULL(d0401,''))=0) 
+			or not(ISNULL(d0501,'')='C' or len(ISNULL(d0501,''))=0))
+	end
+		
+	delete @tmp 
+	from @tmp a
+	left join(select noa,no2,count(1) n from @tmp group by noa,no2)	b on a.noa=b.noa and a.no2=b.no2
+	where b.n<=1
+		
+	select * 
+	,dbo.getComma([money],0) mm
+	,dbo.getComma([tax],0) tx
+	,dbo.getComma([total],0) tt
+	,case when '[20]' ='SB' then 'vcca_sb?noa=$invono?' else 'vcca?noa=$invono?' end ghref
+	,tnk_type a00
+	,case when issend=1 then '*' else '' end a01 
+	,case when iscancel=1 then '*' else '' end a02
+	,a0101+a0401+c0401 b01 --開立
+	,a0201+a0501+c0501 b02 --作廢
+	,a0301+a0601+c0601 b03 --退回
+	,c0701 b04 --註銷
+	,b0101+b0401+d0401 c01 --折讓開立
+	,b0201+b0501+d0501 c02 --折讓作廢
+	from @tmp order by noa,no2,invono,gno;
+
+
+
+z_vcca07:--z_vcca07
 
 --z_vcca07
 SET QUOTED_IDENTIFIER OFF 
@@ -217,6 +542,7 @@ z_vcca06:--z_vcca06
 	declare @tax float
 	declare @total float
 	declare @memo nvarchar(max)
+	declare @cancel bit
 	
 	declare @m int
 	declare cursor_table cursor for
@@ -225,7 +551,7 @@ z_vcca06:--z_vcca06
 	left join vccars b on a.noa=b.noa
 	where  len(b.binvono)=10
 	and ((LEFT(a.bdate,@t_lenm) between @t_bmon and @t_emon) or (LEFT(a.edate,@t_lenm) between @t_bmon and @t_emon))
-	and (len(@t_type)=0 or @t_type=a.rev)
+	and (len(@t_type)=0 or @t_type=a.invoicetype)
 	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
 	open cursor_table
 	fetch next from cursor_table
@@ -242,7 +568,7 @@ z_vcca06:--z_vcca06
 				and ((len(@t_bdate)=0 and @t_edate=CHAR(255)) or datea between @t_bdate and @t_edate)
 				and (len(@t_bcustno)=0 or (len(@t_bcustno)>0 and custno between @t_bcustno and @t_ecustno)))
 			begin
-				select @taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno
+				select @cancel=isnull(cancel,0),@taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno
 				,@buyer=case when len(isnull(a.buyer,''))>0 then isnull(a.buyer,'') else isnull(a.comp,'') end
 				,@custno=a.custno,@cust=case when len(isnull(b.nick,''))>0 then b.nick else left(a.comp,4)end
 				,@money=a.[money],@tax=a.tax,@total=a.total,@memo=a.memo,@datea=a.datea
@@ -250,7 +576,7 @@ z_vcca06:--z_vcca06
 				left join cust b on a.custno=b.noa
 				where a.noa=@invono
 				and ((len(@t_bdate)=0 and @t_edate=CHAR(255)) or a.datea between @t_bdate and @t_edate)
-				if(@taxtype='6')
+				if(@taxtype='6' or @cancel=1)
 				begin
 					insert into @tmp(gno,noa,no2,cno,acomp,invono,serial,memo)values('1',@noa,@no2,@cno,@acomp,@invono,'作廢',@memo)
 				end
@@ -258,12 +584,6 @@ z_vcca06:--z_vcca06
 				begin
 				    insert into @tmp(gno,noa,no2,cno,acomp,datea,invono,serial,buyerno,buyer,custno,cust,[money],tax,total,memo)
 					values('1',@noa,@no2,@cno,@acomp,@datea,@invono,@serial,@buyerno,@buyer,@custno,@cust,@money,@tax,@total,@memo)  
-					
-					--if(@buyer != '')
-					--begin
-					--	insert into @tmp(gno,noa,no2,invono,buyer)
-					--	values('0',@noa,@no2,@invono,@buyer) 
-					--end
 				end
 				 set @m = @m + 1
 			end
@@ -343,37 +663,21 @@ z_vcca06:--z_vcca06
 z_vcca01:--z_vcca01
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
-	declare @t_accy nvarchar(10)
-	declare @t_worker nvarchar(max)
-	declare @t_bmon nvarchar(10)
-	declare @t_emon nvarchar(10)
-	declare @t_bdate nvarchar(10)
-	declare @t_edate nvarchar(10)
-	declare @t_bcustno nvarchar(20)
-	declare @t_ecustno nvarchar(20)
-	declare @t_bproductno nvarchar(20)
-	declare @t_eproductno nvarchar(20)
-	declare @t_type nvarchar(max)
-	declare @t_cno nvarchar(max)
-	declare @t_len nvarchar(10)
-	declare @t_sbtype nvarchar(10)
-	declare @t_lenm int
-	
-	set @t_accy = '[1]'
-	set @t_worker = '[2]'
-	set @t_bmon = case when '#non'=[3] then '' else [3] end
-	set @t_emon = case when '#non'=[4] then CHAR(255) else [4] end
-	set @t_bdate = case when '#non'=[5] then '' else [5] end
-	set @t_edate = case when '#non'=[6] then CHAR(255) else [6] end
-	set @t_bcustno = case when '#non'=[7] then '' else [7] end
-	set @t_ecustno = case when '#non'=[8] then CHAR(255) else [8] end
-	set @t_bproductno = case when '#non'=[9] then '' else [9] end
-	set @t_eproductno = case when '#non'=[10] then CHAR(255) else [10] end
-	set @t_type = case when '#non'=[11] then '' else [11] end
-	set @t_cno = case when '#non'=[12] then '' else [12] end
-	set @t_sbtype = case when '#non'=[18] then '' else [18] end
-	set @t_len='[19]'
-	set @t_lenm=cast(@t_len as int)+3
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_worker nvarchar(max) = '[2]'
+	declare @t_bmon nvarchar(10) = case when '#non'=[3] then '' else [3] end
+	declare @t_emon nvarchar(10) = case when '#non'=[4] then CHAR(255) else [4] end
+	declare @t_bdate nvarchar(10) = case when '#non'=[5] then '' else [5] end
+	declare @t_edate nvarchar(10) = case when '#non'=[6] then CHAR(255) else [6] end
+	declare @t_bcustno nvarchar(20) = case when '#non'=[7] then '' else [7] end
+	declare @t_ecustno nvarchar(20) = case when '#non'=[8] then CHAR(255) else [8] end
+	declare @t_bproductno nvarchar(20) = case when '#non'=[9] then '' else [9] end
+	declare @t_eproductno nvarchar(20) = case when '#non'=[10] then CHAR(255) else [10] end
+	declare @t_type nvarchar(max) = case when '#non'=[11] then '' else [11] end
+	declare @t_cno nvarchar(max) = case when '#non'=[12] then '' else [12] end
+	declare @t_sbtype nvarchar(10) = case when '#non'=[18] then '' else [18] end
+	declare @t_len nvarchar(10) ='[19]'
+	declare @t_lenm int =cast(@t_len as int)+3
 	------------------------------------------------------------
 	declare @n int
 	
@@ -413,6 +717,7 @@ z_vcca01:--z_vcca01
 	declare @tax float
 	declare @total float
 	declare @memo nvarchar(max)
+	declare @cancel bit
 	
 	declare @m int
 	declare cursor_table cursor for
@@ -421,7 +726,7 @@ z_vcca01:--z_vcca01
 	left join vccars b on a.noa=b.noa
 	where  len(b.binvono)=10
 	and ((LEFT(a.bdate,@t_lenm) between @t_bmon and @t_emon) or (LEFT(a.edate,@t_lenm) between @t_bmon and @t_emon))
-	and (len(@t_type)=0 or @t_type=a.rev)
+	and (len(@t_type)=0 or @t_type=a.invoicetype)
 	and (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0)
 	open cursor_table
 	fetch next from cursor_table
@@ -438,7 +743,7 @@ z_vcca01:--z_vcca01
 				and ((len(@t_bdate)=0 and @t_edate=CHAR(255)) or datea between @t_bdate and @t_edate)
 				and (len(@t_bcustno)=0 or (len(@t_bcustno)>0 and custno between @t_bcustno and @t_ecustno)))
 			begin
-				select @taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno
+				select @cancel=ISNULL(cancel,0),@taxtype=a.taxtype, @serial=a.serial,@buyerno=a.buyerno
 				,@buyer=case when isnull(a.buyer,'')!=isnull(a.comp,'') then isnull(a.buyer,'') else '' end
 				,@custno=a.custno,@cust=case when len(isnull(b.nick,''))>0 then b.nick else left(a.comp,4)end
 				,@money=a.[money],@tax=a.tax,@total=a.total,@memo=a.memo,@datea=a.datea
@@ -446,7 +751,7 @@ z_vcca01:--z_vcca01
 				left join cust b on a.custno=b.noa
 				where a.noa=@invono and (len(@t_sbtype)=0 or isnull(type,'')=@t_sbtype)
 				and ((len(@t_bdate)=0 and @t_edate=CHAR(255)) or a.datea between @t_bdate and @t_edate)
-				if(@taxtype='6')
+				if(@taxtype='6' or @cancel=1)
 				begin
 					insert into @tmp(gno,noa,no2,cno,acomp,invono,serial,memo)values('1',@noa,@no2,@cno,@acomp,@invono,'作廢',@memo)
 				end
@@ -454,12 +759,6 @@ z_vcca01:--z_vcca01
 				begin
 				    insert into @tmp(gno,noa,no2,cno,acomp,datea,invono,serial,buyerno,buyer,custno,cust,[money],tax,total,memo)
 					values('1',@noa,@no2,@cno,@acomp,@datea,@invono,@serial,@buyerno,@buyer,@custno,@cust,@money,@tax,@total,@memo)  
-					/* 2016/04/25  xls 不知道誰改掉了,反正也顯示不出來
-					if(@buyer != '')
-					begin
-						insert into @tmp(gno,noa,no2,invono,buyer)
-						values('0',@noa,@no2,@invono,@buyer) 
-					end*/
 				end
 				 set @m = @m + 1
 			end
@@ -489,46 +788,27 @@ z_vcca01:--z_vcca01
 	,dbo.getComma([money],0) mm
 	,dbo.getComma([tax],0) tx
 	,dbo.getComma([total],0) tt
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[money]),1)),4,12)) mm
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[tax]),1)),4,12)) tx
-	--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,[total]),1)),4,12)) tt
 	,case when '[20]' ='SB' then 'vcca_sb?noa=$invono?' else 'vcca?noa=$invono?' end ghref
 	from @tmp order by noa,no2,invono,gno;
 --*********************************************************************************************
 z_vcca02:--z_vcca02
 	SET QUOTED_IDENTIFIER OFF
 	declare @cmd nvarchar(max)
-	declare @t_accy nvarchar(10)
-	declare @t_worker nvarchar(max)
-	declare @t_bmon nvarchar(10)
-	declare @t_emon nvarchar(10)
-	declare @t_bdate nvarchar(10)
-	declare @t_edate nvarchar(10)
-	declare @t_bcustno nvarchar(20)
-	declare @t_ecustno nvarchar(20)
-	declare @t_bproductno nvarchar(20)
-	declare @t_eproductno nvarchar(20)
-	declare @t_type nvarchar(max)
-	declare @t_cno nvarchar(max)
-	declare @t_len nvarchar(10)
-	declare @t_sbtype nvarchar(10)
-	declare @t_lenm int
-	
-	set @t_accy = '[1]'
-	set @t_worker = '[2]'
-	set @t_bmon = case when '#non'=[3] then '' else [3] end
-	set @t_emon = case when '#non'=[4] then CHAR(255) else [4] end
-	set @t_bdate = case when '#non'=[5] then '' else [5] end
-	set @t_edate = case when '#non'=[6] then CHAR(255) else [6] end
-	set @t_bcustno = case when '#non'=[7] then '' else [7] end
-	set @t_ecustno = case when '#non'=[8] then CHAR(255) else [8] end
-	set @t_bproductno = case when '#non'=[9] then '' else [9] end
-	set @t_eproductno = case when '#non'=[10] then CHAR(255) else [10] end
-	set @t_type = case when '#non'=[11] then '' else [11] end
-	set @t_cno = case when '#non'=[12] then '' else [12] end
-	set @t_sbtype = case when '#non'=[18] then '' else [18] end
-	set @t_len='[19]'
-	set @t_lenm=cast(@t_len as int)+3
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_worker nvarchar(max) = '[2]'
+	declare @t_bmon nvarchar(10) = case when '#non'=[3] then '' else [3] end
+	declare @t_emon nvarchar(10) = case when '#non'=[4] then CHAR(255) else [4] end
+	declare @t_bdate nvarchar(10) = case when '#non'=[5] then '' else [5] end
+	declare @t_edate nvarchar(10) = case when '#non'=[6] then CHAR(255) else [6] end
+	declare @t_bcustno nvarchar(20) = case when '#non'=[7] then '' else [7] end
+	declare @t_ecustno nvarchar(20) = case when '#non'=[8] then CHAR(255) else [8] end
+	declare @t_bproductno nvarchar(20) = case when '#non'=[9] then '' else [9] end
+	declare @t_eproductno nvarchar(20) = case when '#non'=[10] then CHAR(255) else [10] end
+	declare @t_type nvarchar(max) = case when '#non'=[11] then '' else [11] end
+	declare @t_cno nvarchar(max) = case when '#non'=[12] then '' else [12] end
+	declare @t_sbtype nvarchar(10) = case when '#non'=[18] then '' else [18] end
+	declare @t_len nvarchar(10) ='[19]'
+	declare @t_lenm int =cast(@t_len as int)+3
 	---------------------------------------------------------------
 	declare @string nvarchar(max)
 	declare @n int
@@ -559,6 +839,7 @@ z_vcca02:--z_vcca02
 	declare @money float
 	declare @tax float
 	declare @total float
+	declare @cancel bit
 	
 	declare @i int
 	declare @j int
@@ -570,7 +851,7 @@ z_vcca02:--z_vcca02
 	left join acomp c on a.cno=c.noa
 	where (len(@t_cno)=0 or charindex(a.cno,@t_cno)>0) and len(b.binvono)=10
 	and ((LEFT(a.bdate,@t_lenm) between @t_bmon and @t_emon) or (LEFT(a.edate,@t_lenm) between @t_bmon and @t_emon))
-	and (len(@t_type)=0 or @t_type=a.rev)
+	and (len(@t_type)=0 or @t_type=a.invoicetype)
 	open cursor_table
 	fetch next from cursor_table
 	into @noa,@no2,@cno,@acomp,@binvono,@einvono
@@ -580,9 +861,9 @@ z_vcca02:--z_vcca02
 		while(@n<50)
 		begin	
 			set @invono = SUBSTRING(@binvono,1,8)+ right('0'+cast(cast(SUBSTRING(@binvono,9,2) as int)+@n as nvarchar),2)
-			select @taxtype=taxtype,@money=@money+ISNULL([money],0),@tax=@tax+ISNULL([tax],0),@total=@total+ISNULL([total],0) from vcca where noa=@invono and (len(@t_sbtype)=0 or isnull(type,'')=@t_sbtype) and (LEFT(datea,@t_lenm) between @t_bmon and @t_emon) 		
+			select @cancel=ISNULL(cancel,0),@taxtype=taxtype,@money=@money+ISNULL([money],0),@tax=@tax+ISNULL([tax],0),@total=@total+ISNULL([total],0) from vcca where noa=@invono and (len(@t_sbtype)=0 or isnull(type,'')=@t_sbtype) and (LEFT(datea,@t_lenm) between @t_bmon and @t_emon) 		
 			if exists(select noa from vcca where (noa=@invono) and (LEFT(datea,@t_lenm) between @t_bmon and @t_emon) and (len(@t_sbtype)=0 or isnull(type,'')=@t_sbtype))
-				if(@taxtype!='6')
+				if(@taxtype!='6' and @cancel=0)
 					set @i = @i + 1
 				else
 					set @j = @j + 1
