@@ -517,3 +517,86 @@ IF OBJECT_ID('tempdb..#tmpa')is not null
 BEGIN
 	drop table #tmpa
 END;
+---------------------------------------------------------------------------------------------------------
+tranpaybnv:--tranpaybnv
+SET QUOTED_IDENTIFIER OFF
+declare @t_key nvarchar(10) = [1]
+declare @t_mon nvarchar(10) = [2]
+
+declare @datea nvarchar(10)=cast(cast(left(@t_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@t_mon,2)+'/15' 
+set @datea= CONVERT(varchar(100),DATEADD(MONTH, DATEDIFF(MONTH, -1, @datea ),-1),111) 
+set @datea=cast(cast(left(@datea,4) as int)-1911 as nvarchar(10))+'/'+RIGHT(@datea,5) 
+
+declare @noa nvarchar(50)=(select MAX(noa) from payb where datea='107/01/31')
+
+declare @tmpa table(
+	gno nvarchar(1),
+	recno int,
+	noa nvarchar(50),
+	rc2no nvarchar(50),
+	tggno nvarchar(50),
+	tgg nvarchar(50),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	price float,
+	mount float,
+	total float
+)
+insert @tmpa
+select '1',ROW_NUMBER()over(partition by a.tggno order by a.noa,uccno),'',a.noa,a.tggno,tgg,uccno,product,price2,sum(weight),sum(cast(round(price2*weight,0) as float)) 
+from view_trans a
+where left(datea,6)=@t_mon
+and not exists(select sa.noa,tggno from paybs sa left join payb sb on sa.noa=sb.noa where a.noa=sa.rc2no and a.tggno=sb.tggno)
+group by a.noa,a.tggno,tgg,uccno,product,price2
+
+insert @tmpa(gno,tggno,tgg,total)
+select '0',tggno,tgg,sum(total)
+from @tmpa
+group by tggno,tgg
+
+update a
+set recno=rx
+from (select ROW_NUMBER()over(partition by gno order by tggno)rx,recno,noa from @tmpa where gno='0') a
+
+update @tmpa
+set noa=case when isnull(@noa,'')='' then REPLACE(@datea,'/','')+REPLICATE('0',3-LEN(recno)) + RTRIM(CAST(recno AS CHAR)) else left(@noa,9)+REPLICATE('0',3-LEN(right(@noa,3)+recno)) + RTRIM(CAST(right(@noa,3)+recno AS CHAR)) end
+where gno='0'
+
+update @tmpa
+set noa=b.noa
+from @tmpa a
+outer apply (select noa from @tmpa where gno='0' and tggno=a.tggno)b
+
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+
+Begin Transaction [Trans_Name]
+begin try	
+
+		insert payb(noa,tggno,comp,datea,mon,bdate,edate,vccno) 
+		select noa,tggno,tgg,@datea,LEFT(@datea,6),LEFT(@datea,6)+'/01',@datea,'tran' 
+		from @tmpa a 
+		where gno='0'
+		
+		insert paybs(noa,noq,rc2no,kind,mount,price,[money],total,tablea) 
+		select noa,REPLICATE('0',3-LEN(recno)) + RTRIM(CAST(recno AS CHAR)) 
+		,rc2no,'費用',mount,price,total,total,'tran' 
+		from @tmpa a
+		where gno='1'
+
+	set @n=(select count(*) from @tmpa where gno='0')
+	
+Commit Transaction [Trans_Name]
+insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+end try
+begin catch
+	Rollback Transaction [Trans_Name]
+	insert into @tmp(msg)values(error_message())
+end catch
+
+select * from @tmp
+;
+
+
