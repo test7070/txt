@@ -383,7 +383,6 @@ declare @key nvarchar(20) = [2]--'BA'
 declare @t_bdate nvarchar(20)=[3]
 declare @t_edate nvarchar(20)=[4]
 declare @t_carno nvarchar(20)=[5]
-declare @t_class nvarchar(20)=[6]
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -437,12 +436,13 @@ create table #tmp(
 )
 insert #tmp 
 select '1','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno))) + RTRIM(CAST(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno) AS CHAR))
-,a.noa,noq,a.carno,driverno,driver,conn,custno,cust,productno,product,a.addrno,a.addr,a.address,addrno2,addr2,a.address2,a.addrno3,a.addr3,edate
-,case when volume>0 then volume 
-	  when @t_class='029-004' then c.price1
-	  when @t_class='029-001' then c.price2
-	  when @t_class='029-002' then c.price3
-	  when @t_class='029-003' then c.price4 END
+,a.noa,a.noq,a.carno,driverno,driver,a.conn,a.custno,a.cust,a.productno,a.product,a.addrno,a.addr,a.address,addrno2,addr2,a.address2,a.addrno3,a.addr3,edate
+,case when volume>0 then volume --volume=訂單上的單價
+	  when a.custno='029-001' then c.price1
+	  when a.custno='029-002' then c.price2
+	  when a.custno='029-003' then c.price3
+	  when a.custno='029-004' then c.price4 
+	  END
 ,mount,round(weight/1000,3),lng2,tvolume,theight,case when a.chk2='0' then 0 else total end,case when len(a.addrno3)=0 then total2 else 0 end,b.datea,a.product2,a.height,calctype,b.cno,b.acomp,a.chk1,a.chk4,a.chk2
 from view_tranvcces a 
 left join view_tranvcce b on a.noa=b.noa
@@ -452,6 +452,12 @@ and (edate between @t_bdate and @t_edate)
 and (a.carno=@t_carno or len(@t_carno)=0)
 and not exists(select noa,noq from view_trans where ordeno=a.noa and so=a.noq)
 order by b.cno,edate,a.carno,driverno
+
+--文揚中油單價計算
+update a set a.price = b.value from #tmp a
+outer apply (select * from addr2s where a.custno= noa)b
+where CHARINDEX(b.carno,aaddr)>0 and a.custno like '007%'
+
 
 create table #tmpa( 
 datea nvarchar(10), 
@@ -485,6 +491,7 @@ declare @n int
 declare @tmp table(
 	msg nvarchar(max)
 )
+
 Begin Transaction [Trans_Name]
 begin try
 	exec("insert tran"+@accy+"(noa,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp)
@@ -598,5 +605,147 @@ end catch
 
 select * from @tmp
 ;
+---------------------------------------------------------------------------------------------------------
+vccetranco:--vccetranco 文揚中油2派車
+SET QUOTED_IDENTIFIER OFF
+
+declare @accy nvarchar(10)= [1]
+declare @key nvarchar(20) = [2] --BP
+declare @noa nvarchar(30) = [3]
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	noa nvarchar(50),
+	noq nvarchar(10),
+	datea nvarchar(30),
+	calctype nvarchar(30),
+	conn nvarchar(30),
+	custno nvarchar(30),
+	cust nvarchar(30),
+	addrno nvarchar(30),
+	addr nvarchar(30),
+	[address] nvarchar(30),
+	addrno2 nvarchar(30),
+	addr2 nvarchar(30),
+	address2 nvarchar(30),
+	bdate nvarchar(30),
+	edate nvarchar(30),
+	productno nvarchar(30),
+	product nvarchar(30),
+	unit nvarchar(30),
+	mount float,
+	uweight float,
+	carno nvarchar(30),
+	driverno nvarchar(30),
+	driver nvarchar(30),
+	cno nvarchar(30),
+	comp nvarchar(30)
+)
+create table #tmpa( 
+	datea nvarchar(10), 
+	maxnoa nvarchar(50) 
+) 
+insert into #tmp (gno,noa,noq,datea,conn,custno,cust,addr,addr2,bdate,edate,
+product,unit,mount,uweight,carno,cno,comp)
+select '0',a.noa,ROW_NUMBER()over(partition by b.noa order by b.noa),b.datea,b.vccno,b.custno,b.cust,a.addr,a.addr2,b.datea,b.datea,a.addr3,
+'T',a.n01,a.n02,a.carno,v01,v02
+from borrs a
+left join borr b on a.noa = b.noa
+where b.noa= @noa
+
+update #tmp set noq = RIGHT('000'+noq,3)
+
+insert into #tmp (gno,noa,noq,datea,cno,comp,custno,cust,conn)
+select '1',noa,'001',datea,cno,comp,custno,cust,conn
+from #tmp where noq='001'
+
+update a set addrno = b.custno,a.address = b.address	--起運
+from #tmp a outer apply(select * from addr2 where LEFT(a.addr,4) = LEFT(cust,4))b
+
+update a set addrno2 = b.custno,a.address2 = b.address	--迄點
+from #tmp a outer apply(select * from addr2 where LEFT(a.addr2,4) = LEFT(cust,4))b
+
+update a set a.driverno = b.driverno	--車
+from #tmp a outer apply(select * from car2 where a.carno = noa)b
+
+update a set a.driver = b.namea			--司機
+from #tmp a outer apply(select * from driver where a.driverno = noa)b
+
+insert #tmpa 
+select datea,MAX(noa) 
+from view_tranvcce
+group by datea
+
+update #tmp	--避免重複的noa
+set noa=case when len(isnull(b.maxnoa,''))!=0 then
+@key+replace(a.datea,'/','')
++REPLICATE('0',3-LEN(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4))))
++cast(cast(RIGHT(maxnoa,3)as int)+1 as nvarchar)
+else
+@key+replace(a.datea,'/','')
++REPLICATE('0',2) 
++'1'
+end
+from #tmp a left join #tmpa b on a.datea=b.datea
+where a.gno='0'
+
+update #tmp
+set noa=case when len(isnull(b.maxnoa,''))!=0 then
+@key+replace(a.datea,'/','')
++REPLICATE('0',3-LEN(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4))))
++cast(cast(RIGHT(maxnoa,3)as int)+1 as nvarchar)
+else
+@key+replace(a.datea,'/','')
++REPLICATE('0',2) 
++'1'
+end
+from #tmp a left join #tmpa b on a.datea=b.datea
+where a.gno='1'
+
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+
+Begin Transaction [Trans_Name]
+begin try
+	exec("insert tranvcce"+@accy+"(noa,datea,cno,acomp,addrno,addr,lat)
+	select noa,datea,cno,comp,custno,cust,conn
+	from #tmp where gno='1'")
+
+	exec("
+	insert tranvcces"+@accy+"(noa,noq,conn,no2,custno,cust,carno,driverno,driver,product,weight,mount,unit
+	,addrno,addr,address,addrno2,addr2,address2,bdate,edate)
+	select noa,noq,conn,noq,custno,cust,carno,driverno,driver,product,Uweight*1000,mount,unit,addrno,addr,address,addrno2,addr2,address2,bdate,edate
+	from #tmp
+	where gno='0'")
+		set @n=(select count(*) from #tmp where gno='0')
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+end try
+begin catch
+	Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	insert into @tmp(msg)values(error_message())
+end catch
 
 
+select * from @tmp
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END;
