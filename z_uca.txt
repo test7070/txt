@@ -1283,6 +1283,8 @@ z_stk:	--庫存表  --z_stk
 	declare @t_groupano nvarchar(max)
 	declare @t_style nvarchar(max)
 	declare @allucc nvarchar(30)
+	declare @rlen int=[20]
+	declare @rlenm int=@rlen+3
 	
 	set @t_bproductno = case when '#non'=[4] then '' else [4] end
 	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
@@ -1487,6 +1489,11 @@ z_stk:	--庫存表  --z_stk
 		and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) 
 		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
 		
+		delete a
+		from  #tmp a
+		where not exists (select * from uca where noa=a.productno)
+		and not exists (select * from ucc where noa=a.productno)
+		
 		delete a from #tmp a
 		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
 		
@@ -1517,14 +1524,14 @@ z_stk:	--庫存表  --z_stk
 	if(len(@t_typea)=0)
 	begin
 		insert into @result
-		select '0' gno,a.productno,a.product xproduct,a.unit,a.mount totmount,b.price,a.mount*b.price total 
+		select '0' gno,a.productno,a.product xproduct,a.unit,a.mount totmount,case when b.lastmount!=0 then b.lastmoney/b.lastmount else b.price end,a.mount*case when b.lastmount!=0 then b.lastmoney/b.lastmount else b.price end total 
 		from (
 			select s.productno,MAX(s.product) product,sum(s.mount) mount,(select top 1 unit from view_ucaucc where noa=s.productno) unit 
 			--from stkucc(@enddate,'','') s
 			 from #stkucc s
 			where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
 		) a
-		left join (select * from costs[1] where mon=LEFT(@enddate,6)) b on a.productno=b.productno
+		outer apply (select top 1 * from view_costs where mon<=LEFT(@enddate,@rlenm) and productno=a.productno order by mon desc) b
 		outer apply(select top 1 groupano,style from view_ucaucc where a.productno=noa) c
 		where (a.productno!='') and (len(@t_groupano)=0 or @t_groupano=c.groupano)
 		and a.productno between @t_bproductno and @t_eproductno
@@ -1535,7 +1542,7 @@ z_stk:	--庫存表  --z_stk
 		if(@t_typea!='2' and @t_typea!='3')
 		begin
 			insert into @result
-			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,c.price,a.mount*c.price total
+			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,case when c.lastmount!=0 then c.lastmoney/c.lastmount else c.price end,a.mount*case when c.lastmount!=0 then c.lastmoney/c.lastmount else c.price end total
 			from (
 				select productno,MAX(product) product,sum(mount) mount 
 				--from stkucc(@enddate,'','') s
@@ -1543,7 +1550,7 @@ z_stk:	--庫存表  --z_stk
 				where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
 			) a
 			left join ucc b on a.productno=b.noa  
-			left join (select * from costs[1] where mon=LEFT(@enddate,6)) c on a.productno=c.productno
+			outer apply (select top 1 * from view_costs where mon<=LEFT(@enddate,@rlenm) and productno=a.productno order by mon desc) c
 			outer apply(select top 1 groupano from view_ucaucc where a.productno=noa) d
 			where (a.productno in (select noa from ucc)) and (b.typea=@t_typea) and (len(@t_groupano)=0 or @t_groupano=d.groupano)
 			and a.productno between @t_bproductno and @t_eproductno and (len(@t_style)=0 or @t_style=b.style) 
@@ -1551,7 +1558,7 @@ z_stk:	--庫存表  --z_stk
 		else
 		begin
 			insert into @result
-			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,c.price,a.mount*c.price total
+			select '0' gno,a.productno,a.product xproduct,b.unit,a.mount totmount,case when c.lastmount!=0 then c.lastmoney/c.lastmount else c.price end,a.mount*case when c.lastmount!=0 then c.lastmoney/c.lastmount else c.price end total
 			from (
 				select productno,MAX(product) product,sum(mount) mount 
 				--from stkucc(@enddate,'','') s
@@ -1561,7 +1568,7 @@ z_stk:	--庫存表  --z_stk
 			left join (
 				select noa,product,unit,typea from uca union all select productno,productno+' 半成品',''unit,'2' typea from ucat where productno not in (select noa from uca) and productno!=''
 			) b on a.productno=b.noa 
-			left join (select * from costs[1] where mon=LEFT(@enddate,6)) c on a.productno=c.productno
+			outer apply (select top 1 * from view_costs where mon<=LEFT(@enddate,@rlenm) and productno=a.productno order by mon desc) c
 			outer apply(select top 1 groupano,style from view_ucaucc where a.productno=noa) d
 			where (a.productno in (select noa from uca union select productno from ucat))
 				  and (b.typea=@t_typea)
@@ -1577,18 +1584,22 @@ z_stk:	--庫存表  --z_stk
 	begin
 		insert @result
 		select '0' gno ,noa,product,unit,0,0,0
-		from view_ucaucc where noa not in (select productno from @result) 
+		from view_ucaucc a where not exists (select productno from @result where productno=a.noa) 
 		and (len(@t_typea)=0 or isnull(typea,'null')=@t_typea) 
 		and (len(@t_groupano)=0 or isnull(groupano,'')=@t_groupano)
 		and (len(@t_style)=0 or @t_style=isnull(style,'')) 
 		and (noa between @t_bproductno and @t_eproductno)
 	end
 
+	insert @result(gno,productno,total)
+	select '1',char(255),sum(total) from @result
+	where gno='0'
+
 	select gno,productno,replace(replace(xproduct,'<','＜'),'>','＞')xproduct,unit,@enddate enddate
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(price,2)),1)),0,30)) price
 		,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(total,0)),1)),4,30)) total
-	from @result
+	from @result order by gno,productno
 	
 	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
 	IF OBJECT_ID('tempdb..#stkucc')is not null
