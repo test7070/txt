@@ -1,4 +1,4 @@
-trd2umm:--trd2umm  trd.txt
+﻿trd2umm:--trd2umm  trd.txt
 	-- 只針對現金的沖帳
 	-----------------------------------------------------------------------------------------------------
 	SET QUOTED_IDENTIFIER OFF
@@ -1454,7 +1454,7 @@ trd_wj:--trd_wj
 	declare @t_baddrno nvarchar(30)=[6]
 	declare @t_eaddrno nvarchar(30)=[7]
 	declare @t_trtype nvarchar(30)=[8]
-
+	declare @msg nvarchar(max)=''
 	declare @tmp table(
 		tranno nvarchar(30),
 		trannoq  nvarchar(5),
@@ -1469,18 +1469,49 @@ trd_wj:--trd_wj
 		total float,
 		custorde nvarchar(30),
 		timea nvarchar(30),
-		plus float
+		plus float,
+		chk4 bit
 	)
 	insert into @tmp (tranno,trannoq,trandate,carno,straddr,endaddr,tranmoney,
-	product,mount,price,total,custorde,timea,plus)
-	select min(noa) noa,min(noq) noq,trandate,carno,straddr,endaddr,total,product,mount,price,total,po,timea,plus
+	product,mount,price,total,custorde,timea,plus,chk4)
+	select min(noa) noa,min(noq) noq,trandate,carno,straddr,endaddr,total,product,mount,price,total,po,timea,plus,chk4
 	from view_trans a
 	where a.custno=@t_custno
 	and (trandate between @t_btrandate and @t_etrandate)
 	and (datea between @t_bdate and @t_edate)
 	and (straddrno=@t_baddrno and endaddrno=@t_eaddrno or (len(@t_baddrno)=0 and len(@t_eaddrno)=0))
-	and (calctype<=@t_trtype or len(@t_trtype)=0) and total>0
-	group by trandate,straddr,endaddr,total,product,mount,price,po,carno,timea,plus
-
-	select * from @tmp;
+	and (calctype=@t_trtype or len(@t_trtype)=0) and total>0
+	group by trandate,straddr,endaddr,total,product,mount,price,po,carno,timea,plus,chk4
+	
+	DECLARE MyCursor Cursor FOR
+	select tranno,custorde,carno,chk4 from @tmp
+	Open MyCursor 
+	declare @tranno nvarchar(25)
+	declare @custorde nvarchar(25)
+	declare @carno nvarchar(25)
+	declare @chk4 nvarchar(25)
+	Fetch NEXT FROM MyCursor INTO @tranno,@custorde,@carno,@chk4
+	While (@@FETCH_STATUS <> -1)
+	BEGIN
+	if(@chk4='0' or @chk4 is null)
+	begin
+	set @msg = @msg + '出車單號:'+@tranno +' 運輸單號:'+ @custorde + ' 車號:' +@carno+ ' ' +'未簽單'
+	end
+	Fetch NEXT FROM MyCursor INTO @tranno,@custorde,@carno,@chk4
+	END
+	CLOSE MyCursor
+	DEALLOCATE MyCursor
+	
+	IF EXISTS(
+	select * from @tmp a
+	where a.chk4='1' and not exists(select * from view_trds where a.tranno=tranno and a.trannoq=trannoq))
+	BEGIN
+	select a.*,@msg msg from @tmp a
+	where a.chk4='1' and not exists(select * from view_trds where a.tranno=tranno and a.trannoq=trannoq)
+	END
+	ELSE
+	BEGIN
+	select '' tranno,'' trannoq,'' trandate ,'' carnom,'' straddr,'' endaddr,'' tranmoney,''product,'' mount,'' price,'' total
+		  ,'' custorde,'' timea,'' plus,'' chk4,@msg msg
+	END;
 	
