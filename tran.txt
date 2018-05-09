@@ -383,7 +383,8 @@ declare @key nvarchar(20) =[2]--'BA'
 declare @t_bdate nvarchar(20)=[3]
 declare @t_edate nvarchar(20)=[4]
 declare @t_carno nvarchar(20)=[5]
-
+declare @curdate nvarchar(max) = replace(substring(convert(nvarchar,getDate(),120),1,10),'-','/')
+declare @curdate2 nvarchar(max) = cast(cast(substring(@curdate,1,4) as int)-1911 as nvarchar)+'/'+substring(@curdate,6,2)+'/'+substring(@curdate,9,2)
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
 	drop table #tmp
@@ -395,6 +396,7 @@ END
 
 create table #tmp(
 	gno nvarchar(1),
+	gno2 nvarchar(1),
 	noa nvarchar(50),
 	noq nvarchar(10),
 	orderno nvarchar(50),
@@ -440,17 +442,31 @@ create table #tmp(
 	area nvarchar(20),
 	cargb nvarchar(20)
 )
+--chk1裝貨 chk2卸貨 chk3完工 chk4拉貨
 insert #tmp 
-select '1','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno))) + RTRIM(CAST(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno) AS CHAR))
-,a.noa,a.noq,a.carno,driverno,driver,a.conn,a.custno,a.cust,a.productno,a.product,a.addrno,a.addr,a.address,addrno2,addr2,a.address2,a.addrno3,a.addr3,edate
-,volume,mount,round(weight/1000,3),round(lengthb/1000,3),lng2,tvolume,0,case when a.chk2='0' then 0 else total end,case when len(a.addrno3)=0 then total2 else 0 end,edate,a.product2,a.theight,calctype,'',b.cno,b.acomp,a.chk1,a.chk4,a.chk2,a.unit,a.paths,a.lat2,unit2
+select '1','1','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno))) + RTRIM(CAST(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno) AS CHAR))
+,a.noa,a.noq,a.carno,driverno,driver,a.conn,a.custno,a.cust,a.productno,a.product,a.addrno,a.addr,a.address,addrno2,addr2,a.address2,a.addrno3,a.addr3,bdate
+,a.volume,a.mount,round(a.weight/1000,3),round(lengthb/1000,3),lng2,tvolume,0,case when a.chk2='0' then 0 else total end,case when len(a.addrno3)=0 then total2 else 0 end,@curdate2,a.product2,a.theight,calctype,'',b.cno,b.acomp,a.chk1,'','',a.unit,a.paths,a.lat2,unit2
 from view_tranvcces a 
 left join view_tranvcce b on a.noa=b.noa
-where chk3='1'
+where a.chk3='1' and a.chk1='1'
+and (bdate between @t_bdate and @t_edate)
+and (a.carno=@t_carno or len(@t_carno)=0)
+and not exists(select noa,noq from view_trans where ordeno=a.noa and so=a.noq)
+order by b.cno,a.edate,a.carno,driverno
+
+insert #tmp 
+select '2','2','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno))) + RTRIM(CAST(ROW_NUMBER()over(partition by edate,a.carno,driverno order by edate,a.carno,driverno) AS CHAR))
+,a.noa,a.noq,a.carno,driverno,driver,a.conn,a.custno,a.cust,a.productno,a.product,a.addrno,a.addr,a.address,addrno2,addr2,a.address2,a.addrno3,a.addr3,edate
+,a.volume,a.mount,round(a.weight/1000,3),round(lengthb/1000,3),lng2,tvolume,0,case when a.chk2='0' then 0 else total end,case when len(a.addrno3)=0 then total2 else 0 end,@curdate2,a.product2,a.theight,calctype,'',b.cno,b.acomp,'',a.chk2,a.chk4,a.unit,a.paths,a.lat2,unit2
+from view_tranvcces a 
+left join view_tranvcce b on a.noa=b.noa
+where a.chk3='1' and (a.chk2='1' or a.chk4='1')
 and (edate between @t_bdate and @t_edate)
 and (a.carno=@t_carno or len(@t_carno)=0)
 and not exists(select noa,noq from view_trans where ordeno=a.noa and so=a.noq)
 order by b.cno,a.edate,a.carno,driverno
+
 create table #tmpa( 
 datea nvarchar(10), 
 maxnoa nvarchar(50) 
@@ -461,11 +477,11 @@ from view_tran
 where datea between @t_bdate and @t_edate 
 group by datea 
 
-insert #tmp(gno,noa,noq,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp)
+insert #tmp(gno,noa,noq,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp,gno2)
 select '0','',ROW_NUMBER()over(partition by datea order by trandate,carno,driverno),carno,driverno
-,driver,datea,trandate,SUM(mount),SUM(weight),SUM(total),cno,acomp
+,driver,datea,trandate,SUM(mount),SUM(weight),SUM(total),cno,acomp,gno2
 from #tmp a
-group by carno,driverno,driver,trandate,datea,cno,acomp
+group by carno,driverno,driver,trandate,datea,cno,acomp,gno2
 order by cno,trandate,carno,driverno
 
 update #tmp
@@ -476,8 +492,8 @@ where a.gno='0'
 update #tmp
 set noa=b.noa
 from #tmp a
-outer apply(select noa from #tmp where gno='0' and a.trandate=trandate and a.cno=cno and a.carno=carno and a.driverno=driverno)b
-where gno='1'
+outer apply(select noa from #tmp where gno='0' and a.trandate=trandate and a.cno=cno and a.carno=carno and a.driverno=driverno and a.gno2=gno2)b
+where gno='1' or gno='2'
 
 declare @n int
 declare @tmp table(
@@ -499,10 +515,10 @@ begin try
 	from #tmp where gno='0'")
 
 	exec("
-	insert trans"+@accy+"(noa,noq,ordeno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,timea,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,status,caseend)
+	insert trans"+@accy+"(noa,noq,ordeno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,timea,plus,calctype,cno,acomp,chk1,chk3,chk2,unit,unit2,status,caseend)
 	select noa,noq,orderno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,product2,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,area,cargb
 	from #tmp
-	where gno='1'
+	where gno='1' or gno='2'
 	")
 		set @n=(select count(*) from #tmp where gno='0')
 		
