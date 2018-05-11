@@ -577,8 +577,8 @@ select a.datea,a.workno,e.custno,e.comp,d.spec
 +case when len(isnull(d.groupkno,''))>0 then '皮2:'+isnull(d.groupkno,'')+' ' else '' end
 +case when len(isnull(d.grouplno,''))>0 then '皮3:'+isnull(d.grouplno,'')+' ' else '' end
 +case when len(isnull(d.groupmno,''))>0 then '皮4:'+isnull(d.groupmno,'')+' ' else '' end
-+case when len(isnull(d.groupnno,''))>0 then '皮5:'+isnull(d.groupnno,'')+' ' else '' end
-+case when len(isnull(d.groupono,''))>0 then '皮6:'+isnull(d.groupono,'')+' ' else '' end
+--+case when len(isnull(d.groupnno,''))>0 then '皮5:'+isnull(d.groupnno,'')+' ' else '' end
+--+case when len(isnull(d.groupono,''))>0 then '皮6:'+isnull(d.groupono,'')+' ' else '' end
 ,''
 ,d.groupqno
 ,d.groupfno
@@ -821,3 +821,111 @@ BEGIN
 END
 ;
 -----------------------------------------------------------------------------------------------
+z_workbqp_jo04:--z_workbqp_jo04
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+
+set @t_bdate = case when '#non'=[3] then '' else [3] end
+set @t_edate = case when '#non'=[4] then char(255) else [4] end
+
+declare @tmp table(
+	pageno int,
+	rr int,
+	gno nvarchar(10),
+	typea nvarchar(50),
+	datea nvarchar(50),days nvarchar(10),mons nvarchar(10),years nvarchar(10),
+	noa nvarchar(50),
+	noq nvarchar(50),
+	productno nvarchar(100),
+	product nvarchar(MAX),
+	mount float,
+	wrea nvarchar(MAX),
+	wvalue float,
+	method nvarchar(MAX),
+	memo nvarchar(MAX),
+	stationno nvarchar(50),
+	station nvarchar(MAX)
+)
+--生產
+insert @tmp(gno,typea,datea,noa,noq,productno,product,mount,wrea,wvalue,method,memo,stationno,station)
+select '0','1',a.datea,a.noa,b.noq,b.productno,b.product,b.wmount,b.wrea,b.wvalue,b.method,a.memo,a.stationno,a.station
+from view_workbq a left join view_workbqs b on a.noa=b.noa
+where b.wmount!=0 and a.datea between @t_bdate and @t_edate
+
+--進貨
+insert @tmp(gno,typea,datea,noa,noq,productno,product,mount,wrea,wvalue,method,memo,stationno,station)
+select '0','2',a.datea,a.noa,b.noq,b.productno,b.product,b.wmount,b.wrea,b.wvalue,b.method,a.memo,(select top 1 noa from sss where namea=b.qcworker),b.qcworker
+from view_rc2b a left join view_rc2bs b on a.noa=b.noa
+where b.wmount!=0 and a.datea between @t_bdate and @t_edate
+
+--委外
+insert @tmp(gno,typea,datea,noa,noq,productno,product,mount,wrea,wvalue,method,memo,stationno,station)
+select '0','3',a.datea,a.noa,b.noq,b.productno,b.product,b.wmount,b.wrea,b.wvalue,b.method,a.memo,(select top 1 noa from sss where namea=b.qcworker),b.qcworker
+from view_workf a left join view_workfs b on a.noa=b.noa
+where b.wmount!=0 and a.datea between @t_bdate and @t_edate
+
+--其他
+insert @tmp(gno,typea,datea,noa,noq,productno,product,mount,wrea,wvalue,method,memo,stationno,station)
+select '0','4',a.datea,a.noa,b.noq,b.productno,b.product,b.mount,b.memo,b.lengthc,b.memo2,a.memo,a.stationno,a.station 
+from view_get a left join view_gets b on a.noa=b.noa 
+where a.typea='報廢' and b.mount!=0  and a.datea between @t_bdate and @t_edate
+
+update a
+set rr=idno,pageno=CEILING(cast(idno as float)/7)
+from (select rr,pageno,ROW_NUMBER()over(partition by noa,typea order by noq)idno from @tmp)a
+
+--補空白行
+declare @pageno int
+declare @rr int
+declare @spaceline int
+declare @datea nvarchar(50)
+declare @noa nvarchar(50)
+declare @typea nvarchar(50)
+
+declare cursor_table cursor for
+select noa,typea,datea,MAX(pageno),MAX(rr) from @tmp group by noa,typea,datea having MAX(rr) %7!=0
+open cursor_table
+fetch next from cursor_table
+into @noa,@typea,@datea,@pageno,@rr
+while(@@FETCH_STATUS <> -1)
+begin
+	set @spaceline=(@pageno*7)-@rr
+	while(@spaceline>0)
+	begin
+		insert @tmp(gno,pageno,rr,noa,typea,datea)
+		select '0',@pageno,@rr+@spaceline,@noa,@typea,@datea
+		set @spaceline=@spaceline-1
+	end
+	fetch next from cursor_table
+	into @noa,@typea,@datea,@pageno,@rr
+end
+close cursor_table
+deallocate cursor_table
+
+insert @tmp(gno,noa,typea,datea,pageno,rr,memo)
+select '1',noa,typea,datea,pageno,MAX(rr),MAX(memo)
+from @tmp where gno='0'
+group by noa,typea,datea,pageno
+
+insert @tmp(pageno,rr,gno,typea,datea,noa,noq,productno,product,mount,wrea,wvalue,method,memo,stationno,station)
+select pageno,rr,'2',typea,datea,noa,noq,productno,product,mount,wrea,wvalue,method,memo,stationno,station
+from @tmp where gno='0'
+
+insert @tmp(gno,noa,typea,datea,pageno,rr,memo)
+select '3',noa,typea,datea,pageno,MAX(rr),MAX(memo)
+from @tmp where gno='0'
+group by noa,typea,datea,pageno
+
+insert @tmp(gno,noa,typea,datea,pageno,rr,memo)
+select '4',noa,typea,datea,pageno,MAX(rr),MAX(memo)
+from @tmp where gno='0'
+group by noa,typea,datea,pageno
+
+update @tmp
+set days=RIGHT(datea,2)
+,mons=left(RIGHT(datea,5),2)
+,years=case when len(datea)=10 then left(datea,4) else left(datea,3) end
+
+select * from @tmp order by datea,typea,noa,pageno,gno,rr
+
+;
