@@ -1,0 +1,708 @@
+﻿z_cutp02:--z_cutp02
+	SET QUOTED_IDENTIFIER OFF	
+	declare @t_bdate nvarchar(20) = case when '#non' = [4] then '' else [4] end
+	declare @t_edate nvarchar(20) = case when '#non' = [5] then char(255) else [5] end
+	declare @t_bproductno nvarchar(20) = case when '#non' = [15] then '' else [15] end
+	declare @t_eproductno nvarchar(20) = case when '#non' = [16] then '' else [16] end
+	declare @t_mechno nvarchar(max) = case when '#non' = [17] then '' else [17] end
+	declare @t_option nvarchar(max) = case when '#non' = [18] then '' else [18] end
+	--=====================================================================================
+	---CUT
+	declare @tmpa table(
+		sel int identity(1,1)
+		,accy nvarchar(10)
+		,noa nvarchar(20) 
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,dime float
+		,width float
+		,gweight float
+		,cweight float
+		,rweight float
+	)
+	declare @accy nvarchar(20)
+	declare @noa nvarchar(20)
+	declare @datea nvarchar(20)
+	declare @productno nvarchar(20)
+	declare @dime float
+	declare @width float
+	declare @gweight float
+	declare @cweight float
+	declare @rweight float
+	declare @weight float
+	
+	declare @uno nvarchar(30)
+	declare @length float
+	
+	declare cursor_table cursor for
+	select a.accy,a.noa,a.datea,b.productno,b.dime,b.width,a.gweight
+	from view_cut a
+	left join view_uccb b on a.uno=b.uno 
+	where a.datea between @t_bdate and @t_edate
+	and ISNULL(b.productno,'') between @t_bproductno and @t_eproductno
+	and (len(@t_mechno)=0 or charindex(','+a.mechno+',',','+@t_mechno+',')>0)
+	and (len(@t_option)=0 or charindex('cut',@t_option)>0)
+	open cursor_table
+	fetch next from cursor_table
+	into @accy,@noa,@datea,@productno,@dime,@width,@gweight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @cweight=0,@rweight=0
+		
+		declare cursor_table2 cursor for
+		
+		select isnull([weight],0),isnull(lengthb,0),bno
+		from view_cuts 
+		where accy=@accy and noa=@noa and isnull([weight],0)!=0
+		
+		open cursor_table2
+		fetch next from cursor_table2
+		into @weight,@length,@uno
+		while(@@FETCH_STATUS <> -1)
+		begin
+			if upper(LEFT(@uno,1)) between 'X' and 'Z'
+			begin
+				set @cweight = @cweight + @weight
+			end
+			else if @length = 0
+			begin
+				set @rweight = @rweight + @weight
+			end
+			else
+			begin
+				set @cweight = @cweight + @weight
+			end
+			fetch next from cursor_table2
+			into @weight,@length,@uno
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		insert into @tmpa(accy,noa,datea,productno,dime,width,gweight,cweight,rweight)
+		select @accy,@noa,@datea,@productno,@dime,@width,@gweight,@cweight,@rweight
+		
+		fetch next from cursor_table
+		into @accy,@noa,@datea,@productno,@dime,@width,@gweight
+	end
+	close cursor_table
+	deallocate cursor_table
+	--=====================================================================================
+	---CUBM
+	declare @tmpb table(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,dime float
+		,width float
+		,gweight float
+		,cweight float
+		,rweight float
+	)
+	
+	declare @size nvarchar(max)
+	declare @ordeno nvarchar(20)
+	declare @ordeno2 nvarchar(20)
+	
+	declare cursor_table cursor for
+		select a.noa,a.edate,a.productno,a.[weight],a.weight3,isnull(a.size,''),a.ordeno,a.no2
+		from cubms a
+		left join cubm b on a.noa=b.noa
+		where ISNULL(a.edate,'') between @t_bdate and @t_edate
+		and ISNULL(a.productno,'') between @t_bproductno and @t_eproductno
+		and (len(@t_mechno)=0 or charindex(','+b.mechno+',',','+@t_mechno+',')>0)
+		and (len(@t_option)=0 or charindex('cubm',@t_option)>0)
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@datea,@productno,@gweight,@cweight,@size,@ordeno,@ordeno2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @dime=0,@width=0
+		if LEN(@size)>0
+		begin
+			begin try
+				set @dime = cast(LEFT(@size,CHARINDEX('T',@size)-1) as float)
+				set @size = SUBSTRING(@size,CHARINDEX('T*',@size)+2,LEN(@size))
+				set @width = CAST( LEFT(@size,CHARINDEX('*',@size)-1) as float)
+				--set @size = SUBSTRING(@size,CHARINDEX('*',@size)+1,LEN(@size))
+				--set @lengthb = @size
+			end try
+			begin catch
+				--
+			end catch
+		end
+		else
+		begin
+			select top 1 @dime=dime,@width=width
+			from view_ordes where noa=@ordeno and no2=@ordeno2
+		end
+		
+		insert into @tmpb(noa,datea,productno,dime,width,gweight,cweight,rweight)
+		select @noa,@datea,@productno,@dime,@width,@gweight,@cweight,0
+		
+		fetch next from cursor_table
+		into @noa,@datea,@productno,@gweight,@cweight,@size,@ordeno,@ordeno2
+	end
+	close cursor_table
+	deallocate cursor_table
+	--=====================================================================================
+	declare @tmpc table(
+		sel int identity(1,1)
+		,recno int
+		,gno nvarchar(20)
+		,pno int
+		,accy nvarchar(10)
+		,noa nvarchar(20) 
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,dime float
+		,width float
+		,gweight float
+		,cweight float
+		,rweight float
+	)
+	insert into @tmpc(gno,pno,accy,noa,datea,productno,dime,width,gweight,cweight,rweight)
+	select '1',1,accy,noa,datea,productno,dime,width,gweight,cweight,rweight from @tmpa
+	
+	insert into @tmpc(gno,pno,accy,noa,datea,productno,dime,width,gweight,cweight,rweight)
+	select '1',1,'',noa,datea,productno,dime,width,sum(isnull(gweight,0)),sum(isnull(cweight,0)),sum(isnull(rweight,0))
+	from @tmpb
+	group by noa,datea,productno,dime,width
+	
+	update @tmpc set recno=b.recno
+	from @tmpc a
+	left join (select sel,ROW_NUMBER()over(order by datea,productno,dime,width) recno from @tmpc) b on a.sel=b.sel
+	
+	----機台排程  鋼捲重量,有備註改抓備註第一行
+	declare @sel int
+	declare @memo nvarchar(max)
+
+	declare cursor_table cursor for
+		select a.sel,b.memo 
+		from @tmpc a
+		left join cubm b on a.noa=b.noa
+		where b.noa is not null
+		and CHARINDEX('chr(10)',b.memo)>0
+	open cursor_table
+	fetch next from cursor_table
+	into @sel,@memo
+	while(@@FETCH_STATUS <> -1)
+	begin
+		begin try
+			set @weight = cast(LEFT(@memo,CHARINDEX('chr(10)',@memo)-1) as float)
+		end try
+		begin catch
+			set @weight = -99999
+		end catch
+		update @tmpc set gweight=@weight where sel=@sel
+		
+		fetch next from cursor_table
+		into @sel,@memo
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	
+	insert into @tmpc(gno,pno,gweight,cweight,rweight)
+	select '2',2,SUM(ISNULL(gweight,0)),SUM(ISNULL(cweight,0)),SUM(ISNULL(rweight,0))
+	from @tmpc
+	
+	select gno
+		,recno rr
+		,case when len(accy)>0 then "cut?noa=$a02?"+accy 
+			else "cubm_pk?noa=$a02" end ghref
+		,datea a01
+		,noa a02
+		,productno a03
+		,dime a04
+		,width a05
+		,dbo.getComma(gweight,-1) a06
+		,dbo.getComma(cweight,-1) a07
+		,dbo.getComma(rweight,-1) a08
+	from @tmpc
+	order by pno,datea,productno,dime,width;
+
+z_cutp01:--z_cutp01
+	SET QUOTED_IDENTIFIER OFF	
+	declare @t_noa nvarchar(20) = case when '#non' = [3] then ' ' else [3] end
+	---------------------------------------------------------
+	declare @sign1 nvarchar(max) = N'<a style="font-family:'+CHAR(39)+'Wingdings 2'+CHAR(39)+'">R</a>'
+	declare @sign2 nvarchar(max) = N'<a style="font-family:'+CHAR(39)+'Wingdings 2'+CHAR(39)+'">'+NCHAR(163)+'</a>'
+	
+	declare @tmp table(
+		sel int identity(1,1)
+		,recno int
+		,gno nvarchar(30)
+		,pno int
+		,accy nvarchar(20)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,memo nvarchar(max)
+		,memo1 nvarchar(max)
+		,memo2 nvarchar(max)
+		,memo3 nvarchar(max)
+		,memo4 nvarchar(max)
+		,memo5 nvarchar(max)
+		,uno nvarchar(30)
+		,productno nvarchar(30)
+		,product nvarchar(50)
+		,dime float
+		,width float
+		,lengthb float
+		,[mount] float
+		,[weight] float
+		,custno nvarchar(20)
+		,cust nvarchar(max)
+		
+		,datea nvarchar(10)--日期：X年X月X日
+		,odate nvarchar(10)
+		,memos nvarchar(max)
+		,oweight float
+		,theory float
+	)
+	insert into @tmp(gno,pno,accy,noa,noq,memo
+		,uno,productno,product,dime,width,lengthb,mount,[weight],custno,cust
+		,datea,odate,memos,oweight,theory)
+	select '1',1,b.accy,b.noa,b.noq,a.memo
+		,b.uno,b.productno,b.product,a.dime,a.width,b.lengthb,b.mount,b.[weight],b.custno,b.cust
+		,a.datea,ISNULL(c.datea,''),b.memo,a.oweight,b.theory
+	from view_cut a
+	left join view_cuts b on a.accy=b.accy and a.noa=b.noa
+	left join view_orde c on b.ordeno=c.noa
+	where a.noa=@t_noa
+	order by a.noa,b.noq
+	---------------------------
+	--頭尾
+	insert into @tmp(gno,pno,accy,product,dime,width)
+	select '2',2,CHAR(255),'頭',dime,width
+	from view_cut
+	where noa=@t_noa
+	
+	insert into @tmp(gno,pno,accy,product,dime,width)
+	select '2',2,CHAR(255),'尾',dime,width
+	from view_cut
+	where noa=@t_noa
+	---------------------------
+	--合計
+	insert into @tmp(gno,pno,accy,mount,[weight],[theory])
+	select '4',4,CHAR(255),sum(mount),SUM([weight]),SUM([theory])
+	from @tmp
+	where gno='1'
+		
+	declare @memo nvarchar(max)= '',@memo1 nvarchar(max)= '',@memo2 nvarchar(max)= '',@memo3 nvarchar(max)= '',@memo4 nvarchar(max)= '',@memo5 nvarchar(max)= ''
+	select @memo = memo from view_cut where noa=@t_noa
+
+	if CHARINDEX('chr(10)',@memo)>0
+	begin
+		set @memo1 = LEFT(@memo,CHARINDEX('chr(10)',@memo)-1)
+		set @memo = SUBSTRING(@memo,CHARINDEX('chr(10)',@memo)+7,LEN(@memo))
+		if CHARINDEX('chr(10)',@memo)>0
+		begin
+			set @memo2 = LEFT(@memo,CHARINDEX('chr(10)',@memo)-1)
+			set @memo = SUBSTRING(@memo,CHARINDEX('chr(10)',@memo)+7,LEN(@memo))
+			
+			if CHARINDEX('chr(10)',@memo)>0
+			begin
+				set @memo3 = LEFT(@memo,CHARINDEX('chr(10)',@memo)-1)
+				set @memo = SUBSTRING(@memo,CHARINDEX('chr(10)',@memo)+7,LEN(@memo))
+				
+				if CHARINDEX('chr(10)',@memo)>0
+				begin
+					set @memo4 = LEFT(@memo,CHARINDEX('chr(10)',@memo)-1)
+					set @memo = SUBSTRING(@memo,CHARINDEX('chr(10)',@memo)+7,LEN(@memo))
+					
+					if CHARINDEX('chr(10)',@memo)>0
+					begin
+						set @memo5 = LEFT(@memo,CHARINDEX('chr(10)',@memo)-1)
+						set @memo = SUBSTRING(@memo,CHARINDEX('chr(10)',@memo)+7,LEN(@memo))
+					end
+					else
+					begin
+						set @memo5 = @memo
+					end
+				end
+				else
+				begin
+					set @memo4 = @memo
+				end
+			end
+			else
+			begin
+				set @memo3 = @memo
+			end
+		end
+		else
+		begin
+			set @memo2 = @memo
+		end
+	end
+	else
+	begin
+		set @memo1 = @memo
+	end
+	update @tmp set memo1=@memo1,memo2=@memo2,memo3=@memo3,memo4=@memo4,memo5=@memo5
+	-----------------------------------------------------------------------
+	declare @pageCount int = 24
+	
+	declare @n int = 0
+	select @n = count(1) from @tmp
+	while @n%@pageCount != 0
+	begin
+		insert into @tmp(gno,pno,accy,product,dime,width)
+		select '3',3,CHAR(255),'',dime,width
+		from view_cut
+		where noa=@t_noa
+		set @n=@n+1
+	end
+	
+	update @tmp set recno=b.recno
+	from @tmp a
+	left join (select sel,row_number()over(order by pno,noa,noq,sel) recno from @tmp) b on a.sel=b.sel
+	
+	update @tmp set cust=ISNULL(b.nick,a.cust)
+	from @tmp a
+	left join cust b on a.custno=b.noa
+	
+	select gno 
+		,recno a01
+		,dime a02
+		,width a03
+		,case when gno='2' then product else cast(lengthb as nvarchar) end a04
+		,mount a05
+		,round(theory,0) a06
+		,'' a07
+		,memos a08
+		,cust a09
+		,case when len(memo1)>0 then '交期：'+LEFT(memo1,3)+'年'+substring(memo1,5,2)+'月'+RIGHT(memo1,2)+'日' else '交期：' end b01
+		,'爐號移轉：'+isnull(memo2,'') b02
+		,'鋼捲編號：'+isnull(memo3,'') b03
+		,'材質表面：'+isnull(memo4,'') b04
+		,memo5 b05
+
+		,'日期：'+LEFT(datea,3)+'年'+substring(datea,5,2)+'月'+RIGHT(datea,2)+'日' c01
+		,'重量：　'+CAST(ROUND(oweight,0) as nvarchar) c02
+		,@sign2+'代工　　'+@sign2+'訂單　　'+@sign2+'寄庫　　'+@sign2+'其他' c03
+		,noa c04
+	from @tmp
+	order by pno,recno;
+
+
+
+z_cutp1a:
+z_cutp1:--z_cutp1
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_tel nvarchar(20)
+	declare @t_accy nvarchar(20)
+	declare @t_noa nvarchar(20)
+	declare @t_typea2list nvarchar(max)
+	declare @t_typea2Alist nvarchar(max)
+	declare @t_split_Tmp nvarchar(max)
+	declare @t_pricesize nvarchar(max)
+	declare @t_pricememo nvarchar(max)
+	declare @t_proj nvarchar(max)
+	set @t_tel ='[1]'
+	set @t_accy = '[2]'
+	set @t_noa = case when '#non' = [3] then ' ' else [3] end
+	set @t_typea2list = case when '#non' = '[10]' then ' ' else '[10]' end
+	set @t_typea2Alist = case when '#non' = '[11]' then ' ' else '[11]' end
+	set @t_pricesize = case when '#non' = [12] then '0' else [12] end
+	set @t_pricememo = case when '#non' = [13] then '0' else [13] end
+	set @t_proj = '[14]'
+	declare @typea2list table(
+		noa nvarchar(10),
+		namea nvarchar(15)
+	)
+	declare @typea2Alist table(
+		noa nvarchar(10),
+		namea nvarchar(15)
+	)
+	set @t_typea2list += ','
+	while(CHARINDEX(',',@t_typea2list) > 0)
+	begin
+		set @t_split_Tmp = LEFT(@t_typea2list,CHARINDEX(',',@t_typea2list)-1)
+		insert into @typea2list 
+			select LEFT(@t_split_Tmp,CHARINDEX('@',@t_split_Tmp)-1),right(@t_split_Tmp,len(@t_split_Tmp)-CHARINDEX('@',@t_split_Tmp))
+		set @t_typea2list = RIGHT(@t_typea2list,LEN(@t_typea2list)-CHARINDEX(',',@t_typea2list))
+	end
+	set @t_typea2Alist += ','
+	while(CHARINDEX(',',@t_typea2Alist) > 0)
+	begin
+		set @t_split_Tmp = LEFT(@t_typea2Alist,CHARINDEX(',',@t_typea2Alist)-1)
+		insert into @typea2Alist 
+			select LEFT(@t_split_Tmp,CHARINDEX('@',@t_split_Tmp)-1),right(@t_split_Tmp,len(@t_split_Tmp)-CHARINDEX('@',@t_split_Tmp))
+		set @t_typea2Alist = RIGHT(@t_typea2Alist,LEN(@t_typea2Alist)-CHARINDEX(',',@t_typea2Alist))
+	end
+
+
+
+	---------------------------------------------------------------------------------- 
+	declare @tmp table(
+		noa nvarchar(30),
+		comp nvarchar(90),
+		datea nvarchar(10),
+		typea nvarchar(20),
+		uno nvarchar(50),
+		aspec nvarchar(90),
+		gtime nvarchar(10),
+		aproduct nvarchar(90),
+		acsize nvarchar(max),
+		agweight float,
+		amech nvarchar(90),
+		class nvarchar(50),
+		aeweight float,
+		amemo nvarchar(max),
+		worker nvarchar(50)
+	)
+
+	declare @tmps table(
+		noa nvarchar(30),
+		noq nvarchar(10),
+		bcustno nvarchar(90),
+		bcsize nvarchar(max),
+		bmount float,
+		btheory float,
+		bweight float,
+		bmemo nvarchar(max),
+		buno nvarchar(50)
+	)
+
+	insert into @tmp
+		select
+			a.noa,a.tgg,a.datea,
+			case left(a.kind,1) when 'B' then e.namea else d.namea end,a.uno,a.spec,a.gtime,a.product,
+			dbo.csize('A1',a.dime,a.width,a.lengthb,a.radius),
+			a.gweight,a.mech,c.class,a.eweight,a.memo,a.worker
+		from view_cut a
+		left join view_uccc c on c.uno = a.uno
+		left join @typea2list d on a.type2=d.noa
+		left join @typea2Alist e on a.type2=e.noa
+		where (a.noa = @t_noa)
+	insert into @tmps
+		select
+			a.noa,a.noq,a.custno,
+			(case when ltrim(rtrim(isnull(a.size,'')))='' then dbo.csize(b.kind,a.dime,a.width,a.lengthb,a.radius) else a.size end),
+			a.mount,a.theory,a.weight,a.memo,a.bno
+		from view_cuts a
+		left join view_cut b on a.noa = b.noa
+		where (a.noa = @t_noa)
+	--------------------------------------------------------------------------------------------------
+	--摘要太長分多行
+	declare @tmp2 table(
+		noa nvarchar(30),
+		noq nvarchar(10),
+		bcustno nvarchar(90),
+		bcsize nvarchar(max),
+		bmount float,
+		btheory float,
+		bweight float,
+		bmemo nvarchar(max),
+		buno nvarchar(50),
+		cn1 int,
+		cn2 int
+	)
+	declare @tmpString nvarchar(max)
+	declare @maxcount int
+	set @maxcount = 16
+	declare @n int
+	declare @string nvarchar(max)
+	
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @bcustno nvarchar(90)
+	declare @bcsize nvarchar(max)
+	declare @bmount float
+	declare @btheory float
+	declare @bweight float
+	declare @memo nvarchar(max)
+	declare @buno nvarchar(50)
+	declare @cn1 int
+	declare @cn2 int
+	
+	declare cursor_table cursor for
+		select noa,noq,bcustno,bcsize,bmount,btheory,bweight,bmemo,buno
+	,row_number()over(order by noa,noq)
+	from @tmps
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@memo,@buno,@cn1
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		set @memo=REPLACE(@memo,'  ','')
+		select @n=0,@string=@memo,@tmpString='',@cn2=0
+		if(LEN(@string)=0)
+		begin
+			insert into @tmp2(noa,noq,bcustno,bcsize,bmount,btheory,bweight,buno,bmemo,cn1,cn2)
+					values(@noa,@noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@buno,@memo,@cn1,@cn2)
+		end
+		while(LEN(@string)>0)
+		begin
+			set @n = @n + case when UNICODE(LEFT(@string,1))>5000 then 2 else 1 end	
+			set @tmpString = @tmpString + LEFT(@string,1)
+			set @string = substring(@string,2,len(@string)-1)
+			if(LEN(@string)=0 or @n>=@maxcount)
+			begin
+				if(@cn2=0)
+				begin
+					insert into @tmp2(noa,noq,bcustno,bcsize,bmount,btheory,bweight,buno,bmemo,cn1,cn2)
+					values(@noa,@noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@buno,@tmpString,@cn1,@cn2)
+				end
+				else
+				begin
+					insert into @tmp2(noa,noq,bmemo,cn1,cn2)
+					values(@noa,@noq,@tmpString,@cn1,@cn2)
+				end
+				set @n = 0
+				set @tmpString = ''
+				set @cn2 = @cn2 + 1
+			end		
+		end
+		fetch next from cursor_table
+		into @noa,@noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@memo,@buno,@cn1
+	end
+	close cursor_table
+	deallocate cursor_table
+	----------------------------------------------------------------------------------------------
+	--分頁
+	declare @tmp3 table(
+		page int,
+		nn int,
+		gno nvarchar(10),
+	
+		noa nvarchar(30),
+		comp nvarchar(90),
+		datea nvarchar(10),
+		typea nvarchar(20),
+		uno nvarchar(50),
+		aspec nvarchar(90),
+		gtime nvarchar(10),
+		aproduct nvarchar(90),
+		acsize nvarchar(max),
+		agweight float,
+		amech nvarchar(90),
+		class nvarchar(50),
+		aeweight float,
+		amemo nvarchar(max),
+		worker nvarchar(50),
+
+		noq nvarchar(10),
+		bcustno nvarchar(90),
+		bcsize nvarchar(max),
+		bmount float,
+		btheory float,
+		bweight float,
+		bmemo nvarchar(max),
+		buno nvarchar(50)
+	)
+	
+	declare @rowline int -- 每頁可用行數
+	declare @endline int -- 頁尾行數
+	declare @page int
+	declare @recno int
+	declare @curline int -- 當前行數
+	if(@t_pricesize='1')
+		set @rowline = 36
+	else	
+		set @rowline = 6
+	set @endline = 1
+	
+	declare @gno nvarchar(10)
+	declare @comp nvarchar(90)
+	declare @datea nvarchar(10)
+	declare @typea nvarchar(20)
+	declare @uno nvarchar(50)
+	declare @aspec nvarchar(90)
+	declare @gtime nvarchar(10)
+	declare @aproduct nvarchar(90)
+	declare @acsize nvarchar(max)
+	declare @agweight float
+	declare @amech nvarchar(90)
+	declare @class nvarchar(50)
+	declare @aeweight float
+	declare @amemo nvarchar(max)
+	declare @worker nvarchar(50)
+	
+
+	set @curline = 0
+	declare cursor_table cursor for
+	select noa,comp,datea,typea,uno,aspec,gtime,aproduct,acsize,agweight,amech,class,aeweight,amemo,worker from @tmp 
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@comp,@datea,@typea,@uno,@aspec,@gtime,@aproduct,@acsize,@agweight,@amech,@class,@aeweight,@amemo,@worker
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @page = 0
+		
+		declare cursor_table2 cursor for
+		select noq,bcustno,bcsize,bmount,btheory,bweight,buno,bmemo,cn1,cn2 from @tmp2 where noa=@noa
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@buno,@memo,@cn1,@cn2
+		while(@@FETCH_STATUS <> -1)
+		begin			
+			select @n=MAX(cn2) from @tmp2 where noa=@noa and noq=@noq
+			
+			set @gno = case when @n = 0 then '1' when @cn2=0 then '2' when @cn2=@n then '4' else '3' end		
+			
+			insert into @tmp3(page,nn,gno
+				,noa,comp,datea,typea,uno,aspec,gtime,aproduct,acsize,agweight,amech,class,aeweight,amemo,worker
+				,noq,bcustno,bcsize,bmount,btheory,bweight,buno,bmemo)
+			select @page,@curline%@rowline,@gno		
+				,@noa,@comp,@datea,@typea,@uno,@aspec,@gtime,@aproduct,@acsize,@agweight,@amech,@class,@aeweight,@amemo,@worker
+				,@noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@buno,@memo
+			set @curline = @curline + 1
+			--是否換頁
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+			
+			fetch next from cursor_table2
+			into @noq,@bcustno,@bcsize,@bmount,@btheory,@bweight,@buno,@memo,@cn1,@cn2
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		while(@rowline-@curline%@rowline != @endline)
+		begin
+			insert into @tmp3(page,nn,gno
+				,noa,comp,datea,typea,uno,aspec,gtime,aproduct,acsize,agweight,amech,class,aeweight,amemo,worker)
+			select @page,@curline%@rowline,'6'
+				,@noa,@comp,@datea,@typea,@uno,@aspec,@gtime,@aproduct,@acsize,@agweight,@amech,@class,@aeweight,@amemo,@worker
+			set @curline = @curline + 1
+			if(@curline%@rowline=0)
+			begin
+				set @page = @page + 1
+			end
+		end
+		--頁尾
+		insert into @tmp3(page,nn,gno
+			,noa,comp,datea,typea,uno,aspec,gtime,aproduct,acsize,agweight,amech,class,aeweight,amemo,worker)
+		select @page,@curline%@rowline,'5'
+			,@noa,@comp,@datea,@typea,@uno,@aspec,@gtime,@aproduct,@acsize,@agweight,@amech,@class,@aeweight,@amemo,@worker
+		set @curline = @curline + 1
+		
+		fetch next from cursor_table
+		into @noa,@comp,@datea,@typea,@uno,@aspec,@gtime,@aproduct,@acsize,@agweight,@amech,@class,@aeweight,@amemo,@worker
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------------------------------------------------------------------------------------------
+	declare @kind nvarchar(max)=''
+	select @kind = case when kind='B2' then '鋼管批號：' else '鋼捲批號：'end  from view_cut where noa=@t_noa
+	
+	update @tmp3 set amemo=null where @t_pricememo!='1'
+	update @tmp3 set uno=REPLACE(uno,'~#$',CHAR(39))
+	select gno,noa,noq,comp,datea,typea,uno auno,aspec,gtime,aproduct,acsize,amemo,worker,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,agweight),1)),4,12)) agweight,amech,class,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,aeweight),1)),4,12)) aeweight,bcustno
+		,replace(bcsize,'~#$',"'") bcsize,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bmount),1)),4,12)) bmount,btheory,
+		reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,bweight),1)),4,12)) bweight,bmemo,buno,
+		case when (len(ltrim(rtrim(isnull(comp,'')))))>0 then '委外加工單' else '裁剪單' end rt1,
+		@kind rt2,
+		case when (len(ltrim(rtrim(isnull(comp,'')))))>0 then '委外廠商：' else '列印日期：' end f01,
+		case when (len(ltrim(rtrim(isnull(comp,'')))))>0 then comp else Convert(char(10),getdate(),111) end f02,
+		case when @t_proj='pe' then '' else '表單編號：4-702-2' end listno			
+	from @tmp3 a
+	outer apply (select max(page) page from @tmp3 b where noa=a.noa) b
+	order by a.noa,a.page,a.nn;

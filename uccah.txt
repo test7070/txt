@@ -1,0 +1,95 @@
+﻿gen:--gen將st.vcca,s,rc2a,s轉入st2
+SET QUOTED_IDENTIFIER OFF
+declare @mon nvarchar(max)=case when '#non'=[1] then '' else [1] end
+declare @vcca nvarchar(max)=case when '#non'=[2] then '0' else [2] end
+declare @rc2a nvarchar(max)=case when '#non'=[3] then '0' else [3] end
+--declare @proj nvarchar(max)=case when '#non'=[4] then '0' else [4] end
+declare @bdate nvarchar(max)=case when '#non'=[4] then '' else [4] end
+declare @edate nvarchar(max)=case when '#non'=[5] then '' else [5] end
+	Begin Transaction [Trans_Name]
+	begin try
+			--發票主檔
+			declare @tmpr table(
+					noa nvarchar(100)
+			)
+			insert @tmpr
+			select a.noa
+			from vccar a left join vccars b on a.noa=b.noa
+			where(@bdate between bdate and edate) or (@edate between bdate and edate) and b.memo='從ST匯入'
+			group by a.noa
+
+			delete vccars where noa in (select noa from @tmpr)
+			delete vccar where noa in (select noa from @tmpr)
+
+			insert ST2.dbo.vccar(noa,cno,acomp,bdate,edate,binvono,einvono,rev,seq,nick,iselectric)
+			select noa,cno,acomp,bdate,edate,binvono,einvono,rev,seq,nick,iselectric
+			from st.dbo.vccar a
+			where(@bdate between bdate and edate) or (@edate between bdate and edate)
+
+			insert ST2.dbo.vccars
+			select b.noa,b.noq,b.custno,b.comp,b.datea,'從ST匯入',b.binvono,b.einvono,b.no2,b.partno,b.part
+			from st.dbo.vccars b left join st.dbo.vccar a on a.noa=b.noa
+			where (@bdate between bdate and edate) or (@edate between bdate and edate)
+
+			--銷項憑證
+			declare @tmp table(
+				noa nvarchar(100)
+			)
+			insert @tmp
+			select a.noa
+			from vcca a left join vccas b on a.noa=b.noa 
+			where a.product='從ST匯入' and isnull(b.productno,'')='' and  (a.datea between @bdate and @edate) and ((@mon)=0 or mon=@mon) and isnull(accno,'')=''
+			group by a.noa,accno
+			having a.noa not in (select noa from vccas where productno!='' group by noa)
+							
+			delete vccas where noa in (select noa from @tmp)
+			delete vcca where noa in (select noa from @tmp)
+
+			if(@vcca='1')
+			begin
+				insert ST2.dbo.vcca(noa,custno,comp,nick,serial,zip,address,datea,mon,chkno,money,tax,total,taxtype,memo,type,accno,cno,acomp
+						,buyerno,buyer,worker,taxrate,trdno,productno,product,unit,mount,price,vccno,atax)
+				select noa,custno,comp,nick,serial,zip,address,datea,mon,chkno,money,tax,total,taxtype,memo,type,accno,cno,acomp
+						,buyerno,buyer,worker,taxrate,trdno,productno,'從ST匯入',unit,mount,price,vccno,atax
+				from st.dbo.vcca a
+				where (a.datea between @bdate and @edate) and ((@mon)=0 or mon=@mon) and not exists (select noa from ST2.dbo.vcca where noa=a.noa)
+				
+				insert ST2.dbo.vccas
+				select b.noa,b.noq,b.custno,'',b.product,b.unit,b.mount,b.price,b.money,b.typea,b.cno,b.datea,b.memo,b.tax,b.ordeno,b.no2,b.aprice
+				from st.dbo.vccas b left join st.dbo.vcca a on a.noa=b.noa
+				where (a.datea between @bdate and @edate) and ((@mon)=0 or mon=@mon) and not exists (select noa from ST2.dbo.vccas  where noa=b.noa)
+			end
+			
+			--進項憑證
+			declare @tmpa table(
+				noa nvarchar(100)
+			)
+			insert @tmpa
+			select a.noa
+			from rc2a a left join rc2as b on a.noa=b.noa 
+			where a.product='從ST匯入' and isnull(b.productno,'')='' and  (a.datea between @bdate and @edate) and ((@mon)=0 or mon=@mon) and isnull(accno,'')=''
+			group by a.noa
+			having a.noa not in (select noa from rc2as where productno!='' group by noa)
+						
+			delete  rc2as where noa in (select noa from @tmpa)
+			delete  rc2a where noa in (select noa from @tmpa)
+
+			if(@rc2a='1')
+			begin
+				insert ST2.dbo.rc2a(noa,tggno,comp,serial,address,datea,mon,chkno,money,tax,total,taxtype,memo,typea,accno,cno,comp2,comp3,worker,buyerno,buyer,acomp,cobtype,product)
+				select noa,tggno,comp,serial,address,datea,mon,chkno,money,tax,total,taxtype,memo,typea,accno,cno,comp2,comp3,worker,buyerno,buyer,acomp,cobtype,'從ST匯入'
+				from st.dbo.rc2a a
+				where (a.datea between @bdate and @edate) and ((@mon)=0 or mon=@mon) and not exists (select noa from ST2.dbo.rc2a where noa=a.noa)
+				
+				insert ST2.dbo.rc2as
+				select b.noa,b.noq,b.tggno,'',b.product,b.unit,b.mount,b.price,b.money,b.tax,b.typea,b.cno,b.memo,b.datea,b.acc1,b.acc2
+				from st.dbo.rc2as b left join st.dbo.rc2a a on a.noa=b.noa
+				where (a.datea between @bdate and @edate) and ((@mon)=0 or mon=@mon) and not exists (select noa from ST2.dbo.rc2as where noa=b.noa)
+			end
+
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	end catch
+;

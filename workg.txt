@@ -1,0 +1,159 @@
+﻿freeze:--workg 存檔處理work凍結
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(50)=[1]--單據編號
+-----------------------------------------------------------------------
+declare @cmd nvarchar(max)
+declare @accy nvarchar(20)
+declare @noq nvarchar(20) 
+declare @isfreeze bit
+
+declare cursor_table cursor for
+select noq,isfreeze from view_workgs where noa=@noa
+open cursor_table
+fetch next from cursor_table
+into @noq,@isfreeze
+while(@@FETCH_STATUS <> -1)
+begin
+
+	--判斷work的年度 --避免手動輸入的問題
+	declare cursor_table2 cursor for
+	select accy from view_work where cuano=@noa and cuanoq=@noq group by accy
+	open cursor_table2
+	fetch next from cursor_table2
+	into @accy
+	while(@@FETCH_STATUS <> -1)
+	begin
+	
+		set @cmd="update work"+@accy+" set isfreeze=@isfreeze where cuano='"+@noa+"' and cuanoq='"+@noq+"'"
+		EXECUTE sp_executesql @cmd,N'@isfreeze bit',@isfreeze=@isfreeze
+		
+		fetch next from cursor_table2
+		into @accy
+	end
+	close cursor_table2
+	deallocate cursor_table2
+
+	fetch next from cursor_table
+	into @noq,@isfreeze
+end
+close cursor_table
+deallocate cursor_table
+
+;
+--******************************************************************************************************
+workrealall:--批次轉正式製令
+SET QUOTED_IDENTIFIER OFF
+declare @bcuano nvarchar(MAX)=case when '#non'=[1] then '' else [1] end
+declare @ecuano nvarchar(MAX)=case when '#non'=[2] then CHAR(255) else [2] end
+
+declare @tmp table(
+	workj nvarchar(MAX),
+	workno nvarchar(MAX),
+	signno nvarchar(MAX),
+	signend nvarchar(MAX)
+)
+--106/03/10變更替代品走簽核，簽核完成後才能成為正式製令
+
+insert @tmp (workj,workno,signno,signend)
+select a.noa,'',isnull(a.signno,''),isnull(a.signend,'') from view_work a 
+where (a.cuano between @bcuano and @ecuano) 
+and a.noa not like 'W[0-9]%'
+
+update @tmp set workno=LEFT(workj,1)+RIGHT(workj,len(workj)-2)
+where (isnull(signno,'')='' or (ISNULL(signno,'')!='' and isnull(signend,'')='Y'))
+
+select (select count(*) from @tmp)total,(select count(*) from @tmp where workno!='') ctotal
+
+declare @accy nvarchar(10)
+declare @workno nvarchar(90)
+declare @noa nvarchar(90)
+declare @tggno nvarchar(90)
+declare @signno nvarchar(90)
+
+--work noa nom
+--works noa
+declare cursor_table cursor for 
+select a.workno,b.accy,b.noa from @tmp a left join view_work b on a.workj=b.noa where a.workno!='' and isnull(b.noa,'')!=''
+open cursor_table 
+fetch next from cursor_table 
+into @workno,@accy,@noa
+while(@@FETCH_STATUS <> -1) 
+begin 
+	EXEC("update work"+@accy+" set noa='"+@workno+"' where noa='"+@noa+"' ")
+	EXEC("update work"+@accy+" set nom='"+@workno+"' where nom='"+@noa+"' ")
+	EXEC("update work"+@accy+" set previd='"+@workno+"' where previd='"+@noa+"' ")
+	EXEC("update works"+@accy+" set noa='"+@workno+"' where noa='"+@noa+"' ")
+	
+	fetch next from cursor_table 
+	into @workno,@accy,@noa
+end 
+close cursor_table 
+deallocate cursor_table
+
+--workg iscugu
+declare cursor_table cursor for 
+select accy,noa from view_workg where noa between @bcuano and @ecuano
+open cursor_table 
+fetch next from cursor_table 
+into @accy,@noa
+while(@@FETCH_STATUS <> -1) 
+begin 
+	EXEC("update workg"+@accy+" set iscugu=1 where noa='"+@noa+"' ")
+	
+	fetch next from cursor_table 
+	into @accy,@noa
+end 
+close cursor_table 
+deallocate cursor_table
+
+--workgs workno
+declare cursor_table cursor for 
+select a.workno,b.accy,b.workno from @tmp a left join view_workgs b on a.workj=b.workno where a.workno!='' and isnull(b.workno,'')!=''
+open cursor_table 
+fetch next from cursor_table 
+into @workno,@accy,@noa
+while(@@FETCH_STATUS <> -1) 
+begin 
+	EXEC("update workgs"+@accy+" set workno='"+@workno+"' where workno='"+@noa+"' ")
+	
+	fetch next from cursor_table 
+	into @workno,@accy,@noa
+end 
+close cursor_table 
+deallocate cursor_table
+
+--cugu workno
+declare cursor_table cursor for 
+select a.workno,b.accy,b.workno from @tmp a left join view_cugu b on a.workj=b.workno where a.workno!='' and isnull(b.workno,'')!=''
+group by a.workno,b.accy,b.workno
+open cursor_table 
+fetch next from cursor_table 
+into @workno,@accy,@noa
+while(@@FETCH_STATUS <> -1) 
+begin 
+	EXEC("update cugu"+@accy+" set workno='"+@workno+"' where workno='"+@noa+"' ")
+	EXEC("update cugu"+@accy+" set nom='"+@workno+"' where nom='"+@noa+"' ")
+	
+	fetch next from cursor_table 
+	into @workno,@accy,@noa
+end 
+close cursor_table 
+deallocate cursor_table
+
+--cugs workno
+declare cursor_table cursor for 
+select a.workno,b.accy,b.workno from @tmp a left join view_cugs b on a.workj=b.workno where a.workno!='' and isnull(b.workno,'')!=''
+group by a.workno,b.accy,b.workno
+open cursor_table 
+fetch next from cursor_table 
+into @workno,@accy,@noa
+while(@@FETCH_STATUS <> -1) 
+begin 
+	EXEC("update cugs"+@accy+" set workno='"+@workno+"' where workno='"+@noa+"' ")
+	
+	fetch next from cursor_table 
+	into @workno,@accy,@noa
+end 
+close cursor_table 
+deallocate cursor_table
+;

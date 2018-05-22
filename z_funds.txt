@@ -1,0 +1,428 @@
+z_funds1:--z_funds1
+SET QUOTED_IDENTIFIER OFF 
+declare @cmd nvarchar(max) 
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10)
+declare @t_xbankno nvarchar(20) 
+set @t_bdate = case when '#non'=[2] then '' else [2] end 
+set @t_edate = case when '#non'=[3] then char(255) else [3] end 
+set @t_xbankno = case when '#non'=[4] then '' else [4] end 
+------------------------------------------------------------------------------------ 
+IF OBJECT_ID('tempdb..#z_funds1')is not null
+	BEGIN
+		set @cmd = 'drop table #z_funds1'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_funds1(
+		acc1 nvarchar(30),
+		acc2 nvarchar(50),
+		noa nvarchar(50),
+		account nvarchar(50),
+		bankno nvarchar(30),
+		datea nvarchar(10),
+		inmoney float,
+		outmoney float,
+		total float,
+		memo nvarchar(max)
+	)
+--------------總共多少帳號列出------------------------
+	IF OBJECT_ID('tempdb..#account')is not null
+	BEGIN
+		set @cmd = 'drop table #account'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #account(
+		noa nvarchar(30),
+		account nvarchar(50)
+	)
+	
+	set @cmd=
+		" select a.noa,b.account from bank a "+
+		" left join bank b on a.noa = b.noa "+
+		"where len(a.account) > 0 "+
+		" group by a.noa,b.account"
+	insert into #account
+	execute sp_executesql @cmd
+-----------------------在作業裡大於等於@t_edate-------------------------------------------------------------
+	set @cmd = 
+	" select isnull(a.bankno,''),isnull(b.account,''),a.noa,a.account,a.bankno,isnull(a.datea,''),a.inmoney,a.outmoney,0,isnull(a.memo,'')"+
+	" from funds a "+
+	" left join #account b on b.noa=a.bankno"+
+	" where (len(@t_xbankno) = 0 or @t_xbankno = a.bankno)"+
+	" and (isnull(a.datea,'') <= @t_edate)"+
+	" order by isnull(b.account,''),isnull(a.bankno,''),isnull(a.datea,'')"
+	insert into #z_funds1
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_xbankno nvarchar(20)'
+	,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_xbankno=@t_xbankno
+	
+	------==================================================================
+	IF OBJECT_ID('tempdb..#begin')is not null
+	BEGIN
+		set @cmd = 'drop table #begin'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #begin(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		account nvarchar(50),
+		bankno nvarchar(50),
+		inmoney float,
+		outmoney float
+	)
+	set @cmd = 
+	" select a.noa,b.account,a.noa,a.bank,0,0"+
+	" from bank a"+
+	" left join #account b on b.noa=a.noa"+
+	" left join #z_funds1 c on c.acc1=a.noa"+
+	" where (len(@t_xbankno)=0 or @t_xbankno = isnull(a.noa,'')) and (len(a.account)>0) and len(c.acc1)>0"
+	insert into #begin
+	execute sp_executesql @cmd,N'@t_xbankno nvarchar(20)'
+	,@t_xbankno=@t_xbankno
+	
+	insert into #z_funds1
+	select acc1,acc2,'期初',account,bankno,'',inmoney,outmoney,0,''
+	from #begin
+	
+	-------------------------------------------------------------------------------
+	--上期結餘
+	declare @tmp table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		inmoney float,
+		outmoney float
+	)
+	insert into @tmp
+	select acc1,acc2,SUM(inmoney),SUM(outmoney) from #z_funds1 where datea<@t_bdate group by acc1,acc2
+	if(len(@t_bdate)>0)
+	begin
+		delete #z_funds1 where datea<@t_bdate
+		insert into #z_funds1
+		select acc1,acc2,'上期結餘','','','',inmoney,outmoney,0,'' from  @tmp
+	end------------------把上期結餘寫入,日期<@t_bdate 刪除
+	
+	------==================================================================
+	-----結餘
+	declare @tmp2 table(
+		gno nvarchar(3),
+		p nvarchar(3),
+		acc1 nvarchar(50),
+		acc2 nvarchar(40),
+		noa nvarchar(20),
+		account nvarchar(50),
+		bankno nvarchar(30),
+		datea nvarchar(20),
+		inmoney float,
+		outmoney float,
+		total float,
+		memo nvarchar(max)
+	)
+	declare @acc1 nvarchar(30)
+	declare @acc2 nvarchar(50)
+	declare @account nvarchar(50)
+	declare @bankno nvarchar(30)
+	declare @noa nvarchar(20)
+	declare @datea nvarchar(20)
+	declare @inmoney float
+	declare @outmoney float
+	declare @total float
+	declare @memo nvarchar(max)
+
+	declare cursor_table cursor for
+	select acc1,acc2 from #z_funds1 group by acc1,acc2
+	open cursor_table
+	fetch next from cursor_table
+	into @acc1,@acc2
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @total = 0
+		--------------------------------------------------------------------
+		declare cursor_table2 cursor for
+		select noa,account,bankno,datea,memo,inmoney,outmoney from #z_funds1 where acc1=@acc1 order by datea,noa
+		open cursor_table2
+		fetch next from cursor_table2
+		into @noa,@account,@bankno,@datea,@memo,@inmoney,@outmoney
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @total = @total + ISNULL(@inmoney,0)-ISNULL(@outmoney,0)
+			insert into @tmp2
+			select '0','',@acc1,@acc2,@noa,@account,@bankno,@datea,@inmoney,@outmoney,@total,@memo
+			
+			fetch next from cursor_table2
+			into @noa,@account,@bankno,@datea,@memo,@inmoney,@outmoney
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		-------------------------------------------------------------------------------------------------------------------
+		insert into @tmp2
+		select '1','',@acc1,@acc2,'','','','',SUM(inmoney),sum(outmoney),@total,''
+		from @tmp2 where acc1=@acc1
+			
+		fetch next from cursor_table
+		into @acc1,@acc2
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmp2
+	select '2','z',char(255),char(255),'','','','',SUM(inmoney),SUM(outmoney),SUM(total),''
+	from @tmp2 where gno = 1
+	
+	select gno,p,acc1,acc2,noa,account,bankno,datea,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmoney),1)),4,12)) inmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmoney),1)),4,12)) outmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total,
+	memo
+	from @tmp2 order by acc1,gno,LEFT(isnull(datea,''),2),p,datea,noa
+	
+	drop table #begin
+	drop table #account
+	drop table #z_funds1;
+------------------------------------------------------------------------------------------
+z_funds2:--z_funds2
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+set @t_bdate = case when '#non' = [2] then '' else [2] end 
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end 
+declare @tmp table(
+		gno nvarchar(1),
+		datea nvarchar(20),
+		noa nvarchar(20),
+		account  nvarchar(50),
+		memo nvarchar(200),
+		inmoney float,
+		outmoney float,
+		checkno nvarchar(20)
+)
+insert into @tmp
+select '0' gno,datea,noa,account,memo,inmoney,outmoney,checkno
+from funds
+where (datea between @t_bdate and @t_edate)
+
+insert into @tmp
+select '1' gno,CHAR(255),'',account,'',SUM(inmoney),SUM(outmoney),''
+from @tmp
+group by account
+
+insert into @tmp
+select '2' gno,CHAR(255),'',CHAR(255),'',SUM(inmoney),SUM(outmoney),''
+from @tmp
+where gno=0
+
+select gno,datea,noa,account,memo,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmoney),1)),4,12)) inmoney,
+reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmoney),1)),4,12)) outmoney,
+checkno
+from @tmp
+order by account,datea,gno;
+-----------------------------------------------------------------------------------------------------
+z_funds3:--z_funds3
+SET QUOTED_IDENTIFIER OFF 
+declare @cmd nvarchar(max) 
+declare @t_bdate nvarchar(10) 
+declare @t_edate nvarchar(10)
+declare @t_bsbankno nvarchar(20)
+declare @t_esbankno nvarchar(20)
+set @t_bdate = case when '#non'=[2] then '' else [2] end 
+set @t_edate = case when '#non'=[3] then char(255) else [3] end 
+set @t_bsbankno = case when '#non'=[5] then '' else [5] end 
+set @t_esbankno = case when '#non'=[6] then CHAR(255) else [6] end 
+------------------------------------------------------------------------------------ 
+declare @acc1 nvarchar(30)
+declare @acc2 nvarchar(50)
+declare @bankname nvarchar(90)
+declare @account nvarchar(50)
+declare @bankno nvarchar(30)
+declare @noa nvarchar(10)
+declare @datea nvarchar(20)
+declare @inmoney float
+declare @outmoney float
+declare @total float
+declare @beginmoney float
+declare @memo nvarchar(max)
+---------------------------------------------------------------------------------------
+IF OBJECT_ID('tempdb..#z_funds1')is not null
+	BEGIN
+		set @cmd = 'drop table #z_funds1'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #z_funds1(
+		acc1 nvarchar(30),
+		acc2 nvarchar(50),
+		bankname nvarchar(90),
+		noa nvarchar(50),
+		account nvarchar(50),
+		bankno nvarchar(30),
+		datea nvarchar(10),
+		beginmoney float,
+		inmoney float,
+		outmoney float,
+		total float,
+		memo nvarchar(max)
+	)
+--------------總共多少帳號列出------------------------
+	IF OBJECT_ID('tempdb..#account')is not null
+	BEGIN
+		set @cmd = 'drop table #account'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #account(
+		noa nvarchar(30),
+		account nvarchar(50)
+	)
+	
+	set @cmd=
+		" select a.noa,b.account from bank a "+
+		" left join bank b on a.noa = b.noa "+
+		"where len(a.account) > 0 "+
+		" group by a.noa,b.account"
+	insert into #account
+	execute sp_executesql @cmd
+-----------------------在作業裡大於等於@t_edate-------------------------------------------------------------
+	set @cmd = 
+	" select isnull(a.bankno,''),isnull(b.account,''),a.bank,a.noa,a.account,a.bankno,isnull(a.datea,''),0,a.inmoney,a.outmoney,0,isnull(a.memo,'')"+
+	" from funds a "+
+	" left join #account b on b.noa=a.bankno"+
+	" where (a.bankno between @t_bsbankno and @t_esbankno)"+
+	" and (isnull(a.datea,'') <= @t_edate)"+
+	" order by isnull(b.account,''),isnull(a.bankno,''),isnull(a.datea,'')"
+	insert into #z_funds1
+	execute sp_executesql @cmd,N'@t_bdate nvarchar(10),@t_edate nvarchar(10),@t_bsbankno nvarchar(20),@t_esbankno nvarchar(20)'
+	,@t_bdate=@t_bdate,@t_edate=@t_edate,@t_bsbankno=@t_bsbankno,@t_esbankno = @t_esbankno
+	-----------期初金額--------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#begin')is not null
+	BEGIN
+		set @cmd = 'drop table #begin'
+		EXECUTE sp_executesql @cmd
+	END
+	create table #begin(
+		acc1 nvarchar(20),
+		acc2 nvarchar(50),
+		account nvarchar(50),
+		bankno nvarchar(50),
+		inmoney float,
+		outmoney float,
+		beginmoney float
+	)
+	set @cmd = 
+	" select a.noa,b.account,a.noa,a.bank,0,0,0"+
+	" from bank a"+
+	" left join #account b on b.noa=a.noa"+
+	" left join #z_funds1 c on c.acc1=a.noa"+
+	" where (a.noa between @t_bsbankno and @t_esbankno) and (len(a.account)>0) and len(c.acc1)>0"
+	insert into #begin
+	execute sp_executesql @cmd,N'@t_bsbankno nvarchar(20),@t_esbankno nvarchar(20)'
+	,@t_bsbankno=@t_bsbankno,@t_esbankno=@t_esbankno
+		
+	declare cursor_table3 cursor for
+	select acc1,acc2,beginmoney from #begin
+	open cursor_table3
+	fetch next from cursor_table3
+	into @acc1,@acc2,@beginmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update #z_funds1
+		set beginmoney = @beginmoney 
+		where acc1 = @acc1
+		fetch next from cursor_table3
+		into @acc1,@acc2,@beginmoney
+	end
+	close cursor_table3
+	deallocate cursor_table3
+
+	-------------------------------------------------------------------------------
+	--上期結餘
+	declare @tmp table(
+		acc1 nvarchar(20),
+		acc2 nvarchar(40),
+		inmoney float,
+		outmoney float,
+		beginmoney float
+	)
+	insert into @tmp
+	select acc1,acc2,SUM(inmoney),SUM(outmoney),SUM(inmoney)-SUM(outmoney) from #z_funds1 where datea<@t_bdate group by acc1,acc2
+	--end------------------把上期結餘寫入,日期<@t_bdate 刪除
+	declare cursor_table4 cursor for
+	select acc1,acc2,beginmoney from @tmp
+	open cursor_table4
+	fetch next from cursor_table4
+	into @acc1,@acc2,@beginmoney
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if(LEN(@t_bdate)>0)
+		BEGIN
+		delete #z_funds1 where datea<@t_bdate
+		update #z_funds1 
+		set beginmoney = @beginmoney
+		where acc1 = @acc1 
+		END
+		fetch next from cursor_table4
+		into @acc1,@acc2,@beginmoney
+	end
+	close cursor_table4
+	deallocate cursor_table4
+	--------==================================================================
+	---結餘
+	declare @tmp2 table(
+		gno nvarchar(3),
+		p nvarchar(3),
+		bankname nvarchar(90),
+		acc1 nvarchar(50),
+		acc2 nvarchar(40),
+		account nvarchar(50),
+		bankno nvarchar(30),
+		inmoney float,
+		outmoney float,
+		beginmoney float,
+		total float
+	)
+	
+
+	declare cursor_table cursor for
+	select acc1,acc2,bankname from #z_funds1 group by acc1,acc2,bankname
+	open cursor_table
+	fetch next from cursor_table
+	into @acc1,@acc2,@bankname
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @total = 0
+		--------------------------------------------------------------------
+		declare cursor_table2 cursor for
+		select account,bankno,sum(inmoney),sum(outmoney),max(beginmoney) from #z_funds1 where acc1=@acc1 group by bankno,account
+		open cursor_table2
+		fetch next from cursor_table2
+		into @account,@bankno,@inmoney,@outmoney,@beginmoney
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @total = @total+ISNULL(@beginmoney,0) + ISNULL(@inmoney,0)-ISNULL(@outmoney,0)
+			insert into @tmp2
+			select '0','',@bankname,@acc1,@acc2,@account,@bankno,@inmoney,@outmoney,@beginmoney,@total
+			
+			fetch next from cursor_table2
+			into @account,@bankno,@inmoney,@outmoney,@beginmoney
+		end
+		close cursor_table2
+		deallocate cursor_table2
+		
+		-------------------------------------------------------------------------------------------------------------------	
+		fetch next from cursor_table
+		into @acc1,@acc2,@bankname
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	insert into @tmp2
+	select '1','z',CHAR(255),char(255),char(255),'','',SUM(inmoney),SUM(outmoney),SUM(beginmoney),SUM(total)
+	from @tmp2 
+	
+	select gno,p,bankname,acc1,acc2,account,bankno,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,inmoney),1)),4,12)) inmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,outmoney),1)),4,12)) outmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,beginmoney),1)),4,12)) beginmoney,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) total
+	from @tmp2 order by acc1,gno,p
+	
+	drop table #begin
+	drop table #account
+	drop table #z_funds1;
+-------------------------------------------------------------------------------------------------------------------

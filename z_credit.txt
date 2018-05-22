@@ -1,0 +1,562 @@
+z_credit02:--z_credit02
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(10)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_bgroupno nvarchar(20)
+	declare @t_egroupno	nvarchar(20)
+	declare @t_rate float
+	declare @t_bcredit float = 0
+	declare @t_ecredit float = 999999999
+	begin try
+		 set @t_bcredit = cast(case when '#non'=[6] then '0' else [6] end as float)
+		 set @t_ecredit = cast(case when '#non'=[7] then '999999999' else [7] end as float)
+	end try
+	begin catch
+	end catch
+	set @t_accy = '[1]'
+	set @t_bcustno = case when '#non'=[2] then '' else [2] end
+	set @t_ecustno = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_bgroupno = case when '#non'=[4] then '' else [4] end
+	set @t_egroupno = case when '#non'=[5] then CHAR(255) else [5] end
+	set @t_rate = 0.05
+	---------------------------------------------------------------------------------
+	------ORDE 只算未結案的
+	--declare @tmp1 table(
+	--	noa nvarchar(20),
+	--	noq nvarchar(10),
+	--	custno nvarchar(20),
+	--	stype nvarchar(10),--除了外銷,其實稅額都算5%
+		
+	--	weight1 float,
+	--	[money] float,
+	--	weight2 float,--未出量
+	--	credit float--使用額度
+	--)
+	
+	--insert into @tmp1(noa,noq,custno,stype,weight1,[money])
+	--select a.noa,a.no2,b.custno,b.stype,a.[weight],a.[total] 
+	--from view_ordes a
+	--left join view_orde b on a.noa=b.noa
+	--where b.noa is not null 
+	--and (b.custno between @t_bcustno and @t_ecustno)
+	--and b.enda=0 and a.enda=0
+	
+	--update @tmp1 set weight2=isnull(a.weight1,0)-ISNULL(b.[weight],0)
+	--from @tmp1 a
+	--outer apply(select SUM(isnull([weight],0)) [weight] from view_vccs where ordeno=a.noa and no2=a.noq) b
+	--update @tmp1 set credit = case when stype='3' then (case when weight1=0 then 0 else ROUND(weight2/weight1*[money],0) end)
+	--	when weight1=0 or weight2<=0 then 0 else ROUND(weight2/weight1*[money]*(1+@t_rate),0) end
+	------vcc 應收帳款
+	declare @tmp2 table(
+		custno nvarchar(20),
+		total float,
+		paysale float,
+		credit float--使用額度
+	)
+	insert into @tmp2(custno,total)
+	select custno,SUM(ISNULL(case when typea='2' then -1 else 1 end *total,0)) total
+	from view_vcc
+	where (custno between @t_bcustno and @t_ecustno)
+	group by custno
+	
+	--update @tmp2 set total = ISNULL(total,0)+ISNULL(b.tax,0)
+	--from @tmp2 a
+	--outer apply (select SUM(ISNULL(tax,0)) tax from vcca where custno=a.custno) b
+	
+	insert into @tmp2(custno,total)
+	select a.custno,SUM(ISNULL(a.tax,0)) total
+	from vcca a
+	where (custno between @t_bcustno and @t_ecustno)
+	and not exists(select * from @tmp2 where custno=a.custno)
+	group by a.custno
+	
+	update @tmp2 set paysale= b.paysale
+	from @tmp2 a
+	outer apply(select SUM(ISNULL(c.paysale,0)) paysale from umms c
+		left join umm d on d.noa=c.noa where a.custno=c.custno) b
+	
+	update @tmp2 set credit = ISNULL(total,0)-ISNULL(paysale,0)
+	------UMM 預付
+	declare @tmp3 table(
+		custno nvarchar(20),
+		[money] float,
+		paysale float,
+		unopay float,
+		opay float
+	)
+	insert into @tmp3(custno,[money],paysale)
+	select b.custno,SUM(ISNULL(a.[money],0)),SUM(ISNULL(a.[paysale],0))
+	from umms a
+	left join umm b on a.noa=b.noa
+	where (b.custno between @t_bcustno and @t_ecustno)
+	group by b.custno
+	
+	update @tmp3 set unopay = ISNULL(b.unopay,0)
+	from @tmp3 a
+	outer apply (select SUM(ISNULL(unopay,0)) unopay from umm where custno=a.custno ) b
+	
+	insert into @tmp3(custno,unopay)
+	select custno, SUM(ISNULL(unopay,0)) unopay 
+	from umm 
+	where (custno between @t_bcustno and @t_ecustno)
+	and not exists(select * from @tmp3 where custno=umm.custno)
+	group by custno
+	
+	update @tmp3 set opay = ISNULL([money],0)-ISNULL(paysale,0)-ISNULL(unopay,0)
+	------GQB 收票未兌現票據
+	declare @tmp4 table(
+		custno nvarchar(20),
+		[money] float
+	)
+	insert into @tmp4
+	select ISNULL(compno,''),SUM(ISNULL([money],0))
+	from gqb 
+	where typea='1'  
+	and (ISNULL(enda,'')='' or upper(enda)='N') 
+	and (isnull(compno,'') between @t_bcustno and @t_ecustno)
+	and indate>'102/10/31'  --裕承隆 102/11起才算
+	group by ISNULL(compno,'')
+	-------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		tno nvarchar(20),
+		team nvarchar(max),
+		custno nvarchar(20),
+		cust nvarchar(max),
+		nick nvarchar(max),
+		credit float,--可用額度
+		ordeMoney float,--訂單金額(只算未結案)
+		vccMoney float,--應收帳款
+		ummMoney float,--預付
+		gqbMoney float, --未兌現票據
+		total float
+	)
+	--insert @tmp1
+	--insert into @tmp(custno,ordemoney)
+	--select custno,SUM(ISNULL(credit,0)) from @tmp1 group by custno
+	--insert @tmp2
+	update @tmp set vccMoney=ISNULL(b.credit,0)
+	from @tmp a
+	left join @tmp2 b on a.custno=b.custno
+	insert into @tmp(custno,vccmoney)
+	select custno,credit from @tmp2 a where not exists(select * from @tmp where custno=a.custno)
+	--insert @tmp3
+	update @tmp set ummMoney=ISNULL(b.opay,0)
+	from @tmp a
+	left join @tmp3 b on a.custno=b.custno
+	insert into @tmp(custno,ummMoney)
+	select custno,opay from @tmp3 a where not exists(select * from @tmp where custno=a.custno)
+	--insert @tmp4
+	update @tmp set gqbMoney=ISNULL(b.[money],0)
+	from @tmp a
+	left join @tmp4 b on a.custno=b.custno
+	insert into @tmp(custno,gqbMoney)
+	select custno,[money] from @tmp4 a where not exists(select * from @tmp where custno=a.custno)
+	-----------------------------------------------------------------------------------------------------
+	delete @tmp
+	from @tmp a
+	left join cust b on a.custno=b.noa
+	where b.noa is null or not(isnull(b.grpno,'') between @t_bgroupno and @t_egroupno)
+	---------------------------------------
+	update @tmp set cust=b.comp,nick=b.nick,credit=isnull(b.credit,0),tno=ISNULL(b.grpno,''),team=ISNULL(c.comp,'')
+	from @tmp a
+	left join cust b on a.custno=b.noa
+	left join cust c on b.grpno=c.noa
+	update @tmp set total = ISNULL(credit,0)-ISNULL(ordeMoney,0)-ISNULL(vccmoney,0)-ISNULL(ummMoney,0)-ISNULL(gqbMoney,0)
+	update @tmp set gno = case when total>=0 then '1' else '2' end
+	insert into @tmp(gno,tno,team,custno,credit,ordeMoney,vccMoney,ummMoney,gqbMoney,total)
+	select '3',tno,team,CHAR(255),SUM(ISNULL(credit,0)),SUM(ISNULL(ordemoney,0)),SUM(ISNULL(vccmoney,0))
+		,SUM(ISNULL(ummmoney,0)),SUM(ISNULL(gqbmoney,0)),SUM(ISNULL(total,0))
+	from @tmp group by tno,team
+	
+	select gno
+	,a.tno
+	,a.team
+	,a.custno
+	,a.cust comp 
+	,a.nick
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,a.credit),1)),4,20)) credit
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,a.ordemoney),1)),4,20)) orde
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,a.vccmoney),1)),4,20)) vcc
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,a.ummmoney),1)),4,20)) opay
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,a.gqbmoney),1)),4,20)) gqb
+	,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,a.total),1)),4,20)) total
+	from @tmp a
+	left join cust b on a.custno = b.noa
+	where b.credit between @t_bcredit and @t_ecredit
+	order by tno,custno
+	;
+
+--------------------------------------------------------------------------------------------------
+z_credit01:--z_credit01		
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)	
+	declare @t_accy nvarchar(10) = '[1]'
+	declare @t_bcustno nvarchar(20) = case when '#non'=[2] then '' else [2] end
+	declare @t_ecustno nvarchar(20) = case when '#non'=[3] then char(255) else [3] end
+	declare @t_bcredit float = 0
+	declare @t_ecredit float = 999999999
+	begin try
+		 set @t_bcredit = cast(case when '#non'=[6] then '0' else [6] end as float)
+		 set @t_ecredit = cast(case when '#non'=[7] then '999999999' else [7] end as float)
+	end try
+	begin catch
+	end catch
+	------------------------------------------------------------------------------------------
+	declare @t_rate float = 0.05
+	----------------------------------------------------------------------------------
+	declare @grpno nvarchar(20) = ''
+	IF OBJECT_ID('tempdb..#tmpcust')is not null
+	BEGIN
+		drop table #tmpcust
+	END
+	create  table #tmpcust(
+		custno nvarchar(20),
+		grpno nvarchar(20),
+		credit float,
+		orde float,--未出訂單
+		ordetax float,
+		vccmoney float,--出貨
+		vcctax float,--出貨
+		vcctotal float,--出貨
+		vcca float,--發票
+		gqb float,--未兌現支票
+		umm float,--收款
+		opay float,--預收
+		total float -- 可用額度
+	)
+	create index noa on #tmpcust(custno)
+	
+	insert into #tmpcust(custno,grpno)
+	select noa,case when len(isnull(grpno,''))=0 then noa else grpno end from cust
+	-----------------------------------------------------------------------------------
+	--****
+	update #tmpcust set credit=ISNULL( b.credit,0)
+	from #tmpcust a
+	left join cust b on a.grpno=b.noa
+	
+	-----------------------------------------------------------------------------------
+	--未結案訂單
+	update #tmpcust set orde = ISNULL(b.total,0),ordetax=ROUND(ISNULL(b.total,0)*@t_rate,0)
+	from #tmpcust a
+	LEFT join(
+		select isnull(a.custno,'')custno,sum(isnull(b.notv,0)*isnull(b.price,0)) total
+		from view_orde a
+		left join view_ordes b on a.accy=b.accy and a.noa=b.noa
+		left join #tmpcust c on a.custno=c.custno
+		where isnull(a.enda,0)=0
+		and ISNULL(a.cancel,0)=0
+		and ISNULL(b.enda,0)=0
+		and ISNULL(b.cancel,0)=0
+		and c.custno is not null
+		group by isnull(a.custno,''))b on a.custno=b.custno
+	--未兌現、票貼 支票
+	update #tmpcust set gqb = ISNULL(b.[money],0)
+	from #tmpcust a
+	LEFT join(
+		select ISNULL(a.compno,'') custno,SUM(ISNULL(a.[money],0))[money] 
+		from gqb a
+		left join #tmpcust c on a.compno=c.custno
+		where len(ISNULL(a.enda,''))=0
+		and len(ISNULL(a.usage,''))=0
+		and ISNULL(a.typea,'')='1'
+		and c.custno is not null
+		and dbo.ChineseEraName2AD(a.indate)>getdate() --已到期的票據都當做收到
+		group by ISNULL(a.compno,''))b on a.custno=b.custno
+	update #tmpcust set vccmoney = b.sale
+		,vcctax = b.tax
+		,vcctotal = b.totsale
+		,vcca = 0
+		,umm = b.pay 
+	from #tmpcust a
+	left join (select noa,SUM(ISNULL(sale,0)) sale,SUM(ISNULL(tax,0)) tax
+		,SUM(ISNULL(totsale,0)) totsale,SUM(ISNULL(pay,0)) pay from cust_2s group by noa) b on a.custno=b.noa		
+		
+	/*--出貨	
+	update #tmpcust set vccmoney = ISNULL(b.[money],0)
+		,vcctax = ISNULL(b.tax,0)
+		,vcctotal = ISNULL(b.total,0)
+	from #tmpcust a
+	LEFT join(
+		select isnull(a.custno,'')custno,sum(isnull(a.[money],0)) [money],sum(isnull(a.tax,0)) tax,sum(isnull(a.total,0)) total
+		from view_vcc a
+		left join #tmpcust c on a.custno=c.custno
+		where c.custno is not null
+		group by isnull(a.custno,''))b on a.custno=b.custno
+	--發票
+	update #tmpcust set vcca = ISNULL(b.tax,0)
+	from #tmpcust a
+	LEFT join(
+		select isnull(a.custno,'')custno,sum(isnull(a.tax,0)) tax
+		from vcca a
+		left join #tmpcust c on a.custno=c.custno
+		where c.custno is not null
+		group by ISNULL(a.custno,''))b on a.custno=b.custno
+	
+	--收款
+	update #tmpcust set umm = ISNULL(b.[money],0)
+	from #tmpcust a
+	LEFT join(
+		select ISNULL(a.custno,'') custno,sum(ISNULL(a.paysale,0)) [money]
+		from umm a
+		left join #tmpcust c on a.custno=c.custno
+		where c.custno is not null
+		group by ISNULL(a.custno,''))b on a.custno=b.custno*/
+	------UMM 預收
+	update #tmpcust set opay = ISNULL(b.[opay],0)-ISNULL(b.[unopay],0)
+	from #tmpcust a
+	LEFT join(
+		select ISNULL(a.custno,'') custno,sum(ISNULL(a.opay,0)) [opay],sum(ISNULL(a.unopay,0)) [unopay]
+		from umm a
+		left join #tmpcust c on a.custno=c.custno
+		where c.custno is not null
+		group by ISNULL(a.custno,''))b on a.custno=b.custno	
+		
+	--==========================================================================
+	declare @tmp table(
+		custno nvarchar(20),
+		cust nvarchar(100),
+		sssno nvarchar(50),
+		sss nvarchar(50),
+		grpno nvarchar(20),
+		grpname nvarchar(100),
+		credit float,
+		orde float,
+		ordetax float,
+		vccmoney float,
+		vcctax float,
+		vcctotal float,
+		vcca float,
+		umm float,
+		gqb float,
+		opay float,
+		total float
+	)
+	insert into @tmp(custno,cust,sssno,sss,grpno,grpname
+		,credit,orde,ordetax,vccmoney,vcctax,vcctotal,vcca,umm,gqb,opay,total)
+	select a.custno,c.comp,c.salesno,c.sales,a.grpno,d.comp
+		,b.credit,b.orde,b.ordetax,b.vccmoney,b.vcctax,b.vcctotal,b.vcca,b.umm,b.gqb,b.opay
+		,b.credit - (b.orde+b.ordetax) - (b.vcctotal+b.vcca-b.umm)  - b.gqb + b.opay 
+	from #tmpcust a
+	left join(	
+		select grpno,credit
+			,SUM(ISNULL(orde,0)) orde
+			,SUM(ISNULL(ordetax,0)) ordetax
+			,SUM(ISNULL(vccmoney,0)) vccmoney
+			,SUM(ISNULL(vcctax,0)) vcctax
+			,SUM(ISNULL(vcctotal,0)) vcctotal
+			,SUM(ISNULL(vcca,0)) vcca
+			,SUM(ISNULL(gqb,0)) gqb
+			,SUM(ISNULL(umm,0)) umm
+			,SUM(ISNULL(opay,0)) opay
+		from #tmpcust		
+		where len(ISNULL(grpno,''))>0
+		group by grpno,credit) b on a.grpno=b.grpno
+	left join cust c on a.custno=c.noa
+	left join cust d on a.grpno=d.noa
+	where a.custno between @t_bcustno and @t_ecustno
+	and not(isnull(b.credit,0)=0 and isnull(b.orde,0)=0 and isnull(b.ordetax,0)=0
+		and isnull(b.vccmoney,0)=0 and isnull(b.vcctax,0)=0 and isnull(b.vcctotal,0)=0
+		and isnull(b.vcca,0)=0 and isnull(b.gqb,0)=0 and isnull(b.umm,0)=0) 
+	
+	select case when total>=0 then '1' else '2' end gno 
+		,ROW_NUMBER()over(order by custno) rr
+		,a.custno a01
+		,a.cust a02
+		,a.grpno a03
+		,a.grpname a04
+		,dbo.getComma(a.credit,0) a05
+		,dbo.getComma(a.orde+ordetax,0) a06
+		,dbo.getComma(a.vcctotal+vcca-umm,0) a07
+		,dbo.getComma(a.gqb,0) a08
+		,dbo.getComma(a.opay,0) a09
+		,dbo.getComma(a.total,0) a10
+	from @tmp a
+	left join cust b on a.custno = b.noa
+	where b.credit between @t_bcredit and @t_ecredit
+	order by custno
+	
+	drop table #tmpcust;
+
+
+	----------------------------------------------------------------------------------
+z_credit01_old:--z_credit01	
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(20)
+	declare @t_bcustno nvarchar(20)
+	declare @t_ecustno nvarchar(20)
+	declare @t_rate float
+	declare @t_bcredit float = 0
+	declare @t_ecredit float = 999999999
+	begin try
+		 set @t_bcredit = cast(case when '#non'=[6] then '0' else [6] end as float)
+		 set @t_ecredit = cast(case when '#non'=[7] then '999999999' else [7] end as float)
+	end try
+	begin catch
+	end catch
+	
+	set @t_accy = '[1]'
+	set @t_bcustno = case when '#non'=[2] then '' else [2] end
+	set @t_ecustno = case when '#non'=[3] then CHAR(255) else [3] end
+	set @t_rate = 0.05
+	----------------------------------------------------------------------------------
+	------ORDE 只算未結案的
+	IF OBJECT_ID('tempdb..#tmp1')is not null
+	BEGIN
+		drop table #tmp1
+	END
+	create table #tmp1(
+		noa nvarchar(20),
+		noq nvarchar(10),
+		custno nvarchar(20),
+		stype nvarchar(10),--除了外銷,其實稅額都算5%
+		
+		weight1 float,
+		[money] float,
+		weight2 float,--未出量
+		credit float--使用額度
+	)
+	insert into #tmp1(noa,noq,custno,stype,weight1,[money])
+	select a.noa,a.no2,b.custno,b.stype,a.[weight],a.[total] 
+	from view_ordes a
+	left join view_orde b on a.noa=b.noa
+	where b.noa is not null 
+	and (b.custno between @t_bcustno and @t_ecustno)
+	and b.enda=0 and a.enda=0
+	
+	update #tmp1 set weight2=isnull(a.weight1,0)-ISNULL(b.[weight],0)
+	from #tmp1 a
+	outer apply(select SUM(isnull([weight],0)) [weight] from view_vccs where ordeno=a.noa and no2=a.noq) b
+	update #tmp1 set credit = case when stype='3' then (case when weight1=0 then 0 else ROUND(weight2/weight1*[money],0) end)
+		when weight1=0 or weight2<=0 then 0 else ROUND(weight2/weight1*[money]*(1+@t_rate),0) end
+		
+	------vcc 應收帳款
+	IF OBJECT_ID('tempdb..#tmp2')is not null
+	BEGIN
+		drop table #tmp2
+	END
+	create table #tmp2(
+		custno nvarchar(20),
+		total float,
+		paysale float,
+		credit float--使用額度
+	)
+	insert into #tmp2(custno,total)
+	select custno,SUM(ISNULL(case when typea='2' then -1 else 1 end *total,0)) total
+	from view_vcc
+	where (custno between @t_bcustno and @t_ecustno)
+	group by custno
+	
+	--update #tmp2 set total = ISNULL(total,0)+ISNULL(b.tax,0)
+	--from #tmp2 a
+	--outer apply (select SUM(ISNULL(tax,0)) tax from vcca where custno=a.custno) b
+	
+	insert into #tmp2(custno,total)
+	select a.custno,SUM(ISNULL(a.tax,0)) total
+	from vcca a
+	where (custno between @t_bcustno and @t_ecustno)
+	and not exists(select * from #tmp2 where custno=a.custno)
+	group by a.custno
+	
+	update #tmp2 set paysale= b.paysale
+	from #tmp2 a
+	outer apply(select SUM(ISNULL(c.paysale,0)) paysale from umms c
+		left join umm d on d.noa=c.noa where a.custno=c.custno) b
+	
+	update #tmp2 set credit = ISNULL(total,0)-ISNULL(paysale,0)
+	------UMM 預付
+	IF OBJECT_ID('tempdb..#tmp3')is not null
+	BEGIN
+		drop table #tmp3
+	END
+	create table #tmp3(
+		custno nvarchar(20),
+		opay float
+	)
+	insert into #tmp3(custno,opay)
+	select a.custno,SUM(ISNULL(a.opay,0)-ISNULL(a.unopay,0))
+	from umm a
+	where a.custno between @t_bcustno and @t_ecustno
+	group by a.custno
+	------GQB 收票未兌現票據
+	IF OBJECT_ID('tempdb..#tmp4')is not null
+	BEGIN
+		drop table #tmp4
+	END
+	create table #tmp4(
+		custno nvarchar(20),
+		[money] float
+	)
+	insert into #tmp4
+	select ISNULL(compno,''),SUM(ISNULL([money],0))
+	from gqb 
+	where typea='1' 
+	and (ISNULL(enda,'')='' or upper(enda)='N') 
+	and (isnull(compno,'') between @t_bcustno and @t_ecustno)
+	and indate>'102/10/31'  --裕承隆 102/11起才算
+	group by ISNULL(compno,'')
+	-------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+	create table #tmp(
+		gno nvarchar(10),
+		tno nvarchar(20),
+		team nvarchar(max),
+		custno nvarchar(20),
+		cust nvarchar(max),
+		nick nvarchar(max),
+		credit float,--可用額度
+		ordeMoney float,--訂單金額(只算未結案)
+		vccMoney float,--應收帳款
+		ummMoney float,--預付
+		gqbMoney float, --未兌現票據
+		total float
+	)
+	--insert #tmp1
+	--insert into @tmp(custno,ordemoney)
+	--select custno,SUM(ISNULL(credit,0)) from #tmp1 group by custno
+	--insert #tmp2
+	update #tmp set vccMoney=ISNULL(b.credit,0)
+	from #tmp a
+	left join #tmp2 b on a.custno=b.custno
+	insert into #tmp(custno,vccmoney)
+	select custno,credit from #tmp2 a where not exists(select * from #tmp where custno=a.custno)
+	--insert @tmp3
+	update #tmp set ummMoney=ISNULL(b.opay,0)
+	from #tmp a
+	left join #tmp3 b on a.custno=b.custno
+	insert into #tmp(custno,ummMoney)
+	select custno,opay from #tmp3 a where not exists(select * from #tmp where custno=a.custno)
+	--insert #tmp4
+	update #tmp set gqbMoney=ISNULL(b.[money],0)
+	from #tmp a
+	left join #tmp4 b on a.custno=b.custno
+	insert into #tmp(custno,gqbMoney)
+	select custno,[money] from #tmp4 a where not exists(select * from #tmp where custno=a.custno)
+	-----------------------------------------------------------------------------------------------------
+	update #tmp set cust=b.comp,nick=b.nick,credit=isnull(b.credit,0)
+	from #tmp a
+	left join cust b on a.custno=b.noa
+	update #tmp set total = ISNULL(credit,0)-ISNULL(ordeMoney,0)-ISNULL(vccmoney,0)+ISNULL(ummMoney,0)-ISNULL(gqbMoney,0)
+	update #tmp set gno = case when total>=0 then '1' else '2' end
+	insert into #tmp(gno,custno,credit,ordeMoney,vccMoney,ummMoney,gqbMoney,total)
+	select '3',CHAR(255),SUM(ISNULL(credit,0)),SUM(ISNULL(ordemoney,0)),SUM(ISNULL(vccmoney,0))
+		,SUM(ISNULL(ummmoney,0)),SUM(ISNULL(gqbmoney,0)),SUM(ISNULL(total,0))
+	from #tmp
+	
+	select a.gno,a.custno,a.cust comp ,a.nick
+	,dbo.getComma(a.credit,-1) credit
+	,dbo.getComma(a.ordemoney,-1) orde
+	,dbo.getComma(a.vccmoney,-1) vcc
+	,dbo.getComma(a.ummmoney,-1) opay
+	,dbo.getComma(a.gqbmoney,-1) gqb
+	,dbo.getComma(a.total,-1) total
+	from #tmp a
+	left join cust b on a.custno = b.noa
+	where b.credit between @t_bcredit and @t_ecredit
+	order by custno;

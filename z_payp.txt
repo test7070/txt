@@ -1,0 +1,337 @@
+z_payp:--z_payp
+SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @pagecount int
+	declare @t_bxnoa nvarchar(20)
+	declare @t_exnoa nvarchar(20)
+	declare @t_bdatea nvarchar(20)
+	declare @t_edatea nvarchar(20)
+	declare @t_bacomp nvarchar(20)
+	declare @t_eacomp nvarchar(20)
+	declare @t_part nvarchar(20)
+	set @pageCount = 5
+	set @t_bxnoa = case when '#non'=[1] then '' else [1] end
+	set @t_exnoa = case when '#non'=[2] then CHAR(255) else [2] end
+	set @t_bdatea = case when '#non'=[6] then '' else [6] end
+	set @t_edatea = case when '#non'=[7] then CHAR(255) else [7] end
+	set @t_bacomp = case when '#non'=[8] then '' else [8] end
+	set @t_eacomp = case when '#non'=[9] then CHAR(255) else [9] end
+	set @t_part = case when '#non'=[10] then '' else [10] end
+		declare @tmp table(
+		gno nvarchar(1),
+		noa nvarchar(30),
+		noq nvarchar(20),
+		datea nvarchar(10),
+		mon nvarchar(10),
+		tggno nvarchar(20),
+		comp nvarchar(50),
+		unpay float,
+		total float,
+		acc2 nvarchar(40),
+		[money] float,
+		chgs float,
+		paysale float,
+		checkno nvarchar(20),
+		account nvarchar(20),
+		bankno nvarchar(20),
+		bank nvarchar(40),
+		indate nvarchar(10),
+		accno nvarchar(31),
+		w nvarchar(20),
+		n nvarchar(20),
+		recno int,
+		currecno int,
+		curpage int,
+		totpage int
+	)
+	set @cmd =	"select a.*,ROW_NUMBER()over(PARTITION BY a.noa order by a.noa,a.noq),ROW_NUMBER()over(order by gno),0,0,0"+
+				" from("+
+				" select '1' gno,a.noa,b.noq,a.datea,a.mon,a.tggno,a.comp,a.unpay,a.total,b.acc2,b.money,b.chgs,"+
+				"b.paysale,b.checkno,b.account,b.bankno,b.bank,b.indate,a.accno,a.worker"+
+				" from pay a "+
+				" left join pays b on a.noa = b.noa " + 
+				" where "+
+				" (a.noa between @t_bxnoa and @t_exnoa) and (a.datea between @t_bdatea and @t_edatea) and (a.cno between @t_bacomp and @t_eacomp) and (len(@t_part)=0 or a.partno=@t_part)"+
+				" ) a"
+	insert into @tmp
+	execute sp_executesql @cmd,N'@t_bxnoa nvarchar(20),@t_exnoa nvarchar(20),@t_bdatea nvarchar(20),@t_edatea nvarchar(20),@t_bacomp nvarchar(20),@t_eacomp nvarchar(20),@t_part nvarchar(20)',
+							@t_bxnoa=@t_bxnoa,@t_exnoa=@t_exnoa,@t_bdatea=@t_bdatea,@t_edatea=@t_edatea,@t_bacomp=@t_bacomp,@t_eacomp=@t_eacomp,@t_part=@t_part
+
+declare @noa nvarchar(30)
+	declare @count int
+	declare @t_count int
+	declare @recno int
+	declare @currecno int
+	declare @curpage int
+	declare @totpage int
+	declare @accno nvarchar(20)
+	declare @w nvarchar(20)
+	
+	declare cursor_table cursor for
+	select noa,min(recno) from @tmp group by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@recno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set currecno = recno - @recno +1 where noa=@noa
+		fetch next from cursor_table
+		into @noa,@recno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare @zpno nvarchar(30)
+	declare @count1 int 
+	declare @count2 int 
+	declare cursor_table cursor for 
+	select noa,max(accno) accno,max(w),count(*) count1,(count(*)/@pageCount+1)*@pageCount count2 from @tmp group by noa
+	open cursor_table 
+	fetch next from cursor_table 
+	into @noa,@accno,@w,@count1,@count2 
+	while(@@FETCH_STATUS <> -1) 
+	begin 
+		while(@count1<@count2) and not(@count1 % @pagecount = 0) 
+		begin 
+			insert into @tmp (gno,noa,noq,n,accno,w,currecno)VALUES('1',@noa,CHAR(255),'',@accno,@w,@count1+1) 
+			set @count1=@count1+1 
+		end 
+		fetch next from cursor_table 
+		into @noa,@accno,@w,@count1,@count2 
+	end 
+	close cursor_table 
+	deallocate cursor_table 
+	
+	
+	declare cursor_table cursor for
+	select noa,max(currecno) from @tmp group by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@currecno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set totpage = (@currecno-@currecno%@pagecount)/@pagecount where noa=@noa
+		fetch next from cursor_table
+		into @noa,@currecno
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	declare cursor_table cursor for
+	select noa,recno,currecno from @tmp
+	open cursor_table
+	fetch next from cursor_table
+	into @noa,@recno,@currecno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update @tmp set curpage = FLOOR((@currecno-1)/@pagecount)+1 where noa=@noa and recno=@recno
+		fetch next from cursor_table
+		into @noa,@recno,@currecno
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	select gno,noa,noq,n,datea,mon,tggno,comp,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,unpay),1)),4,12)) unpay
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,total),1)),4,12)) tt
+	,acc2,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,money),1)),4,12)) money,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,chgs),1)),4,12)) chgs,
+	reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,paysale),1)),4,12)) paysale,checkno,account,bankno,bank,indate,accno,w,CONVERT(nvarchar(5),curpage)+'/'+CONVERT(nvarchar(5),totpage) page 
+	from @tmp order by noa,noq;
+--**************************************************************************************************************************************************************************************************************************************
+z_payp2:--z_payp2
+	SET QUOTED_IDENTIFIER OFF 
+	declare @cmd nvarchar(max)
+	
+	declare @t_bxnoa nvarchar(20) = case when '#non'=[1] then '' else [1] end
+	declare @t_exnoa nvarchar(20) = case when '#non'=[2] then CHAR(255) else [2] end
+	declare @t_len nvarchar(20) = '[3]' --3民國 4 西元
+
+	--------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_payp2')is not null
+	BEGIN
+		drop table #z_payp2
+	END
+	create table #z_payp2(
+		sel int identity(1,1),
+		cno nvarchar(10),
+		gno nvarchar(20),
+		noa nvarchar(20),
+		noq nvarchar(10),
+		years nvarchar(10),
+		tmon nvarchar(10),
+		tggno nvarchar(20),
+		comp nvarchar(50),
+		bank nvarchar(50),
+		checkno nvarchar(20),
+		account nvarchar(20),
+		iyears nvarchar(10),
+		imon nvarchar(10),
+		idatea nvarchar(10),
+		mney nvarchar(20),
+		addr2 nvarchar(max),
+		tel2 nvarchar(max),
+		fax2 nvarchar(max)
+	)
+	
+	insert into #z_payp2(gno,cno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select 
+	'1' gno,b.cno,b.noa,a.noq
+	,LEFT(CASE WHEN LEN(b.mon)=0 then b.datea else b.mon end,@t_len) years
+	,CASE WHEN LEN(b.mon)=0 then RIGHT(LEFT(b.datea,CAST(@t_len as int)+3),2) else RIGHT(b.mon,2) end tmon
+	,b.tggno,b.comp,a.bank,a.checkno,a.account
+	,LEFT(a.indate,@t_len) iyears,right(LEFT(a.indate,@t_len+3),2) imon,RIGHT(a.indate,2) idatea
+	,dbo.getComma(a.[money],0) mney
+	,'' addr2,'' tel2,'' fax2
+	from pays a
+	left join pay b on a.noa=b.noa
+	where b.noa between @t_bxnoa and @t_exnoa
+	and len(isnull(a.checkno,''))>0
+	
+	--預設公司
+	if exists(
+	select * from sys.columns a
+	left join(select object_id from sys.tables where [name] = 'acomp') b on a.object_id=b.object_id
+	where b.object_id is not null
+	and a.[name]='addr')
+	begin
+		set @cmd =
+		"update #z_payp2 set addr2=case when b.noa is null then c.addr else b.addr end
+			,tel2=case when b.noa is null then c.tel else b.tel end
+			,fax2=case when b.noa is null then c.fax else b.fax end
+		from #z_payp2 a
+		left join acomp b on a.cno=b.noa
+		outer apply (select top 1 * from acomp order by noa) c"
+		execute sp_executesql @cmd
+		
+	end
+	
+	--寄送資訊
+	if exists(
+	select * from sys.columns a
+	left join(select object_id from sys.tables where [name] = 'acomp') b on a.object_id=b.object_id
+	where b.object_id is not null
+	and a.[name]='addr2')
+	begin
+		set @cmd =
+		"update #z_payp2 set addr2=case when b.noa is null then c.addr2 else b.addr2 end
+			,tel2=case when b.noa is null then c.tel2 else b.tel2 end
+			,fax2=case when b.noa is null then c.fax2 else b.fax2 end
+		from #z_payp2 a
+		left join acomp b on a.cno=b.noa
+		outer apply (select top 1 * from acomp order by noa) c"
+		execute sp_executesql @cmd
+	end
+	-------------------------------------------------------------------------------------------------
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '2',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '3',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '4',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '5',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '6',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '7',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '8',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '9',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	insert into #z_payp2(gno,noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2)
+	select '10',noa,noq,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,addr2,tel2,fax2
+	from #z_payp2 where gno='1'
+	
+	select years +' 年 ' +tmon+ ' 月份 支票簽回單' titlea,*
+		,case when len(tel2+fax2)>0 then 
+			case when len(tel2)>0 then 'TEL：'+tel2 else '' end +  case when len(fax2)>0 then ' FAX：'+fax2 else '' end
+			else '' end c01
+		,case when len(addr2)>0 then addr2 else '' end c02
+	from #z_payp2 order by noa,noq,checkno,sel
+	drop table #z_payp2;
+
+--**************************************************************************************************************************************************************************
+z_payp_yc2:--z_payp_yc2
+	declare @t_bxnoa nvarchar(20) = case when '#non'=[1] then '' else [1] end
+	declare @t_exnoa nvarchar(20) = case when '#non'=[2] then CHAR(255) else [2] end
+
+	declare @tmp table(
+		gno nvarchar(20),
+		noa nvarchar(20),
+		years nvarchar(10),
+		tmon nvarchar(10),
+		tggno nvarchar(20),
+		comp nvarchar(50),
+		bank nvarchar(50),
+		checkno nvarchar(20),
+		account nvarchar(20),
+		iyears nvarchar(10),
+		imon nvarchar(10),
+		idatea nvarchar(10),
+		mney nvarchar(20),
+		memo nvarchar(MAX),
+		cno nvarchar(MAX)
+	)
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select 
+	'1' gno,b.noa,LEFT(b.mon,3) years,RIGHT(b.mon,2) tmon,b.tggno,b.comp,a.bank,a.checkno,a.account 
+	,LEFT(a.indate,3) iyears,right(LEFT(a.indate,6),2) imon,RIGHT(a.indate,2) idatea
+	,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,a.[money]),1)),4,12)) mney
+	,replace(b.memo,'chr(10)','<BR>'),b.cno
+	from pays a
+	left join pay b on a.noa=b.noa
+	where b.noa between @t_bxnoa and @t_exnoa
+	and len(isnull(a.checkno,''))>0
+	-------------------------------------------------------------------------------------------------
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '2',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '3',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '4',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '5',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '6',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '7',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	insert into @tmp(gno,noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno)
+	select '8',noa,years,tmon,tggno,comp,bank,checkno,account,iyears,imon,idatea,mney,memo,cno
+	from @tmp where gno='1'
+	
+	select years +' 年 ' +tmon+ ' 月份 支票簽回單' titlea,
+	(select top 1 acomp from acomp where noa=a.cno) acomp,
+	(select top 1 tel from acomp where noa=a.cno) rtel,
+	(select top 1 addr from acomp where noa=a.cno) raddr,
+	*
+	 from @tmp a order by noa,checkno,cast(gno as int);
+
+--**************************************************************************************************************************************************************************

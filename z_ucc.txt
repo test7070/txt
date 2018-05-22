@@ -1,0 +1,3760 @@
+﻿z_ucctb:--z_ucctb
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_bstoreno nvarchar(50)
+	declare @t_estoreno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_acomp nvarchar(MAX)='[16]'
+	declare @qhref_acomp nvarchar(10) =''
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @t_ucc nvarchar(MAX)
+	declare @r_len nvarchar(MAX)='[28]'
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_bstoreno = case when '#non'=[6] then '' else [6] end
+	set @t_estoreno = case when '#non'=[7] then char(255) else [7] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+-------------------------------------------------------------------------------------------------------
+if(@t_project='IT')
+	set @qhref_acomp='_it'
+if(@t_project='UU')
+	set @qhref_acomp='_uu'
+if(@t_project='RB')
+	set @qhref_acomp='_rb'
+if(@t_project='XY')
+	set @qhref_acomp='_xy'
+if(@t_project='YC')
+	set @qhref_acomp='_yc'
+-------------------------------------------------
+	declare @cmd nvarchar(max)
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		set @cmd = 'drop table #tmpa'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #tmp(
+		gno nvarchar(1),
+		recno int,
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		productno nvarchar(30),
+		xproduct nvarchar(255),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(100),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+	)
+	
+	insert into #tmp
+	select
+		'0' gno, ROW_NUMBER()over(order by R1.productno,R1.storeno,R1.datea,R1.typea)as recno,R1.*, 0 totmount, 0 totweight,''
+	from(
+		--select storeno,store,noa productno,product xproduct,isnull(datea,'') datea,'01' typea,'期初' typec, 
+		--       '' noa,'' comp, unit, start mount, start weight,'' qhref
+		--from ucc
+		--where  noa BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate and storeno between @t_bstoreno and @t_estoreno
+		--union all
+		select isnull(a.storeno,'')storeno ,a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea,'01' typea,'盤點調整' typec, 
+		       a.noa,'' comp,a.unit,a.mount,a.weight,'ucce?noa=$noa?'+accy qhref
+		from view_ucces a left join view_ucaucc b on a.productno=b.noa
+		where  a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then 'A0' else '10' end typea,case a.typea when '2' then '進貨退回' else '進貨' end typec,
+		       b.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'rc2'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
+		from view_rc2s b left join view_rc2 a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then '11' else 'B0' end typea,case a.typea when '2' then '出貨退回' else '出貨' end typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit,(case when isnull(b.gmount,0)!=0 then b.gmount else b.mount end)
+		       ,(case when isnull(b.gweight,0)!=0 then b.gweight else b.weight end),'vcc'+@qhref_acomp+'?noa=$noa?'+b.accy qhref
+		from view_vccs b left join view_vcc a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '入庫' typec,
+		       b.noa,  isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'ina?noa=$noa?'+b.accy qhref
+		from view_inas b left join view_ina a on b.noa=a.noa 
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '領料' typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'get?noa=$noa?'+b.accy qhref
+		from view_gets b left join view_get a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '製品領料' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'worka?noa=$noa?'+b.accy qhref
+		from view_workas b left join view_worka a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '委製領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'workc?noa=$noa?'+b.accy qhref
+		from view_workcs b left join view_workc a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '製品入庫' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, b.mount, b.weight,'workb?noa=$noa?'+b.accy qhref
+		from view_workbs b left join view_workb a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '委製入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, b.mount+b.inmount-b.outmount, b.weight,'workd?noa=$noa?'+b.accy qhref
+		from view_workds b left join view_workd a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		
+		union all
+		select isnull(a.storeinno,''),a.storein+'<'+a.store
+		,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea
+		,case when a.typea='1' then '廠調入庫+' when a.typea='2' then '委入入庫' when a.typea='3' then '委出入庫' 
+				when a.typea='4' then '客借入庫' when a.typea='5' then '客歸入庫' when a.typea='6' then '委加入庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store+'>'+a.storein
+		,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea
+		,case when a.typea='1' then '廠調出庫' when a.typea='2' then '委入出庫' when a.typea='3' then '委出出庫' 
+				when a.typea='4' then '客借出庫' when a.typea='5' then '客歸出庫' when a.typea='6' then '委加出庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		-----------------------------------
+		union all
+		select isnull(b.storeno,''),d.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '裁剪入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'cut?noa=$noa?'+b.accy qhref
+		from view_cuts b left join view_cut a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		left join store d on b.storeno=d.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '裁剪領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, a.mount, a.oweight,'cut?noa=$noa?'+a.accy qhref
+		from view_cut a left join view_ucaucc c on a.productno=c.noa
+		where a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '加工入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight --,'cubpi?noa=$noa?'+b.accy qhref
+		       ,case when @t_project='RB' then 'cub_rb?noa=$noa?'+b.accy else 'cubpi?noa=$noa?'+b.accy end qhref 
+		from view_cubu b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '加工領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.gmount, b.gweight --,'cubpi?noa=$noa?'+b.accy qhref
+		       ,case when @t_project='RB' then 'cub_rb?noa=$noa?'+b.accy else 'cubpi?noa=$noa?'+b.accy end qhref 
+		from view_cubt b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		----------
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '委外借入' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcfs b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '委外借出' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcft b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		) as R1
+		left join ucc b on R1.productno=b.noa
+		where (isnull(b.tggno,'') between @t_btggno and @t_etggno)  and isnull(b.noa,'')!=''
+	--*****************************************************************************************	
+	
+	create table #tmpa(
+		gno nvarchar(1),
+		recno int IDENTITY(1,1),
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		productno nvarchar(30),
+		xproduct nvarchar(255),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(100),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15),
+		rr int,
+		ttotmount float
+		primary key (productno,storeno,recno)
+	)
+	
+	declare @recno int
+	declare @productno nvarchar(30)
+	declare @storeno nvarchar(30)
+	declare @typea nvarchar(10)
+	declare @datea nvarchar(10)
+	declare @mount float
+	declare @weight float
+	
+	declare @t_productno nvarchar(30)
+	declare @t_storeno nvarchar(30)
+	declare @t_mount float
+	declare @t_weight float
+	declare @t_totmount float
+	declare @t_totweight float
+	declare @tt_totmount float
+	declare @tt_totweight float
+	declare @pt_totmount float
+	declare @pt_totweight float
+	
+	declare @tdate nvarchar(10)=''
+	declare @uccecount float=0
+	
+	set @t_productno = '##########'
+	set @t_storeno = '##########'
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	
+	declare cursor_table cursor for
+	select recno,productno,storeno,typea,datea,mount,weight from #tmp order by productno,storeno,recno
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @t_productno!=@productno and @t_productno!='##########'
+		begin
+			if not(@t_totmount=0 and @t_totweight=0) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+			begin
+				insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+			
+				insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+				
+			end
+			
+				set @tt_totmount = @tt_totmount+@t_totmount
+				set @tt_totweight = @tt_totweight+@t_totweight
+				
+				if(select count(*) from #tmpa where productno=@t_productno)>0
+				begin
+					insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+					select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+					'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+				end
+				   
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @tt_totmount = 0
+			set @tt_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+			set @uccecount = 0
+			set @tdate=''
+		end
+		else if @t_storeno!=@storeno and @t_storeno!='##########'
+		begin
+		
+			if not(@t_totmount=0 and @t_totweight=0 ) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+			begin
+				insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+					  
+				insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+			end
+			
+			set @tt_totmount = @tt_totmount+@t_totmount
+			set @tt_totweight = @tt_totweight+@t_totweight
+			
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+			set @uccecount = 0
+			set @tdate=''
+		end
+		
+		if(@typea='01' and @tdate=@datea)
+		begin
+			set @uccecount=1
+		end
+		else 
+		begin
+			set @uccecount=0
+		end
+		
+		if  @datea between @t_bdate and @t_edate
+		begin
+			set @t_mount =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @t_weight =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+				
+			insert #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+			select gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,@t_mount,@t_weight,ucctype 
+			from #tmp where recno=@recno	
+		end
+		else
+		begin
+			set @pt_totmount =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @pt_totweight =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+		end
+		
+		set @t_totmount =
+			case 
+			when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+			when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+			end
+		set @t_totweight =
+			case 
+			when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+			when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+			end
+		
+		set @t_productno = @productno
+		set @t_storeno = @storeno
+		set @tdate=@datea
+
+		fetch next from cursor_table
+		into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--最後一筆處理---------------------------------------------------------------------
+	if not(@t_totmount=0 and @t_totweight=0) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+	begin
+		insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+		select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+		
+		insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+		select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+		
+	end
+	
+	set @tt_totmount = @tt_totmount+@t_totmount
+	set @tt_totweight = @tt_totweight+@t_totweight
+	
+	if(select count(*) from #tmpa where productno=@t_productno)>0
+	begin
+		insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype)
+		select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+	end
+	
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	--------------------------------------------------------------------------------------------
+	declare @ucctype nvarchar(15)
+	declare cursor_table cursor for
+	select noa,typea from ucc order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update #tmpa set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--declare cursor_table cursor for
+	--select noa,typea from uca order by noa
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @t_productno,@ucctype
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	update #tmpa set ucctype = @ucctype where productno=@t_productno
+	--	fetch next from cursor_table
+	--	into @t_productno,@ucctype
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	--delete a from #tmpa a 
+	--where exists (select noa from uca where noa=a.productno)
+	
+	--刪除數量=0且資料只有 前期
+	delete a from #tmpa a where exists (
+		select storeno,productno
+		from #tmpa where gno='0' and storeno=a.storeno and productno=a.productno
+		group by storeno,productno having sum(isnull(totmount,0))=0 and count(*)=1
+	)
+	
+	update a
+	set rr=a.xrr
+	from (select rr,ROW_NUMBER() over (order by productno, gno,datea,typea,recno)xrr from #tmpa) a
+	
+	update a
+	set ttotmount=xtotmount
+	from #tmpa a
+	outer apply (
+		select SUM(totmount)xtotmount from (select storeno from #tmpa where gno='0' group by storeno) xa
+		outer apply (select top 1 totmount from #tmpa where productno=a.productno and storeno=xa.storeno and datea<=a.datea and rr<=a.rr order by datea desc,recno desc) xb
+	)b
+	
+	insert into #tmpa(gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,totmount,totweight,ucctype,ttotmount)
+	select '0' gno,'','',productno,(select product from view_ucaucc where noa=productno),'' datea,'02-1' typea,'前期' typec, 
+	'' noa,'' comp, '' unit, null mount, null weight,'', sum(totmount), sum(totweight),'1',SUM(totmount)
+	from #tmpa where gno='0' and typea='02'
+	group by productno
+	
+	delete #tmpa where gno='0' and typea='02'
+	delete #tmpa where gno='1'
+	
+	--*****************************************************************************************	
+	
+	select gno,recno,storeno,case when ISNULL(stores,'')='' then storeno else stores end stores,productno,xproduct,datea,typea,typec,noa,left(comp,11) comp,unit,ucctype,qhref
+	,dbo.getComma((case when typea='02' then null else(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,0)end),0) mount
+	,dbo.getComma((case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*weight,[22]) weight
+	,dbo.getComma(totmount,[21]) totmount
+	,dbo.getComma(totweight,[22]) totweight
+	,dbo.getComma(ttotmount,[21]) ttotmount
+	
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,0)),1)),4,30)) mount
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*weight),1)),0,30)) weight
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,totweight),1)),0,30)) totweight
+	from #tmpa where (len(@t_typea) = 0 or isnull(ucctype,'null') = @t_typea)
+	order by productno, gno,datea,typea,recno
+	
+	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		set @cmd = 'drop table #tmpa'
+		EXECUTE sp_executesql @cmd
+	END
+	;
+--------------------------------------------------------------------------------------------
+z_ucc6:--z_ucc6
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_bstoreno nvarchar(50)
+	declare @t_estoreno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_acomp nvarchar(MAX)='[16]'
+	declare @qhref_acomp nvarchar(10) =''
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @t_ucc nvarchar(MAX)
+	declare @r_len nvarchar(MAX)='[28]'
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_bstoreno = case when '#non'=[6] then '' else [6] end
+	set @t_estoreno = case when '#non'=[7] then char(255) else [7] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+-------------------------------------------------------------------------------------------------------
+if(@t_project='IT')
+	set @qhref_acomp='_it'
+if(@t_project='UU')
+	set @qhref_acomp='_uu'
+if(@t_project='RB')
+	set @qhref_acomp='_rb'
+if(@t_project='XY')
+	set @qhref_acomp='_xy'
+if(@t_project='YC')
+	set @qhref_acomp='_yc'
+-------------------------------------------------
+	declare @cmd nvarchar(max)
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		set @cmd = 'drop table #tmpa'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #tmp(
+		gno nvarchar(1),
+		recno int,
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		productno nvarchar(50),
+		xproduct nvarchar(255),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(100),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+	)
+	
+	insert into #tmp
+	select
+		'0' gno, ROW_NUMBER()over(order by R1.productno,R1.storeno,R1.datea,R1.typea)as recno,R1.*, 0 totmount, 0 totweight,''
+	from(
+		--select storeno,store,noa productno,product xproduct,isnull(datea,'') datea,'01' typea,'期初' typec, 
+		--       '' noa,'' comp, unit, start mount, start weight,'' qhref
+		--from ucc
+		--where  noa BETWEEN @t_bproductno AND @t_eproductno and datea<=@t_edate and storeno between @t_bstoreno and @t_estoreno
+		--union all
+		select isnull(a.storeno,'')storeno ,a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea,'01' typea,'盤點調整' typec, 
+		       a.noa,'' comp,a.unit,a.mount,a.weight,'ucce?noa=$noa?'+accy qhref
+		from view_ucces a left join view_ucaucc b on a.productno=b.noa
+		where  a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then 'A0' else '10' end typea,case a.typea when '2' then '進貨退回' else '進貨' end typec,
+		       b.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'rc2'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
+		from view_rc2s b left join view_rc2 a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then '11' else 'B0' end typea,case a.typea when '2' then '出貨退回' else '出貨' end typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit,(case when isnull(b.gmount,0)!=0 then b.gmount else b.mount end)
+		       ,(case when isnull(b.gweight,0)!=0 then b.gweight else b.weight end),'vcc'+@qhref_acomp+'?noa=$noa?'+b.accy qhref
+		from view_vccs b left join view_vcc a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '入庫' typec,
+		       b.noa,  isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'ina?noa=$noa?'+b.accy qhref
+		from view_inas b left join view_ina a on b.noa=a.noa 
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '領料' typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'get?noa=$noa?'+b.accy qhref
+		from view_gets b left join view_get a on a.noa=b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '製品領料' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'worka?noa=$noa?'+b.accy qhref
+		from view_workas b left join view_worka a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '委製領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'workc?noa=$noa?'+b.accy qhref
+		from view_workcs b left join view_workc a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '製品入庫' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, b.mount, b.weight,'workb?noa=$noa?'+b.accy qhref
+		from view_workbs b left join view_workb a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '委製入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, b.mount+b.inmount-b.outmount, b.weight,'workd?noa=$noa?'+b.accy qhref
+		from view_workds b left join view_workd a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		
+		union all
+		select isnull(a.storeinno,''),a.storein+'<'+a.store
+		,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea
+		,case when a.typea='1' then '廠調入庫+' when a.typea='2' then '委入入庫' when a.typea='3' then '委出入庫' 
+				when a.typea='4' then '客借入庫' when a.typea='5' then '客歸入庫' when a.typea='6' then '委加入庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store+'>'+a.storein
+		,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea
+		,case when a.typea='1' then '廠調出庫' when a.typea='2' then '委入出庫' when a.typea='3' then '委出出庫' 
+				when a.typea='4' then '客借出庫' when a.typea='5' then '客歸出庫' when a.typea='6' then '委加出庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng'+(case when @t_project='RB' then @qhref_acomp else '' end)+'?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		-----------------------------------
+		union all
+		select isnull(b.storeno,''),d.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '裁剪入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'cut?noa=$noa?'+b.accy qhref
+		from view_cuts b left join view_cut a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		left join store d on b.storeno=d.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '裁剪領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, a.mount, a.oweight,'cut?noa=$noa?'+a.accy qhref
+		from view_cut a left join view_ucaucc c on a.productno=c.noa
+		where a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '加工入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight --,'cubpi?noa=$noa?'+b.accy qhref
+		       ,case when @t_project='RB' then 'cub_rb?noa=$noa?'+b.accy else 'cubpi?noa=$noa?'+b.accy end qhref 
+		from view_cubu b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '加工領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.gmount, b.gweight --,'cubpi?noa=$noa?'+b.accy qhref
+		       ,case when @t_project='RB' then 'cub_rb?noa=$noa?'+b.accy else 'cubpi?noa=$noa?'+b.accy end qhref 
+		from view_cubt b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		----------
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '委外借入' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcfs b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '委外借出' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcft b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		) as R1
+		left join ucc b on R1.productno=b.noa
+		where (isnull(b.tggno,'') between @t_btggno and @t_etggno)  and isnull(b.noa,'')!=''
+	--*****************************************************************************************	
+	
+	create table #tmpa(
+		gno nvarchar(1),
+		recno int IDENTITY(1,1),
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		productno nvarchar(50),
+		xproduct nvarchar(255),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(100),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+		primary key (productno,storeno,recno)
+	)
+	
+	declare @recno int
+	declare @productno nvarchar(30)
+	declare @storeno nvarchar(30)
+	declare @typea nvarchar(10)
+	declare @datea nvarchar(10)
+	declare @mount float
+	declare @weight float
+	
+	declare @t_productno nvarchar(30)
+	declare @t_storeno nvarchar(30)
+	declare @t_mount float
+	declare @t_weight float
+	declare @t_totmount float
+	declare @t_totweight float
+	declare @tt_totmount float
+	declare @tt_totweight float
+	declare @pt_totmount float
+	declare @pt_totweight float
+	
+	declare @tdate nvarchar(10)=''
+	declare @uccecount float=0
+	
+	set @t_productno = '##########'
+	set @t_storeno = '##########'
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	
+	declare cursor_table cursor for
+	select recno,productno,storeno,typea,datea,mount,weight from #tmp order by productno,storeno,recno
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @t_productno!=@productno and @t_productno!='##########'
+		begin
+			if not(@t_totmount=0 and @t_totweight=0) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+			begin
+				insert into #tmpa
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+			
+				insert into #tmpa
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+				
+			end
+			
+				set @tt_totmount = @tt_totmount+@t_totmount
+				set @tt_totweight = @tt_totweight+@t_totweight
+				
+				if(select count(*) from #tmpa where productno=@t_productno)>0
+				begin
+					insert into #tmpa
+					select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+					'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+				end
+				   
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @tt_totmount = 0
+			set @tt_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+			set @uccecount = 0
+			set @tdate=''
+		end
+		else if @t_storeno!=@storeno and @t_storeno!='##########'
+		begin
+		
+			if not(@t_totmount=0 and @t_totweight=0 ) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+			begin
+				insert into #tmpa
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+					  
+				insert into #tmpa
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+			end
+			
+			set @tt_totmount = @tt_totmount+@t_totmount
+			set @tt_totweight = @tt_totweight+@t_totweight
+			
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+			set @uccecount = 0
+			set @tdate=''
+		end
+		
+		if(@typea='01' and @tdate=@datea)
+		begin
+			set @uccecount=1
+		end
+		else 
+		begin
+			set @uccecount=0
+		end
+
+		if  @datea between @t_bdate and @t_edate
+		begin
+			set @t_mount =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @t_weight =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+				
+			insert #tmpa
+			select gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,@t_mount,@t_weight,ucctype 
+			from #tmp where recno=@recno	
+		end
+		else
+		begin
+			set @pt_totmount =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @pt_totweight =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+		end
+		
+		set @t_totmount =
+			case 
+			when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+			when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+			end
+		set @t_totweight =
+			case 
+			when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+			when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+			end
+		
+		set @t_productno = @productno
+		set @t_storeno = @storeno
+		set @tdate=@datea
+
+		fetch next from cursor_table
+		into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--最後一筆處理---------------------------------------------------------------------
+	if not(@t_totmount=0 and @t_totweight=0) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+	begin
+		insert into #tmpa
+		select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+		
+		insert into #tmpa
+		select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+		
+	end
+	
+	set @tt_totmount = @tt_totmount+@t_totmount
+	set @tt_totweight = @tt_totweight+@t_totweight
+	
+	if(select count(*) from #tmpa where productno=@t_productno)>0
+	begin
+		insert into #tmpa
+		select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+	end
+	
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	--------------------------------------------------------------------------------------------
+	declare @ucctype nvarchar(15)
+	declare cursor_table cursor for
+	select noa,typea from ucc order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update #tmpa set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--declare cursor_table cursor for
+	--select noa,typea from uca order by noa
+	--open cursor_table
+	--fetch next from cursor_table
+	--into @t_productno,@ucctype
+	--while(@@FETCH_STATUS <> -1)
+	--begin
+	--	update #tmpa set ucctype = @ucctype where productno=@t_productno
+	--	fetch next from cursor_table
+	--	into @t_productno,@ucctype
+	--end
+	--close cursor_table
+	--deallocate cursor_table
+	
+	--delete a from #tmpa a 
+	--where exists (select noa from uca where noa=a.productno)
+	
+	--刪除數量=0且資料只有 前期
+	delete a from #tmpa a where exists (
+		select storeno,productno
+		from #tmpa where gno='0' and storeno=a.storeno and productno=a.productno
+		group by storeno,productno having sum(isnull(totmount,0))=0 and count(*)=1
+	)
+	
+	--*****************************************************************************************	
+	
+	select gno,recno,storeno,case when ISNULL(stores,'')='' then storeno else stores end stores,productno,xproduct,datea,typea,typec,noa,left(comp,11) comp,unit,ucctype,qhref
+	,dbo.getComma((case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,[21]),[21])	mount
+	,dbo.getComma((case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*weight,[22]) weight
+	,dbo.getComma(totmount,[21]) totmount
+	,dbo.getComma(totweight,[22]) totweight
+	
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,0)),1)),4,30)) mount
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*weight),1)),0,30)) weight
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
+	--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,totweight),1)),0,30)) totweight
+	from #tmpa where (len(@t_typea) = 0 or isnull(ucctype,'null') = @t_typea)
+	order by productno,storeno,gno,datea,typea,recno
+	
+	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		set @cmd = 'drop table #tmpa'
+		EXECUTE sp_executesql @cmd
+	END
+	;
+	
+	
+--*****************************************************************************************	
+z_ucc1:--z_ucc1
+	declare @t_bproductno nvarchar(100)
+	declare @t_eproductno nvarchar(100)
+	declare @t_typea nvarchar(15)
+	declare @t_bstoreno nvarchar(50) 
+	declare @t_estoreno nvarchar(50)
+	declare @t_group nvarchar(15)
+	declare @t_showprice  nvarchar(15)
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @enddate nvarchar(30)
+	declare @allucc nvarchar(30)
+	declare @t_acomp nvarchar(MAX)='[16]'
+	declare @t_ucc nvarchar(MAX)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @isspec nvarchar(MAX)='[27]'
+	declare @r_len nvarchar(MAX)='[28]'
+	declare @r_lenm nvarchar(MAX)
+	
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_bstoreno = case when '#non' = [6] then '' else [6] end
+	set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
+	set @t_group = case when '#non'=[12] then '' else [12] end
+	set @t_showprice=[15]
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @enddate = case when '#non'=[19] then '' else [19] end
+	set @allucc = case when '#non'=[20] then '0' else [20] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+	
+	declare @t_stkdate nvarchar(30)
+	if(@r_len='4')
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(10), GETDATE(),111)
+		set @r_lenm='7'
+	end
+	else
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+		set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+		set @r_lenm='6'
+	end
+	
+	if(len(@enddate)>=9)
+	begin
+		set @t_stkdate=@enddate
+	end
+	
+	declare @groups table(
+		groupsno nvarchar(20),
+		groups nvarchar(50)
+	)
+	
+	declare @groupstmp nvarchar(MAX)
+	set @groupstmp='[13]'
+	
+	while(charindex(',',@groupstmp)>0) 
+	begin 
+		insert @groups
+		select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),REPLACE(SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,CHARINDEX(',',@groupstmp)-CHARINDEX('@',@groupstmp)-1),' ','')
+		
+		set @groupstmp=SUBSTRING(@groupstmp,CHARINDEX(',',@groupstmp)+1,LEN(@groupstmp)) 
+	end
+	insert @groups
+	select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,LEN(@groupstmp)) 
+
+	------------報表設定<<Start>>------------
+	declare @pageline int = case when len(@t_group) > 0 then 28 else 40 end --每頁幾行
+	------------報表設定<<End>>------------
+	
+	--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	--處理ucce用 105/08/24
+	create table #tmpx(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float,
+		noa nvarchar(50),
+		maxnoa nvarchar(50),
+		maxdate nvarchar(10)
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate)  and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @t_stkdate) and (isnull(a.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0))) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+		insert #tmpx(typea,datea,storeno,productno,mount,weight,noa)
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0),a.noa
+		from view_ucce a left join view_ucces b on a.noa=b.noa 
+		--left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c on b.storeno=c.storeno and b.productno=c.productno  
+		where a.datea<= @t_stkdate --and a.noa=c.noa and a.datea=c.mdate
+		and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+				
+		update a set maxdate=(select MAX(datea) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		delete #tmpx where datea!=maxdate
+		--106/12/17 同一天盤點數量累加
+		--update a set maxnoa=(select MAX(noa) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		--delete #tmpx where noa!=maxnoa 
+			
+		insert #tmp
+		select typea,datea,storeno,productno,mount,weight from #tmpx
+		
+		delete a from #tmp a
+		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+		insert #stkucc
+		select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+		,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+		,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+		from #tmp a left join view_ucaucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+		where (isnull(a.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		group by a.productno,a.storeno
+		order by a.productno,a.storeno
+		
+		delete #stkucc where mount=0 and weight=0
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+
+	declare @result table(
+		gno nvarchar(1),
+		idno int identity(0,1),
+		pageno int,
+		xgroupno nvarchar(50),
+		productno nvarchar(100),
+		xproduct nvarchar(255),
+		spec nvarchar(255),
+		unit nvarchar(10),
+		totmount float,
+		safemount float,
+		price float,
+		total float
+	)
+	
+	insert into @result
+	select '0' gno,0 pageno,b.groupano,a.productno,a.product xproduct,b.spec,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
+	from (
+		--select productno,MAX(product) product,sum(mount) mount from stkucc(@t_stkdate,'','') s 
+		select productno,MAX(product) product,sum(mount) mount from #stkucc s
+		where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
+		having sum(mount) != 0
+	) a
+	left join ucc b on a.productno=b.noa  
+	outer apply (select top 1 * from view_costs where mon<=LEFT(@t_stkdate,@r_lenm) and productno=a.productno order by mon desc) c
+	where exists (select * from ucc where noa=a.productno) 
+	--(a.productno in (select noa from ucc)) --and (a.mount <> 0)
+	and (len(@t_typea)=0 or isnull(b.typea,'null')=@t_typea) 
+	and (len(@t_group)=0 or b.groupano=@t_group)
+	and (a.productno between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+	and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+	
+	delete @result where totmount=0
+	
+	if(@allucc='1')
+	begin
+		insert @result
+		select '0' gno ,0 pageno,groupano,	noa,product,spec,unit,0,safemount,0,0
+		from ucc where noa not in (select productno from @result) 
+		and (len(@t_typea)=0 or isnull(typea,'null')=@t_typea) 
+		and (len(@t_group)=0 or isnull(groupano,'')=@t_group)
+		and (noa between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0)))
+		and (isnull(tggno,'') between @t_btggno and @t_etggno) 	
+	end
+	
+	if (@t_showprice='0')
+	begin
+		update @result set price=null,total=null
+	end
+
+	------------更新頁數<<Start>>------------
+	declare @idno int
+	declare @pageno int
+	declare @recCount int = 1
+	declare @pageno_int int = 0
+	declare @lastnoa nvarchar(max) = ''
+	declare @nextidno int
+	declare cursor_table cursor for
+		select
+			a.idno
+		from @result a order by a.idno
+	open cursor_table
+	fetch next from cursor_table
+	into @idno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((@recCount > @pageline))
+		begin
+			set @recCount = 1
+			set @pageno_int = @pageno_int+1
+		end
+		if(@recCount = @pageline)
+		begin
+			set @nextidno = @idno+1
+		end
+		update @result set pageno=@pageno_int where idno=@idno
+		set @recCount = @recCount+1
+		fetch next from cursor_table
+		into @idno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------更新頁數<<End>>-------------
+	------------插入表頭及表尾<<Start>>-------------
+	----------gno->1=有群組表頭,2=有群組表身,3=有群組跳頁,4=無群組表頭,5=無群組表身,6=無群組跳頁
+	if((select count(*) from @result)>0)
+	begin
+		if(len(@t_group) > 0)
+		begin
+			insert into @result(gno,pageno)
+				select '1',pageno from @result where gno='0' group by pageno
+			
+			insert into @result(gno,pageno,totmount,safemount,total)
+				select '3',MAX(pageno),sum(totmount),sum(safemount),sum(total) from @result where gno='0'
+			
+			insert into @result(gno,pageno)
+				select '4',pageno from @result where gno='0' group by pageno
+			update @result set gno='2' where gno='0'
+		end
+		else
+		begin
+			insert into @result(gno,pageno)
+				select '5',pageno from @result where gno='0' group by pageno
+				
+			insert into @result(gno,pageno,totmount,safemount,total)
+				select '7',MAX(pageno),sum(totmount),sum(safemount),sum(total) from @result where gno='0'
+				
+			insert into @result(gno,pageno)
+				select '8',pageno from @result where gno='0' group by pageno
+			update @result set gno='6' where gno='0'		
+		end
+	end
+	
+	if(left(@t_acomp,4)!='興和貿易')
+	begin
+		update @result set totmount=null,safemount=null where gno='3' or gno='7'
+	end
+	
+	------------插入表頭及表尾<<End>>-------------
+	select gno,pageno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups
+		,productno,xproduct+(case when @isspec='1' then ' '+isnull(spec,'') else '' end) xproduct ,unit
+		,dbo.getComma(totmount,[21]) totmount
+		,dbo.getComma(safemount,[21]) safemount
+		,dbo.getComma(price,[23]) price
+		,dbo.getComma(total,0) total
+		
+		--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(totmount,0)),1)),4,30)) totmount
+		--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(safemount,0)),1)),4,30)) safemount
+		--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(price,2)),1)),0,30)) price
+		--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(total,0)),1)),4,30)) total
+		,Convert(varchar(10),getdate(),111) wtoday
+	from @result a order by pageno,gno,idno,xgroupno,productno
+	
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+	;
+--*****************************************************************************************
+z_stk1:	
+	return
+	--庫存表-依倉庫  同Z_TB 小計
+	select *, b.product xproduct, b.unit xunit, c.store xstore
+	from(
+		select
+			'0' gno,'2' gx,0 recno,'' noa,'' xorder,'z' datea, '' comp,'小計' type,storeno,productno,'' product,'' unit,0 mount,0 weight,sum(mount2) mount2,sum(weight2) weight2,sum(mount2) xmount,sum(weight2) xweight
+		from
+			(select a.noa,'1' xorder, a.datea, a.comp, case a.type when '退' then '進退' else '進貨' end type,b.storeno storeno, b.productno, b.product, b.unit, b.mount, b.weight, case a.type when '退' then -b.mount else b.mount end mount2, case a.type when '退' then -b.weight else b.weight end weight2  from rc2[1] a,rc2s[1] b where a.noa=b.noa and LEN(productno)>0 [2] [1]
+			union
+			select a.noa, '2' xorder, a.datea, '' comp, a.type,a.storeno storeno, b.productno, b.product, b.unit, b.mount, b.weight, b.mount mount2, b.weight weight2 from ina[1] a,inas[1] b where a.noa=b.noa and LEN(b.productno)>0  [2] [6]
+			union
+			select a.noa, 'A' xorder, a.datea, a.comp, case a.type when '退' then '出退' else '出貨' end,b.storeno storeno, b.productno, b.product, b.unit, b.mount, b.weight, case a.type when '退' then b.mount else -b.mount end mount2, case a.type when '退' then b.weight else -b.weight end weight2 from vcc[1] a, vccs[1] b where a.noa=b.noa and LEN(b.productno)>0  [2] [1]
+			union
+			select a.noa, 'B' xorder, a.datea, '' comp, a.type,a.storeno storeno, b.productno, b.product, b.unit, b.mount, b.weight, -b.mount mount2, -b.weight weight2 from get[1] a, gets[1] b where a.noa=b.noa and LEN(b.productno)>0 [2] [6]) AS R3
+		group by productno,storeno) as a
+	left join ucc[1] b on a.productno=b.noa 
+	left join store c on a.storeno = c.noa
+	order by a.productno,a.storeno,a.gno,a.gx,a.recno;
+
+--**************************************************************************************************
+z_ucc3:--z_ucc3
+
+declare @bpno nvarchar(30)
+declare @epno nvarchar(30)
+declare @enddate nvarchar(30)
+declare @bordeno nvarchar(30)
+declare @eordeno nvarchar(30)
+declare @outtype nvarchar(30)
+declare @t_project nvarchar(MAX)='[25]'
+
+set @bpno = case when '#non'=[4] then '' else [4] end
+set @epno = case when '#non'=[5] then char(255) else [5] end
+set @enddate=case when '#non'=[19] then '' else [19] end
+set @bordeno = case when '#non'=[8] then '' else [8] end
+set @eordeno = case when '#non'=[9] then char(255) else [9] end
+set @outtype=case when '#non'=[11] then '' else [11] end
+
+--儲存在製品的製令單//避免一個製令被領料或入庫兩次以上
+declare @work table(
+	workno nvarchar(30)
+)
+
+declare @end table(
+	recno int identity(0,1),
+	gno nvarchar(50),
+	custno nvarchar(50),
+	compnick nvarchar(50),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	gnoworkno nvarchar(50),
+	workno nvarchar(50),
+	cuano nvarchar(50),
+	productno nvarchar(50),
+	product nvarchar(50),
+	mount float,
+	inmount float,
+	productno2 nvarchar(50),
+	product2 nvarchar(50),
+	mount2 float,
+	outmount float,
+	acost float,
+	bcost float,
+	ccost float,
+	dcost float,
+	cost float
+)
+
+
+--插入在截止日之前有領料的製令單
+if(@outtype='all')
+	insert into @work
+	select DISTINCT a.noa from view_work a left join view_workas b on a.noa=b.workno left join view_workcs c on a.noa=c.workno
+	where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
+	and (b.mount>0 or c.mount>0)
+
+if(@outtype='out')
+	insert into @work
+	select DISTINCT a.noa from view_work a left join view_workas b on a.noa=b.workno left join view_workcs c on a.noa=c.workno
+	where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
+	and (b.mount>0 or c.mount>0)
+	and a.tggno!=''
+
+if(@outtype='notout')
+	insert into @work
+	select DISTINCT a.noa from view_work a left join view_workas b on a.noa=b.workno left join view_workcs c on a.noa=c.workno
+	where ((b.datea<=@enddate and c.datea is null) or (c.datea<=@enddate and b.datea is null)) and (a.ordeno between @bordeno and @eordeno)
+	and (b.mount>0 or c.mount>0)
+	and (a.tggno='' or a.tggno is null)
+
+--刪除在截止日之前已"全部"入庫的製令單
+delete @work
+where workno in(
+	select a.workno from @work a left join view_work b on a.workno=b.noa
+	left join(
+	--workb
+	select b.workno,b.productno,b.product,SUM(b.mount) mount 
+	from view_workb a left join view_workbs b on a.noa=b.noa 
+	where b.datea <=@enddate
+	group by b.workno,b.productno,b.product
+	union
+	--workd
+	select b.workno,b.productno,b.product,SUM(b.mount+b.inmount-b.outmount) mount 
+	from view_workd a left join view_workds b on a.noa=b.noa 
+	where b.datea <=@enddate
+	group by b.workno,b.productno,b.product
+)c on b.noa=c.workno
+where b.mount=c.mount)
+
+
+insert into @end
+select '0'gno,oe.custno,ct.nick,wb.ordeno,wb.no2,wa.workno,wa.workno,ca.noa,wb.productno,wb.product product,wb.mount mount,
+(case when len(wb.tggno)=0  then 
+isnull((select SUM(b.mount) mount 
+from view_workb a left join view_workbs b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
+group by b.workno,b.productno),0)
+else
+isnull((select SUM(b.mount+b.inmount-b.outmount) mount 
+from view_workd a left join view_workds b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wb.productno
+group by b.workno,b.productno),0)
+end) inmount,
+wc.productno productno2,wc.product product2,wc.mount mount2,
+(case when len(wb.tggno)=0  then 
+isnull((select SUM(b.mount) mount 
+from view_worka a left join view_workas b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0)
+else
+isnull((select SUM(b.mount) mount 
+from view_workc a left join view_workcs b on a.noa=b.noa 
+where b.datea <=@enddate and b.workno=wa.workno and b.productno=wc.productno
+group by b.workno,b.productno),0)
+end) outmount,
+
+(case when len(wb.tggno)=0  then 
+isnull((select SUM(b.costa) mount 
+from view_workas a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+group by a.workno,a.productno),0)
+else
+isnull((select SUM(b.costa) mount 
+from view_workcs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+group by a.workno,a.productno),0)
+end) acost,
+isnull((select SUM(b.costb) mount 
+from view_workbs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+group by a.workno,a.productno),0) bcost,
+isnull((select SUM(b.costc) mount 
+from view_workbs a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+group by a.workno,a.productno),0) ccost,
+isnull((select SUM(b.costd) mount 
+from view_workds a LEFT join view_wcost b on a.noa=b.noa and a.workno=b.workno and a.productno=b.productno
+where a.datea <=@enddate and a.workno=wa.workno and a.productno=wc.productno
+group by a.workno,a.productno),0) dcost,
+0 cost
+from @work wa left join view_work wb on wa.workno=wb.noa left join view_works wc on wb.noa=wc.noa
+left join view_orde oe on wb.ordeno=oe.noa left join cust ct on oe.custno=ct.noa
+left join view_cua ca on ca.noa=wb.cuano 
+where wb.productno between @bpno and @epno and ca.noa!=''
+order by wa.workno,wb.productno,wc.productno
+
+--from @work wa left join view_work wb on wa.workno=wb.noa left join view_works wc on wb.noa=wc.noa
+--left join view_orde oe on wb.ordeno=oe.noa left join cust ct on oe.custno=ct.noa
+--where wb.productno between @bpno and @epno
+--order by wa.workno,wb.productno,wc.productno
+
+update @end
+set cost=isnull(acost,0)+isnull(bcost,0)+isnull(ccost,0)+isnull(dcost,0)
+--------------------------------------------------------------------
+
+insert into @end --製令
+select '1',custno,compnick,ordeno,no2,gnoworkno,'',cuano,'','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end group by custno,compnick,ordeno,no2,gnoworkno,cuano
+
+insert into @end --訂單
+select '2',custno,compnick,ordeno,char(255),char(255),'','','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end group by custno,compnick,ordeno
+
+insert into @end --客戶
+select '3',custno,compnick,char(255),char(255),char(255),'','','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end group by custno,compnick
+
+insert into @end --全部
+select '4',char(255),char(255),'','','','','','','',null,null,'','',null,null,SUM(acost),SUM(bcost),SUM(ccost),SUM(dcost),SUM(cost) from @end
+
+
+select recno,gno,custno,compnick,ordeno,no2,ordeno+' '+no2 orde2,gnoworkno,workno,cuano,productno productnoa,product producta
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount),1)),0,30)) mounta
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,inmount),1)),0,30)) inmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount-inmount),1)),0,30)) uninmount
+,productno2 productnob,product2 productb
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount2),1)),0,30)) mountb
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,outmount),1)),0,30)) outmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,mount2-outmount),1)),0,30)) unoutmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,acost),1)),0,30)) acost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,bcost),1)),0,30)) bcost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,ccost),1)),0,30)) ccost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,dcost),1)),0,30)) dcost 
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,cost),1)),0,30)) cost
+,@bpno bpno,@epno epno ,@enddate enddate
+from @end order by custno,ordeno,gnoworkno,gno
+;
+-----------------------------------------------------------------------------------------------------------------------
+z_ucc4:--z_ucc4  
+declare @t_bstoreno nvarchar(50) 
+declare @t_estoreno nvarchar(50)
+declare @t_bpno nvarchar(50) 
+declare @t_epno nvarchar(50)  
+declare @t_btggno nvarchar(90)
+declare @t_etggno nvarchar(90)
+declare @enddate nvarchar(30)
+declare @allucc nvarchar(30)
+declare @t_project nvarchar(MAX)='[25]'
+declare @t_ucc nvarchar(MAX)
+declare @isspec nvarchar(MAX)='[27]'
+declare @r_len nvarchar(MAX)='[28]'
+
+set @t_bstoreno = case when '#non' = [6] then '' else [6] end
+set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bpno = case when '#non' = [4] then '' else [4] end
+set @t_epno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_btggno = case when '#non'=[17] then '' else [17] end
+set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+set @enddate=case when '#non'=[19] then '' else [19] end
+set @allucc=case when '#non'=[20] then '0' else [20] end
+set @t_ucc = case when '#non'=[24] then '' else [24] end
+
+declare @t_stkdate nvarchar(30) --今天日期
+if(@r_len='4')
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(10), GETDATE(),111)
+	end
+	else
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+		set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+	end
+
+if(len(@enddate)>=9)
+begin
+	set @t_stkdate=@enddate
+end
+--******************************************************************
+
+--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	--處理ucce用105/08/24
+	create table #tmpx(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float,
+		noa nvarchar(50),
+		maxnoa nvarchar(50),
+		maxdate nvarchar(10)
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate)  and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @t_stkdate) and (isnull(a.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+		insert #tmpx(typea,datea,storeno,productno,mount,weight,noa)
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0),a.noa
+		from view_ucce a left join view_ucces b on a.noa=b.noa 
+		--left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c on b.storeno=c.storeno and b.productno=c.productno  
+		where a.datea<= @t_stkdate --and a.noa=c.noa and a.datea=c.mdate
+		and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		
+		update a set maxdate=(select MAX(datea) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		delete #tmpx where datea!=maxdate
+		--106/12/17 同一天盤點數量累加
+		--update a set maxnoa=(select MAX(noa) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		--delete #tmpx where noa!=maxnoa 
+		
+		insert #tmp
+		select typea,datea,storeno,productno,mount,weight from #tmpx
+		
+		delete a from #tmp a
+		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+		insert #stkucc
+		select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+		,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+		,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+		from #tmp a left join view_ucaucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+		where (isnull(a.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		group by a.productno,a.storeno
+		order by a.productno,a.storeno
+		
+		delete #stkucc where mount=0 and weight=0
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+
+declare @tmp table(
+	gno nvarchar(1), 
+	storeno nvarchar(50),
+	stores nvarchar(100),
+	pno nvarchar(50), 
+	product nvarchar(255), 
+	spec nvarchar(255),
+	unit nvarchar(20), 
+	mount float
+) 
+
+insert into @tmp
+select '0',a.storeno,a.store,a.productno,a.product,b.spec,(select top 1 unit from view_ucaucc where noa=a.productno),a.mount 
+--from stkucc(@t_stkdate,'','') a
+from #stkucc a 
+left join ucc b on a.productno = b.noa
+where ( a.storeno between @t_bstoreno and @t_estoreno) and (a.productno between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+and a.productno !='' --and a.mount !=0
+and isnull(b.noa,'')!=''
+and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+
+delete @tmp where mount=0
+
+if(@allucc='1')
+begin
+	insert @tmp
+	select '0' gno,b.noa,b.store,a.noa,a.product,spec,unit,0
+	from (select * from ucc where (noa between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0))) and (tggno between @t_btggno and @t_etggno))a 
+	,(select * from store where (noa  between @t_bstoreno and @t_estoreno)) b
+	where b.noa+'__'+a.noa not in (select storeno+'__'+pno from @tmp) 
+end
+	
+insert into @tmp(storeno,gno,mount)
+select storeno,'1',sum(mount) from @tmp group by storeno
+
+select gno,storeno,stores,pno,product+(case when @isspec='1' then ' '+isnull(spec,'') else '' end) product,unit
+,dbo.getComma(mount,[21]) mount
+--,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,mount),1)),4,12)) mount
+from @tmp
+order by storeno,gno,pno
+
+--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	
+--104/03/23----------------------------------------------------------------------------------------------------------------------------------
+;
+----------------------------------------------------------------------------------------------------------------------------------------
+z_ucc2:	--產品列表  --ucc2
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_group nvarchar(15)
+	declare @t_showprice  nvarchar(15)
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @t_ucc nvarchar(MAX)
+	
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_group = case when '#non'=[12] then '' else [12] end
+	set @t_showprice=[15]
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+	
+	declare @types table(
+		typesno nvarchar(20),
+		types nvarchar(50)
+	)
+	
+	declare @typestmp nvarchar(MAX)
+	set @typestmp='[14]'
+	
+	while(charindex(',',@typestmp)>0) 
+	begin 
+		insert @types
+		select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),REPLACE(SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,CHARINDEX(',',@typestmp)-CHARINDEX('@',@typestmp)-1),' ','')
+		
+		set @typestmp=SUBSTRING(@typestmp,CHARINDEX(',',@typestmp)+1,LEN(@typestmp)) 
+	end
+	insert @types
+	select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,LEN(@typestmp)) 
+
+
+	declare @result table(
+		gno nvarchar(1),
+		xgroupno nvarchar(50),
+		productno nvarchar(50),
+		xproduct nvarchar(255),
+		typeano nvarchar(50),
+		spec nvarchar(255),
+		unit nvarchar(10),
+		inprice float,
+		saleprice float,
+		style nvarchar(50),
+		uweight float,
+		stdmount float,
+		safemount float,
+		days float,
+		trantype nvarchar(50),
+		tgg nvarchar(200),
+		groupbno nvarchar(50),
+		groupcno nvarchar(50),
+		memo nvarchar(MAX)
+	)
+	
+	insert into @result
+	select '0',groupano,noa,product,typea,spec,unit,inprice,saleprice
+	,style,uweight,stdmount,safemount,days,trantype,left(tgg,6)
+	,groupbno,groupcno,memo
+	from ucc
+	where (noa between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0)))
+	and (len(@t_typea)=0 or typea=@t_typea)
+	and (len(@t_group)=0 or groupano=@t_group)
+	and (isnull(tggno,'') between @t_btggno and @t_etggno)
+	
+	if (@t_showprice='0')
+	begin
+		update @result set inprice=null
+	end
+
+	select (select top 1 namea from uccga where noa=a.xgroupno) xgroups
+		,(select top 1 namea from uccgb where noa=a.groupbno) groupb
+		,(select top 1 namea from uccgc where noa=a.groupcno) groupc
+		,(select top 1 types from @types where typesno=a.typeano) typeas
+		,dbo.getComma(inprice,[23]) inprice
+		,dbo.getComma(saleprice,[23]) saleprice
+		,dbo.getComma(uweight,[22]) uweight
+		,dbo.getComma(stdmount,[21]) stdmount
+		,dbo.getComma(safemount,[21]) safemount
+		--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(inprice,0)),1)),0,30)) inprice
+		--,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(saleprice,0)),1)),0,30)) saleprice
+		,*
+	from @result a order by xgroupno,productno
+;
+------------------------------------------------------------------------------------------------------------------------------------------------
+zx_ucc5:	--z_ucc5
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(30)
+	declare @t_eproductno nvarchar(30)
+	declare @t_typea nvarchar(15)
+	declare @t_showprice  nvarchar(15)
+	declare @t_project nvarchar(MAX)='[25]'
+	
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_showprice=[15]
+----------------------------------------------------------------------------------------------------------------
+declare @tmp table( 
+	gno nvarchar(1),
+	pno nvarchar(50),
+	product nvarchar(50),
+	unit nvarchar(10),
+	bmount float, 
+	bweight float, 
+	bmoney float, 
+	rcmount float, 
+	rcweight float, 
+	rcmoney float, 
+	vcmount float, 
+	vcweight float, 
+	vcmoney float, 
+	vccost float,
+	profit float, 
+	lmount float, 
+	lweight float, 
+	lprice float, 
+	lmoney float
+) 
+
+--期初抓inas
+insert into @tmp (gno,pno,product,unit,bmount,bweight,bmoney,rcmount,rcweight,rcmoney,vcmount,vcweight,vcmoney)
+select '0'gon,noa,product,unit
+,isnull((select mount from view_inas i where charindex('0000',i.noa)>0 and i.productno=a.noa),0)--產品的期初
++isnull((select sum(rb.mount) from view_ina ra left join view_inas rb on ra.noa=rb.noa where ra.datea<@t_bdate and rb.productno=a.noa),0) 
+-isnull((select sum(vb.mount) from view_get va left join view_gets vb on va.noa=vb.noa where va.datea<@t_bdate and vb.productno=a.noa),0) 
++isnull((select sum((case when ra.typea='1' then 1 else -1 end)*rb.mount) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where ra.datea<@t_bdate and rb.productno=a.noa),0)
+-isnull((select sum((case when va.typea='1' then 1 else -1 end)*vb.mount) from view_vcc va left join view_vccs vb on va.noa=vb.noa where va.datea<@t_bdate and vb.productno=a.noa),0)
+bigenmount
+,isnull((select weight from view_inas i where charindex('0000',i.noa)>0 and i.productno=a.noa),0)--產品的期初
++isnull((select sum(rb.weight) from view_ina ra left join view_inas rb on ra.noa=rb.noa where ra.datea<@t_bdate and rb.productno=a.noa),0) 
+-isnull((select sum(vb.weight) from view_get va left join view_gets vb on va.noa=vb.noa where va.datea<@t_bdate and vb.productno=a.noa),0) 
++isnull((select sum((case when ra.typea='1' then 1 else -1 end)*rb.weight) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where ra.datea<@t_bdate and rb.productno=a.noa),0)
+-isnull((select sum((case when va.typea='1' then 1 else -1 end)*vb.weight) from view_vcc va left join view_vccs vb on va.noa=vb.noa where va.datea<@t_bdate and vb.productno=a.noa),0)
+bigeweight
+,isnull((select total from view_inas i where charindex('0000',i.noa)>0 and i.productno=a.noa),0)--產品的期初
++isnull((select sum(rb.total) from view_ina ra left join view_inas rb on ra.noa=rb.noa where ra.datea<@t_bdate and rb.productno=a.noa),0) 
++isnull((select sum((case when ra.typea='1' then 1 else -1 end)*rb.total) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where ra.datea<@t_bdate and rb.productno=a.noa),0)
+-isnull((select sum((case when va.typea='1' then 1 else -1 end)*vb.total) from view_vcc va left join view_vccs vb on va.noa=vb.noa where va.datea<@t_bdate and vb.productno=a.noa),0)
+bigenmoney
+,isnull((select sum((case when ra.typea='1' then 1 else -1 end)*rb.mount) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where (ra.datea between @t_bdate and @t_edate) and rb.productno=a.noa),0)
++isnull((select sum(rb.mount) from view_ina ra left join view_inas rb on ra.noa=rb.noa where (ra.datea between @t_bdate and @t_edate) and rb.productno=a.noa),0) 
+rcmount--進貨數量
+,isnull((select sum((case when ra.typea='1' then 1 else -1 end)*rb.weight) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where (ra.datea between @t_bdate and @t_edate) and rb.productno=a.noa),0)
++isnull((select sum(rb.weight) from view_ina ra left join view_inas rb on ra.noa=rb.noa where (ra.datea between @t_bdate and @t_edate) and rb.productno=a.noa),0) 
+rcweight--進貨重量
+,isnull((select sum((case when ra.typea='1' then 1 else -1 end)*rb.total) from view_rc2 ra left join view_rc2s rb on ra.noa=rb.noa where (ra.datea between @t_bdate and @t_edate) and rb.productno=a.noa),0)
++isnull((select sum(rb.total) from view_ina ra left join view_inas rb on ra.noa=rb.noa where (ra.datea between @t_bdate and @t_edate) and rb.productno=a.noa),0) 
+rcmoney--進貨金額
+
+,isnull((select sum((case when va.typea='1' then 1 else -1 end)*vb.mount) from view_vcc va left join view_vccs vb on va.noa=vb.noa where (va.datea between @t_bdate and @t_edate) and vb.productno=a.noa),0)
++isnull((select sum(vb.mount) from view_get va left join view_gets vb on va.noa=vb.noa where (va.datea between @t_bdate and @t_edate) and vb.productno=a.noa),0) 
+vcmount--銷貨數量
+,isnull((select sum((case when va.typea='1' then 1 else -1 end)*vb.weight) from view_vcc va left join view_vccs vb on va.noa=vb.noa where (va.datea between @t_bdate and @t_edate) and vb.productno=a.noa),0)
++isnull((select sum(vb.weight) from view_get va left join view_gets vb on va.noa=vb.noa where (va.datea between @t_bdate and @t_edate) and vb.productno=a.noa),0) 
+vcweight--銷貨重量
+,isnull((select sum((case when va.typea='1' then 1 else -1 end)*vb.total) from view_vcc va left join view_vccs vb on va.noa=vb.noa where (va.datea between @t_bdate and @t_edate) and vb.productno=a.noa),0)
+vcmoney--銷貨金額
+
+from ucc a where (len(@t_typea)=0 or @t_typea=isnull(a.typea,'null'))
+and (a.noa between @t_bproductno and @t_eproductno) 
+
+
+--計算成本
+update @tmp
+set vccost=
+case when bmount+rcmount=0 then 0 else ((bmoney+rcmoney)/(bmount+rcmount))*vcmount end
+
+--毛利率
+update @tmp
+set profit=case when vcmoney=0 then 0 else ((vcmoney-vccost)/vcmoney)*100 end
+
+--期末
+update @tmp
+set lmount=bmount+rcmount-vcmount,lweight=bweight+rcweight-vcweight
+,lmoney=bmoney+rcmoney-vccost
+update @tmp
+set lprice=case when lmount=0 then 0 else lmoney/lmount end 
+
+delete @tmp
+where bmount=0 and bmoney=0 and rcmount=0 and rcmoney=0 and vcmount=0 and vcmoney=0 and vccost=0 --and bweight=0 and rcweight=0 and vcweight=0
+
+insert into @tmp
+select '1','','','',sum(bmount),sum(bweight),sum(bmoney)
+,sum(rcmount),sum(rcweight),sum(rcmoney)
+,sum(vcmount),sum(vcweight),sum(vcmoney),sum(vccost),case when sum(vcmoney)=0 then 0 else ((sum(vcmoney)-sum(vccost))/sum(vcmoney))*100 end
+,sum(lmount),sum(lweight),0,sum(lmoney)
+from @tmp
+
+if (@t_showprice='0')
+	begin
+		update @tmp set bmoney=null,rcmoney=null,vcmoney=null,vccost=null,profit=null,lprice=null,lmoney=null
+	end
+
+select 
+gno,pno,product,unit
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(bmount,0)),1)),4,12)) bmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(bweight,2)),1)),0,30)) bweight
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(bmoney,0)),1)),4,12)) bmoney
+
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(rcmount,0)),1)),4,12)) rcmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(rcweight,2)),1)),0,30)) rcweight
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(rcmoney,0)),1)),4,12)) rcmoney
+
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcmount,0)),1)),4,12)) vcmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(vcweight,2)),1)),0,30)) vcweight
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vcmoney,0)),1)),4,12)) vcmoney
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(vccost,0)),1)),4,12)) vccost
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(profit,2)),1)),0,30)) profit
+
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(lmount,0)),1)),4,12)) lmount
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lweight,2)),1)),0,30)) lweight
+,reverse(substring(reverse(convert(nvarchar(30),CONVERT(money,round(lprice,2)),1)),0,30)) lprice
+,reverse(substring(reverse(convert(nvarchar(15),CONVERT(money,round(lmoney,0)),1)),4,12)) lmoney
+
+from @tmp order by gno,pno
+;
+--******************************************************************************************
+z_ucc5:	--ucc5--庫存預估表  
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_bstoreno nvarchar(50)
+	declare @t_estoreno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_group nvarchar(15)
+	declare @t_showprice  nvarchar(15)
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @enddate nvarchar(30)
+	declare @t_ucc nvarchar(MAX)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @lowsafe nvarchar(30) 
+	declare @isspec nvarchar(MAX)='[27]'
+	
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_bstoreno = case when '#non'=[6] then '' else [6] end
+	set @t_estoreno = case when '#non'=[7] then char(255) else [7] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_group = case when '#non'=[12] then '' else [12] end
+	set @t_showprice=[15]
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @enddate = case when '#non'=[19] then '' else [19] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+	set @lowsafe = case when '#non'=[26] then '' else [26] end
+	
+	declare @types table(
+		typesno nvarchar(20),
+		typea nvarchar(50)
+	)
+	
+	declare @typestmp nvarchar(MAX)
+	set @typestmp='[14]'
+	
+	while(charindex(',',@typestmp)>0) 
+	begin 
+		insert @types
+		select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),REPLACE(SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,CHARINDEX(',',@typestmp)-CHARINDEX('@',@typestmp)-1),' ','')
+		
+		set @typestmp=SUBSTRING(@typestmp,CHARINDEX(',',@typestmp)+1,LEN(@typestmp)) 
+	end
+	insert @types
+	select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,LEN(@typestmp)) 
+
+	declare @result table(
+		gno nvarchar(1),
+		pno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		unit nvarchar(50),
+		mount float,--庫存量
+		safem float,--安全存量
+		vmount float,--預計出貨量
+		rmount float,--預計入庫量
+		smount float--預估存量 (現有庫存+預入-預計出)
+	)
+	
+	declare @stkucc table(
+		pno nvarchar(100),
+		mount float
+	)
+	
+	declare @ordeunvcc table(
+		pno nvarchar(100),
+		vmount float
+	)
+	
+	declare @ordcunrc2 table(
+		pno nvarchar(100),
+		rmount float
+	)
+	
+	insert @stkucc
+	select productno,SUM(mount)mount from stkucc(@enddate,'','')
+	where storeno between @t_bstoreno and @t_estoreno
+	group by productno
+	
+	if(@t_project='RB')
+	begin
+		insert @ordeunvcc
+		select o.productno,SUM(isnull(o.mount,0)-isnull(v.vmount,0))vmount from view_ordes o left join view_orde oa on o.noa=oa.noa
+		outer apply (select sum(mount)vmount from view_vccs where o.noa=ordeno and o.no2=no2 and typea!='2')v
+		where isnull(o.enda,0)!=1 and isnull(o.cancel,0)!=1 and isnull(o.mount,0)-isnull(v.vmount,0)>0
+		and oa.postname between @t_bstoreno and @t_estoreno
+		group by o.productno
+	end
+	else
+	begin
+		insert @ordeunvcc
+		select o.productno,SUM(isnull(o.mount,0)-isnull(v.vmount,0))vmount from view_ordes o 
+		outer apply (select sum(mount)vmount from view_vccs where o.noa=ordeno and o.no2=no2 and typea!='2')v
+		where isnull(o.enda,0)!=1 and isnull(o.cancel,0)!=1 and isnull(o.mount,0)-isnull(v.vmount,0)>0
+		group by o.productno
+	end
+	
+	insert @ordcunrc2
+	select c.productno,SUM(isnull(c.mount,0)-isnull(r.rmount,0))rmount from view_ordcs c 
+	outer apply (select sum(mount)rmount from view_rc2s where c.noa=ordeno and c.no2=no2 and typea!='2')r
+	where isnull(c.enda,0)!=1 and isnull(c.cancel,0)!=1 and isnull(c.mount,0)-isnull(r.rmount,0)>0
+	group by c.productno
+	
+	insert into @result
+	select '0',a.noa,a.product,a.spec,a.unit,isnull(b.mount,0),isnull(a.safemount,0),isnull(c.vmount,0),isnull(d.rmount,0),isnull(b.mount,0)-isnull(c.vmount,0)+isnull(d.rmount,0)
+	from ucc a left join @stkucc b on a.noa=b.pno
+	left join @ordeunvcc c on a.noa=c.pno
+	left join @ordcunrc2 d on a.noa=d.pno
+	where (noa between @t_bproductno and @t_eproductno) 
+	and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0)))
+	and (len(@t_typea)=0 or typea=@t_typea)
+	and (len(@t_group)=0 or groupano=@t_group)
+	and (isnull(tggno,'') between @t_btggno and @t_etggno)
+	
+	if(@lowsafe='1')
+		delete @result where smount>=safem
+		
+	if(@t_project!='RB')
+	begin
+		delete @result where mount=0 and vmount=0 and rmount=0
+	end
+	
+	if((select count(*) from @result)>0)
+	begin
+		insert @result
+		select '1',CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(mount),SUM(safem),SUM(vmount),SUM(rmount),SUM(smount) from @result
+	end
+
+	select 
+		dbo.getComma(mount,[21]) mount
+		,dbo.getComma(safem,[21]) safem
+		,dbo.getComma(vmount,[21]) vmount
+		,dbo.getComma(rmount,[21]) rmount
+		,dbo.getComma(smount,[21]) smount
+		,product+case when @isspec='1' then ' '+isnull(spec,'') else '' end product
+		,*
+	from @result a order by gno,pno
+;
+--*****************************************************************************************	
+z_ucc1_xy:--z_ucc1_xy
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_bstoreno nvarchar(50) 
+	declare @t_estoreno nvarchar(50)
+	declare @t_group nvarchar(15)
+	declare @t_showprice  nvarchar(15)
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @enddate nvarchar(30)
+	declare @allucc nvarchar(30)
+	declare @t_acomp nvarchar(MAX)='[16]'
+	declare @t_ucc nvarchar(MAX)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @isspec nvarchar(MAX)='[27]'
+	declare @r_len nvarchar(MAX)='[28]'
+	declare @r_lenm nvarchar(MAX)
+	
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_bstoreno = case when '#non' = [6] then '' else [6] end
+	set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
+	set @t_group = case when '#non'=[12] then '' else [12] end
+	set @t_showprice=[15]
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @enddate = case when '#non'=[19] then '' else [19] end
+	set @allucc = case when '#non'=[20] then '0' else [20] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+	
+	declare @t_stkdate nvarchar(30)
+	if(@r_len='4')
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(10), GETDATE(),111)
+		set @r_lenm='7'
+	end
+	else
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+		set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+		set @r_lenm='6'
+	end
+	
+	if(len(@enddate)>=9)
+	begin
+		set @t_stkdate=@enddate
+	end
+	
+	declare @groups table(
+		groupsno nvarchar(20),
+		groups nvarchar(50)
+	)
+	
+	declare @groupstmp nvarchar(MAX)
+	set @groupstmp='[13]'
+	
+	while(charindex(',',@groupstmp)>0) 
+	begin 
+		insert @groups
+		select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),REPLACE(SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,CHARINDEX(',',@groupstmp)-CHARINDEX('@',@groupstmp)-1),' ','')
+		
+		set @groupstmp=SUBSTRING(@groupstmp,CHARINDEX(',',@groupstmp)+1,LEN(@groupstmp)) 
+	end
+	insert @groups
+	select LEFT(@groupstmp,CHARINDEX('@',@groupstmp)-1),SUBSTRING(@groupstmp,CHARINDEX('@',@groupstmp)+1,LEN(@groupstmp)) 
+
+	------------報表設定<<Start>>------------
+	declare @pageline int = case when len(@t_group) > 0 then 28 else 40 end --每頁幾行
+	------------報表設定<<End>>------------
+	
+	--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	--處理ucce用 105/08/24
+	create table #tmpx(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float,
+		noa nvarchar(50),
+		maxnoa nvarchar(50),
+		maxdate nvarchar(10)
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate)  and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @t_stkdate) and (isnull(a.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0))) 
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+		
+		insert #tmpx(typea,datea,storeno,productno,mount,weight,noa)
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0),a.noa
+		from view_ucce a left join view_ucces b on a.noa=b.noa 
+		--left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c on b.storeno=c.storeno and b.productno=c.productno  
+		where a.datea<= @t_stkdate --and a.noa=c.noa and a.datea=c.mdate
+		and (isnull(b.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		
+		update a set maxdate=(select MAX(datea) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		delete #tmpx where datea!=maxdate
+		--106/12/17 同一天盤點數量累加
+		--update a set maxnoa=(select MAX(noa) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		--delete #tmpx where noa!=maxnoa 
+			
+		insert #tmp
+		select typea,datea,storeno,productno,mount,weight from #tmpx
+		
+		delete a from #tmp a
+		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+		insert #stkucc
+		select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+		,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+		,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+		from #tmp a left join view_ucaucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+		where (isnull(a.productno,'') between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		group by a.productno,a.storeno
+		order by a.productno,a.storeno
+		
+		delete #stkucc where mount=0 and weight=0
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+
+	declare @result table(
+		gno nvarchar(1),
+		idno int identity(0,1),
+		pageno int,
+		xgroupno nvarchar(50),
+		productno nvarchar(30),
+		xproduct nvarchar(255),
+		spec nvarchar(255),
+		unit nvarchar(10),
+		totmount float,
+		safemount float,
+		price float,
+		total float
+	)
+	
+	insert into @result
+	select '0' gno,0 pageno,b.groupano,a.productno,a.product xproduct,b.spec,b.unit,a.mount totmount,b.safemount,c.price,a.mount*c.price total
+	from (
+		--select productno,MAX(product) product,sum(mount) mount from stkucc(@t_stkdate,'','') s 
+		select productno,MAX(product) product,sum(mount) mount from #stkucc s
+		where (s.storeno between @t_bstoreno and @t_estoreno) group by productno
+		having sum(mount) != 0
+	) a
+	left join ucc b on a.productno=b.noa  
+	outer apply (select top 1 * from view_costs where mon<=LEFT(@t_stkdate,@r_lenm) and productno=a.productno order by mon desc) c
+	where exists (select * from ucc where noa=a.productno) 
+	--(a.productno in (select noa from ucc)) --and (a.mount <> 0)
+	and (len(@t_typea)=0 or isnull(b.typea,'null')=@t_typea) 
+	and (len(@t_group)=0 or b.groupano=@t_group)
+	and (a.productno between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+	and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+	
+	delete @result where totmount=0
+	
+	if(@allucc='1')
+	begin
+		insert @result
+		select '0' gno ,0 pageno,groupano,	noa,product,spec,unit,0,safemount,0,0
+		from ucc where noa not in (select productno from @result) 
+		and (len(@t_typea)=0 or isnull(typea,'null')=@t_typea) 
+		and (len(@t_group)=0 or isnull(groupano,'')=@t_group)
+		and (noa between @t_bproductno and @t_eproductno) and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0)))
+		and (isnull(tggno,'') between @t_btggno and @t_etggno) 	
+	end
+	
+	if (@t_showprice='0')
+	begin
+		update @result set price=null,total=null
+	end
+
+	------------更新頁數<<Start>>------------
+	declare @idno int
+	declare @pageno int
+	declare @recCount int = 1
+	declare @pageno_int int = 0
+	declare @lastnoa nvarchar(max) = ''
+	declare @nextidno int
+	declare cursor_table cursor for
+		select
+			a.idno
+		from @result a order by a.idno
+	open cursor_table
+	fetch next from cursor_table
+	into @idno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((@recCount > @pageline))
+		begin
+			set @recCount = 1
+			set @pageno_int = @pageno_int+1
+		end
+		if(@recCount = @pageline)
+		begin
+			set @nextidno = @idno+1
+		end
+		update @result set pageno=@pageno_int where idno=@idno
+		set @recCount = @recCount+1
+		fetch next from cursor_table
+		into @idno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------更新頁數<<End>>-------------
+	------------插入表頭及表尾<<Start>>-------------
+	----------gno->1=有群組表頭,2=有群組表身,3=有群組跳頁,4=無群組表頭,5=無群組表身,6=無群組跳頁
+	if((select count(*) from @result)>0)
+	begin
+		if(len(@t_group) > 0)
+		begin
+			insert into @result(gno,pageno)
+				select '1',pageno from @result where gno='0' group by pageno
+			
+			insert into @result(gno,pageno,totmount,safemount,total)
+				select '3',MAX(pageno),sum(totmount),sum(safemount),sum(total) from @result where gno='0'
+			
+			insert into @result(gno,pageno)
+				select '4',pageno from @result where gno='0' group by pageno
+			update @result set gno='2' where gno='0'
+		end
+		else
+		begin
+			insert into @result(gno,pageno)
+				select '5',pageno from @result where gno='0' group by pageno
+				
+			insert into @result(gno,pageno,totmount,safemount,total)
+				select '7',MAX(pageno),sum(totmount),sum(safemount),sum(total) from @result where gno='0'
+				
+			insert into @result(gno,pageno)
+				select '8',pageno from @result where gno='0' group by pageno
+			update @result set gno='6' where gno='0'		
+		end
+	end
+	
+	------------插入表頭及表尾<<End>>-------------
+	select gno,pageno,xgroupno,(select top 1 groups from @groups where groupsno=a.xgroupno) xgroups
+		,productno,xproduct+(case when @isspec='1' then ' '+isnull(spec,'') else '' end) xproduct ,unit
+		,dbo.getComma(totmount,[21]) totmount
+		,dbo.getComma(safemount,[21]) safemount
+		,dbo.getComma(price,[23]) price
+		,dbo.getComma(total,0) total
+		,Convert(varchar(10),getdate(),111) wtoday
+		,case when isnull(c.inmount,0)!=0 then dbo.getComma(case when a.totmount<0 then -1 else 1 end*FLOOR(abs(a.totmount)/c.inmount),-1) else '' end lengthcb
+		,case when isnull(c.inmount,0)!=0 then cast(a.totmount as int)%cast(c.inmount as int) else a.totmount end lengthcc
+		,c.inmount
+		from @result a 
+		outer apply (select top 1 noq,inmount,pack,packway from pack2s where noa=a.productno and isnull(pack,'')!='' order by inmount desc)c
+		order by pageno,gno,idno,xgroupno,productno
+	
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+	;
+-----------------------------------------------------------------------------------------------------------------------
+z_ucc4_xy:--z_ucc4_xy  
+declare @t_bstoreno nvarchar(50) 
+declare @t_estoreno nvarchar(50)
+declare @t_bpno nvarchar(50) 
+declare @t_epno nvarchar(50)  
+declare @t_btggno nvarchar(90)
+declare @t_etggno nvarchar(90)
+declare @enddate nvarchar(30)
+declare @allucc nvarchar(30)
+declare @t_project nvarchar(MAX)='[25]'
+declare @t_ucc nvarchar(MAX)
+declare @isspec nvarchar(MAX)='[27]'
+declare @r_len nvarchar(MAX)='[28]'
+
+set @t_bstoreno = case when '#non' = [6] then '' else [6] end
+set @t_estoreno = case when '#non' = [7] then CHAR(255) else [7] end
+set @t_bpno = case when '#non' = [4] then '' else [4] end
+set @t_epno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_btggno = case when '#non'=[17] then '' else [17] end
+set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+set @enddate=case when '#non'=[19] then '' else [19] end
+set @allucc=case when '#non'=[20] then '0' else [20] end
+set @t_ucc = case when '#non'=[24] then '' else [24] end
+
+declare @t_stkdate nvarchar(30) --今天日期
+if(@r_len='4')
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(10), GETDATE(),111)
+	end
+	else
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+		set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+	end
+
+if(len(@enddate)>=9)
+begin
+	set @t_stkdate=@enddate
+end
+--******************************************************************
+
+--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	declare @cmd nvarchar(max) 
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	--處理ucce用105/08/24
+	create table #tmpx(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float,
+		noa nvarchar(50),
+		maxnoa nvarchar(50),
+		maxdate nvarchar(10)
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate)  and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @t_stkdate) and (isnull(a.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+		
+		insert #tmpx(typea,datea,storeno,productno,mount,weight,noa)
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0),a.noa
+		from view_ucce a left join view_ucces b on a.noa=b.noa 
+		--left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c on b.storeno=c.storeno and b.productno=c.productno  
+		where a.datea<= @t_stkdate --and a.noa=c.noa and a.datea=c.mdate
+		and (isnull(b.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		and (isnull(b.storeno,'') between @t_bstoreno and @t_estoreno)
+		
+		update a set maxdate=(select MAX(datea) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		delete #tmpx where datea!=maxdate
+		--update a set maxnoa=(select MAX(noa) from #tmpx where storeno=a.storeno and productno=a.productno) from #tmpx a
+		--delete #tmpx where noa!=maxnoa 
+		
+		insert #tmp
+		select typea,datea,storeno,productno,mount,weight from #tmpx
+		
+		delete a from #tmp a
+		where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+		insert #stkucc
+		select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+		,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+		,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+		from #tmp a left join view_ucaucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+		where (isnull(a.productno,'') between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		and (isnull(a.storeno,'') between @t_bstoreno and @t_estoreno)
+		group by a.productno,a.storeno
+		order by a.productno,a.storeno
+		
+		delete #stkucc where mount=0 and weight=0
+	--104/03/23-------------------------------------------------------------------------------------------------------------------------------
+
+declare @tmp table(
+	gno nvarchar(1), 
+	storeno nvarchar(50),
+	stores nvarchar(100),
+	pno nvarchar(50), 
+	product nvarchar(255), 
+	spec nvarchar(255),
+	unit nvarchar(20), 
+	mount float
+) 
+
+insert into @tmp
+select '0',a.storeno,a.store,a.productno,a.product,b.spec,(select top 1 unit from view_ucaucc where noa=a.productno),a.mount 
+--from stkucc(@t_stkdate,'','') a
+from #stkucc a 
+left join ucc b on a.productno = b.noa
+where ( a.storeno between @t_bstoreno and @t_estoreno) and (a.productno between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+and a.productno !='' --and a.mount !=0
+and isnull(b.noa,'')!=''
+and (isnull(b.tggno,'') between @t_btggno and @t_etggno)
+
+delete @tmp where mount=0
+
+if(@allucc='1')
+begin
+	insert @tmp
+	select '0' gno,b.noa,b.store,a.noa,a.product,spec,unit,0
+	from (select * from ucc where (noa between @t_bpno and @t_epno) and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0))) and (tggno between @t_btggno and @t_etggno))a 
+	,(select * from store where (noa  between @t_bstoreno and @t_estoreno)) b
+	where b.noa+'__'+a.noa not in (select storeno+'__'+pno from @tmp) 
+end
+	
+insert into @tmp(storeno,gno,mount)
+select storeno,'1',sum(mount) from @tmp group by storeno
+
+select gno,storeno,stores,pno,product+(case when @isspec='1' then ' '+isnull(spec,'') else '' end) product,unit
+,dbo.getComma(mount,[21]) mount
+,case when isnull(c.inmount,0)!=0 then dbo.getComma(case when a.mount<0 then -1 else 1 end*FLOOR(abs(a.mount)/c.inmount),-1) else '' end lengthcb
+,case when isnull(c.inmount,0)!=0 then cast(a.mount as int)%cast(c.inmount as int) else a.mount end lengthcc
+,c.inmount
+from @tmp a 
+outer apply (select top 1 noq,inmount,pack,packway from pack2s where noa=a.pno and isnull(pack,'')!='' order by inmount desc)c
+order by storeno,gno,pno
+
+--104/03/23 直接針對要的產品>>讀全部庫存再篩選會很慢---------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpx')is not null
+	BEGIN
+		drop table #tmpx
+	END
+	
+--104/03/23----------------------------------------------------------------------------------------------------------------------------------
+;
+--******************************************************************************************
+z_ucc5_xy:--ucc5_xy--庫存預估表  
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_bstoreno nvarchar(50)
+	declare @t_estoreno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_group nvarchar(15)
+	declare @t_showprice  nvarchar(15)
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @enddate nvarchar(30)
+	declare @t_ucc nvarchar(MAX)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @lowsafe nvarchar(30) 
+	declare @isspec nvarchar(MAX)='[27]'
+	
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_bstoreno = case when '#non'=[6] then '' else [6] end
+	set @t_estoreno = case when '#non'=[7] then char(255) else [7] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_group = case when '#non'=[12] then '' else [12] end
+	set @t_showprice=[15]
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @enddate = case when '#non'=[19] then '' else [19] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+	set @lowsafe = case when '#non'=[26] then '' else [26] end
+	
+	declare @t_bcustno nvarchar(50)
+	declare @t_ecustno nvarchar(50)
+	declare @t_product nvarchar(MAX)
+	declare @t_style nvarchar(MAX)
+	declare @t_spec nvarchar(MAX)
+	
+	set @t_bcustno = case when '#non' = [29] then '' else [29] end
+	set @t_ecustno = case when '#non' = [30] then char(255) else [30] end
+	set @t_product = case when '#non' = [31] then '' else [31] end
+	set @t_style = case when '#non' = [32] then '' else [32] end
+	set @t_spec = case when '#non' = [33] then '' else [33] end
+	
+	declare @allucc nvarchar(30)
+	set @allucc = case when '#non'=[20] then '0' else [20] end
+-------------------------------------------------------------------------------------------	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+
+	declare @types table(
+		typesno nvarchar(20),
+		typea nvarchar(50)
+	)
+	
+	declare @typestmp nvarchar(MAX)
+	set @typestmp='1@商品,4@原料,5@物料,6@下腳品,7@加工'
+	
+	while(charindex(',',@typestmp)>0) 
+	begin 
+		insert @types
+		select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),REPLACE(SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,CHARINDEX(',',@typestmp)-CHARINDEX('@',@typestmp)-1),' ','')
+		
+		set @typestmp=SUBSTRING(@typestmp,CHARINDEX(',',@typestmp)+1,LEN(@typestmp)) 
+	end
+	insert @types
+	select LEFT(@typestmp,CHARINDEX('@',@typestmp)-1),SUBSTRING(@typestmp,CHARINDEX('@',@typestmp)+1,LEN(@typestmp)) 
+
+	create table #tmp(
+		gno nvarchar(1),
+		pno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,--庫存量
+		safem float,--安全存量
+		vmount float,--預計出貨量
+		rmount float,--預計入庫量
+		smount float,--預估存量 (現有庫存+預入-預計出)
+		
+		price float, --平均單價
+		total float, --金額
+		cmount float,--寄庫量
+		
+		custno nvarchar(50),
+		comp nvarchar(MAX)
+	)
+	
+	declare @stkucc table(
+		pno nvarchar(100),
+		mount float
+	)
+	
+	declare @ordeunvcc table(
+		pno nvarchar(100),
+		vmount float
+	)
+	
+	declare @ordcunrc2 table(
+		pno nvarchar(100),
+		rmount float,
+		rmoney float
+	)
+	
+	insert @stkucc
+	select productno,SUM(mount)mount from stkucc(@enddate,'','')
+	where storeno between @t_bstoreno and @t_estoreno
+	group by productno
+	
+	
+	insert @ordeunvcc
+	select o.productno,SUM(isnull(o.mount,0)-isnull(v.vmount,0))vmount from view_ordes o 
+	outer apply (select sum(mount)vmount from view_vccs where o.noa=ordeno and o.no2=no2 and typea!='2')v
+	where isnull(o.enda,0)!=1 and isnull(o.cancel,0)!=1 and isnull(o.mount,0)-isnull(v.vmount,0)>0
+	group by o.productno
+	
+	insert @ordcunrc2
+	select productno,SUM(rmount),SUM(rmoney) from (
+		select c.productno,SUM(isnull(c.mount,0)-isnull(r.rmount,0))rmount 
+		,SUM((isnull(c.mount,0)-isnull(r.rmount,0))*c.price)rmoney
+		from view_ordcs c 
+		outer apply (select sum(mount)rmount from view_rc2s where c.noa=ordeno and c.no2=no2 and typea!='2')r
+		where isnull(c.enda,0)!=1 and isnull(c.cancel,0)!=1 and isnull(c.mount,0)-isnull(r.rmount,0)>0
+		group by c.productno
+		union all
+		select a.productno,SUM(isnull(a.mount,0)-isnull(b.mount,0)) mount 
+		,SUM((isnull(a.mount,0)-isnull(b.mount,0))*a.price) rmoney 
+		from view_cub a outer apply (select SUM(mount)mount from view_inas where rc2no=a.noa)b
+		where isnull(a.enda,0)!=1 and isnull(a.cancel,0)!=1 and isnull(a.mount,0)-isnull(b.mount,0)>0
+		group by a.productno
+	)tmp group by productno
+	
+	insert into #tmp(gno,pno,product,spec,style,unit,mount,safem,vmount,rmount,smount,price,total)
+	select '0',a.noa,a.product,a.spec,style,a.unit,isnull(b.mount,0),isnull(a.safemount,0),isnull(c.vmount,0),isnull(d.rmount,0),isnull(b.mount,0)-isnull(c.vmount,0)+isnull(d.rmount,0)
+	,isnull(round(d.rmoney/d.rmount,4),0),isnull(d.rmoney,0)
+	from ucc a left join @stkucc b on a.noa=b.pno
+	left join @ordeunvcc c on a.noa=c.pno
+	left join @ordcunrc2 d on a.noa=d.pno
+	where (noa between @t_bproductno and @t_eproductno) 
+	and (@t_ucc='' or (RTRIM(noa)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(noa),@t_ucc)+1),'.',0)))
+	and (len(@t_typea)=0 or typea=@t_typea)
+	and (len(@t_group)=0 or groupano=@t_group)
+	and (isnull(tggno,'') between @t_btggno and @t_etggno)
+	and (len(@t_product)=0 or product like '%'+@t_product+'%')
+	and (len(@t_style)=0 or @t_style like '%'+style+'%') --106/04/27 做成多選
+	and (len(@t_spec)=0 or spec like '%'+@t_spec+'%')
+	
+	update a
+	set custno=isnull(b.noa,'')
+	,comp=isnull(b.nick,'')
+	,cmount=c.cmount
+	from #tmp a left join cust b on left(pno,5)=b.noa and CHARINDEX('-',pno)>0
+	outer apply (select sum(case when typea='1' then 1 else -1 end * (isnull(tranmoney2,0)-isnull(tranmoney3,0)))cmount 
+	from view_vccs where datea<=@enddate and (itemno='1' or itemno='2') and productno=a.pno) c
+	
+	delete #tmp where custno not between @t_bcustno and @t_ecustno
+		
+	if(@lowsafe='1')
+		delete #tmp where (smount+isnull(cmount,0))>=safem
+	
+	if(@allucc!='1')
+		delete #tmp where (mount+isnull(cmount,0))=0 and vmount=0 and rmount=0
+	
+	if((select count(*) from #tmp)>0)
+	begin
+		insert #tmp(gno,pno,product,spec,style,unit,mount,safem,vmount,rmount,smount,total,cmount)
+		select '1',CHAR(255),CHAR(255),CHAR(255),CHAR(255),CHAR(255),SUM(mount),SUM(safem),SUM(vmount),SUM(rmount),SUM(smount) 
+		,sum(total),SUM(cmount)
+		from #tmp
+	end
+
+	select 
+	dbo.getComma(mount,-1) mount
+	,dbo.getComma(safem,-1) safem
+	,dbo.getComma(vmount,-1) vmount
+	,dbo.getComma(rmount,-1) rmount
+	,dbo.getComma(smount,-1) smount
+	,dbo.getComma(price,-1) price
+	,dbo.getComma(total,-1) total
+	,dbo.getComma(cmount,-1) cmount
+	,@enddate enddate
+	,dbo.getComma(mount+isnull(cmount,0),-1) amount
+	,*
+	,'z_vcc_xy?pno=\'''+pno+'\'' and edate=\'''+@enddate+'\'' and cmount=$cmount' qhref
+	from #tmp a 
+	order by gno,pno
+	
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
+--***************************************************************************************
+z_ucctb_xy:--z_ucctb_xy
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	declare @t_bproductno nvarchar(50)
+	declare @t_eproductno nvarchar(50)
+	declare @t_bstoreno nvarchar(50)
+	declare @t_estoreno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_acomp nvarchar(MAX)='[16]'
+	declare @qhref_acomp nvarchar(10) =''
+	declare @t_btggno nvarchar(90)
+	declare @t_etggno nvarchar(90)
+	declare @t_project nvarchar(MAX)='[25]'
+	declare @t_ucc nvarchar(MAX)
+	declare @r_len nvarchar(MAX)='[28]'
+	
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	set @t_bproductno = case when '#non'=[4] then '' else [4] end
+	set @t_eproductno = case when '#non'=[5] then char(255) else [5] end
+	set @t_bstoreno = case when '#non'=[6] then '' else [6] end
+	set @t_estoreno = case when '#non'=[7] then char(255) else [7] end
+	set @t_typea = case when '#non'=[10] then '' else [10] end
+	set @t_btggno = case when '#non'=[17] then '' else [17] end
+	set @t_etggno = case when '#non'=[18] then char(255) else [18] end
+	set @t_ucc = case when '#non'=[24] then '' else [24] end
+-------------------------------------------------------------------------------------------------------
+	declare @cmd nvarchar(max)
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		set @cmd = 'drop table #tmpa'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	create table #tmp(
+		gno nvarchar(1),
+		recno int,
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		productno nvarchar(30),
+		xproduct nvarchar(200),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(100),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+	)
+	
+	insert into #tmp
+	select
+		'0' gno, ROW_NUMBER()over(order by R1.productno,R1.storeno,R1.datea,R1.typea)as recno,R1.*, 0 totmount, 0 totweight,''
+	from(
+		select isnull(a.storeno,'')storeno ,a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea,'01' typea,'盤點調整' typec, 
+		      a.noa,'' comp,a.unit,a.mount,a.weight,'ucce?noa=$noa?'+accy qhref
+		from view_ucces a left join view_ucaucc b on a.productno=b.noa
+		--where  a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then 'A0' else '10' end typea,case a.typea when '2' then '進貨退回' else '進貨' end typec,
+		       b.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'rc2?noa=$noa?'+b.accy qhref
+		from view_rc2s b left join view_rc2 a on a.noa=b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea,case a.typea when '2' then '11' else 'B0' end typea,case a.typea when '2' then '出貨退回' else '出貨' end typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit,(case when isnull(b.gmount,0)!=0 then b.gmount else b.mount end)
+		       ,(case when isnull(b.gweight,0)!=0 then b.gweight else b.weight end),'vcc_xy?noa=$noa?'+b.accy qhref
+		from view_vccs b left join view_vcc a on a.noa=b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '入庫' typec,
+		       b.noa,  isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'ina_xy?noa=$noa?'+b.accy qhref
+		from view_inas b left join view_ina a on b.noa=a.noa 
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '領料' typec,
+		       b.noa, isNull(a.comp,'') comp, b.unit, b.mount, b.weight,'get?noa=$noa?'+b.accy qhref
+		from view_gets b left join view_get a on a.noa=b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and b.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '製品領料' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'worka?noa=$noa?'+b.accy qhref
+		from view_workas b left join view_worka a on a.noa = b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '委製領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, (case when a.typea='2' then -1 else 1 end)*b.mount, (case when a.typea='2' then -1 else 1 end)*b.weight,'workc?noa=$noa?'+b.accy qhref
+		from view_workcs b left join view_workc a on a.noa = b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '製品入庫' typec,
+		       a.noa, isNull(a.station,'') comp, b.unit, b.mount, b.weight,'workb?noa=$noa?'+b.accy qhref
+		from view_workbs b left join view_workb a on a.noa = b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '委製入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, b.unit, b.mount+b.inmount-b.outmount, b.weight,'workd?noa=$noa?'+b.accy qhref
+		from view_workds b left join view_workd a on a.noa = b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		
+		union all
+		select isnull(a.storeinno,''),a.storein+'<'+a.store
+		,b.productno,b.product xproduct,isnull(a.datea,'') datea, '10' typea
+		,case when a.typea='1' then '廠調入庫+' when a.typea='2' then '委入入庫' when a.typea='3' then '委出入庫' 
+				when a.typea='4' then '客借入庫' when a.typea='5' then '客歸入庫' when a.typea='6' then '委加入庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeinno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store+'>'+a.storein
+		,b.productno,b.product xproduct,isnull(a.datea,'') datea, 'C0' typea
+		,case when a.typea='1' then '廠調出庫' when a.typea='2' then '委入出庫' when a.typea='3' then '委出出庫' 
+				when a.typea='4' then '客借出庫' when a.typea='5' then '客歸出庫' when a.typea='6' then '委加出庫' else '' end typec
+		,a.noa, isNull(a.tgg,'') comp, b.unit, b.mount, b.weight,'cng?noa=$noa?'+b.accy qhref
+		from view_cngs b left join view_cng a on a.noa = b.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		-----------------------------------
+		union all
+		select isnull(b.storeno,''),d.store,b.productno,b.product xproduct,isnull(a.datea,'') datea, '12' typea, '裁剪入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'cut?noa=$noa?'+b.accy qhref
+		from view_cuts b left join view_cut a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		left join store d on b.storeno=d.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(a.storeno,''),a.store,a.productno,a.product xproduct,isnull(a.datea,'') datea, 'C0' typea, '裁剪領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, a.mount, a.oweight,'cut?noa=$noa?'+a.accy qhref
+		from view_cut a left join view_ucaucc c on a.productno=c.noa
+		--where a.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(a.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(a.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(a.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '加工入庫' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight ,'cub_xy?noa=$noa?'+b.accy qhref 
+		from view_cubu b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno  and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '加工領料' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.gmount, b.gweight,'cub_xy?noa=$noa?'+b.accy qhref 
+		from view_cubt b left join view_cub a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		----------
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, '12' typea, '委外借入' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcfs b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+		union all
+		select isnull(b.storeno,''),b.store,b.productno,b.product xproduct,isnull(b.datea,'') datea, 'C0' typea, '委外借出' typec,
+		       a.noa, isNull(a.tgg,'') comp, c.unit, b.mount, b.weight,'vcf?noa=$noa?' qhref
+		from vcft b left join vcf a on a.noa = b.noa left join view_ucaucc c on b.productno=c.noa
+		--where b.productno BETWEEN @t_bproductno AND @t_eproductno and a.datea<=@t_edate and isnull(b.storeno,'') between @t_bstoreno and @t_estoreno and (@t_ucc='' or (RTRIM(b.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(b.productno),@t_ucc)+1),'.',0)))
+	) as R1
+	--left join ucc b on R1.productno=b.noa
+	--where (isnull(b.tggno,'') between @t_btggno and @t_etggno)  and isnull(b.noa,'')!=''
+	
+	delete R1
+	from #tmp R1 
+	left join ucc b on R1.productno=b.noa
+	where not(
+		(isnull(b.tggno,'') between @t_btggno and @t_etggno)  and isnull(b.noa,'')!=''
+		and R1.productno BETWEEN @t_bproductno AND @t_eproductno and R1.datea<=@t_edate and isnull(R1.storeno,'') between @t_bstoreno and @t_estoreno 
+		and (@t_ucc='' or (RTRIM(R1.productno)=dbo.split(RIGHT(@t_ucc,LEN(@t_ucc)-CHARINDEX(RTRIM(R1.productno),@t_ucc)+1),'.',0)))
+	)
+	create index #tmpindex on #tmp(productno,storeno,datea,recno)
+	--*****************************************************************************************	
+	
+	create table #tmpa(
+		gno nvarchar(1),
+		recno int IDENTITY(1,1),
+		storeno nvarchar(50),
+		stores nvarchar(100),
+		productno nvarchar(30),
+		xproduct nvarchar(100),
+		datea nvarchar(10),
+		typea nvarchar(10),
+		typec nvarchar(10),
+		noa nvarchar(20),
+		comp nvarchar(100),
+		unit nvarchar(10),
+		mount float,
+		weight float,
+		qhref nvarchar(50),
+		totmount float,
+		totweight float,
+		ucctype nvarchar(15)
+		primary key (productno,storeno,recno)
+	)
+	
+	declare @recno int
+	declare @productno nvarchar(30)
+	declare @storeno nvarchar(30)
+	declare @typea nvarchar(10)
+	declare @datea nvarchar(10)
+	declare @mount float
+	declare @weight float
+	
+	declare @t_productno nvarchar(30)
+	declare @t_storeno nvarchar(30)
+	declare @t_mount float
+	declare @t_weight float
+	declare @t_totmount float
+	declare @t_totweight float
+	declare @tt_totmount float
+	declare @tt_totweight float
+	declare @pt_totmount float
+	declare @pt_totweight float
+	
+	declare @tdate nvarchar(10)=''
+	declare @uccecount float=0
+	
+	set @t_productno = '##########'
+	set @t_storeno = '##########'
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	
+	declare cursor_table cursor for
+	select recno,productno,storeno,typea,datea,mount,weight from #tmp order by productno,storeno,recno
+	open cursor_table
+	fetch next from cursor_table
+	into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if @t_productno!=@productno and @t_productno!='##########'
+		begin
+			if not(@t_totmount=0 and @t_totweight=0) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+			begin
+				insert into #tmpa
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+			
+				insert into #tmpa
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+				
+			end
+			
+				set @tt_totmount = @tt_totmount+@t_totmount
+				set @tt_totweight = @tt_totweight+@t_totweight
+				
+				if(select count(*) from #tmpa where productno=@t_productno)>0
+				begin
+					insert into #tmpa
+					select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+					'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+				end
+				   
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @tt_totmount = 0
+			set @tt_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+			set @uccecount = 0
+			set @tdate=''
+		end
+		else if @t_storeno!=@storeno and @t_storeno!='##########'
+		begin
+		
+			if not(@t_totmount=0 and @t_totweight=0 ) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+			begin
+				insert into #tmpa
+				select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+					  
+				insert into #tmpa
+				select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+				'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+			end
+			
+			set @tt_totmount = @tt_totmount+@t_totmount
+			set @tt_totweight = @tt_totweight+@t_totweight
+			
+			set @t_mount = 0
+			set @t_weight = 0
+			set @t_totmount = 0
+			set @t_totweight = 0
+			set @pt_totmount = 0
+			set @pt_totweight = 0
+			set @uccecount = 0
+			set @tdate=''
+		end
+		
+		if(@typea='01' and @tdate=@datea)
+		begin
+			set @uccecount=1
+		end
+		else 
+		begin
+			set @uccecount=0
+		end
+
+		if  @datea between @t_bdate and @t_edate
+		begin
+			set @t_mount =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @t_weight =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+				
+			insert #tmpa
+			select gno,storeno,stores,productno,xproduct,datea,typea,typec,noa,comp,unit,mount,weight,qhref,@t_mount,@t_weight,ucctype 
+			from #tmp where recno=@recno	
+		end
+		else
+		begin
+			set @pt_totmount =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+				end
+			set @pt_totweight =
+				case 
+				when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+				when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+				when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+				end
+		end
+		
+		set @t_totmount =
+			case 
+			when (@typea='01' and @uccecount=0) or @typea='ZZ' then @mount
+			when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totmount + @mount
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totmount - @mount
+			end
+		set @t_totweight =
+			case 
+			when (@typea='01' and @uccecount=0) or @typea='ZZ' then @weight
+			when (@typea='01' and @uccecount>0) or @typea='10' or @typea='11' or @typea='12' then @t_totweight + @weight
+			when @typea='A0' or @typea='B0' or @typea='C0' then @t_totweight - @weight
+			end
+		
+		set @t_productno = @productno
+		set @t_storeno = @storeno
+		set @tdate=@datea
+
+		fetch next from cursor_table
+		into @recno,@productno,@storeno,@typea,@datea,@mount,@weight
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--最後一筆處理---------------------------------------------------------------------
+	if not(@t_totmount=0 and @t_totweight=0) or (select count(*) from #tmpa where storeno=@t_storeno and productno=@t_productno)>0
+	begin
+		insert into #tmpa
+		select '0' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,'' datea,'02' typea,'前期' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @pt_totmount totmount, @pt_totweight totweight,''
+		
+		insert into #tmpa
+		select '1' gno,@t_storeno,(select top 1 store from store where noa=@t_storeno),@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'小計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @t_totmount totmount, @t_totweight totweight,''
+		
+	end
+	
+	set @tt_totmount = @tt_totmount+@t_totmount
+	set @tt_totweight = @tt_totweight+@t_totweight
+	
+	if(select count(*) from #tmpa where productno=@t_productno)>0
+	begin
+		insert into #tmpa
+		select '2' gno,char(255),'',@t_productno,(select top 1 product from view_ucaucc where noa=@t_productno) xproduct,CHAR(255) datea,'zz' typea,'總計' typec, 
+		'' noa,'' comp, '' unit, null mount, null weight,'', @tt_totmount totmount, @tt_totweight totweight,''
+	end
+	
+	set @t_mount = 0
+	set @t_weight = 0
+	set @t_totmount = 0
+	set @t_totweight = 0
+	set @tt_totmount = 0
+	set @tt_totweight = 0
+	set @pt_totmount = 0
+	set @pt_totweight = 0
+	--------------------------------------------------------------------------------------------
+	declare @ucctype nvarchar(15)
+	declare cursor_table cursor for
+	select noa,typea from ucc order by noa
+	open cursor_table
+	fetch next from cursor_table
+	into @t_productno,@ucctype
+	while(@@FETCH_STATUS <> -1)
+	begin
+		update #tmpa set ucctype = @ucctype where productno=@t_productno
+		fetch next from cursor_table
+		into @t_productno,@ucctype
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	--刪除數量=0且資料只有 前期
+	delete a from #tmpa a where exists (
+		select storeno,productno
+		from #tmpa where gno='0' and storeno=a.storeno and productno=a.productno
+		group by storeno,productno having sum(isnull(totmount,0))=0 and count(*)=1
+	)
+	
+	--*****************************************************************************************	
+	
+	select gno,recno,storeno,case when ISNULL(stores,'')='' then storeno else stores end stores,productno,xproduct,datea,typea,typec,noa,left(comp,11) comp,unit,ucctype,qhref
+	,dbo.getComma((case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*round(mount,[21]),[21])	mount
+	,dbo.getComma((case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*weight,[22]) weight
+	,dbo.getComma(totmount,[21]) totmount
+	,dbo.getComma(totweight,[22]) totweight
+	
+	,case when isnull(c.inmount,0)!=0 then dbo.getComma((case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*case when a.mount<0 then -1 else 1 end*FLOOR(abs(a.mount)/c.inmount),-1) else '' end lengthcb
+	,(case when typea='A0' or typea='B0' or typea='C0' then -1 else 1 end)*case when isnull(c.inmount,0)!=0 then cast(a.mount as int)%cast(c.inmount as int) else a.mount end lengthc
+	,c.inmount
+	,case when isnull(c.inmount,0)!=0 then dbo.getComma(case when a.totmount<0 then -1 else 1 end*FLOOR(abs(a.totmount)/c.inmount),-1) else '' end tlengthcb
+	,case when isnull(c.inmount,0)!=0 then cast(a.totmount as int)%cast(c.inmount as int) else a.totmount end tlengthc
+	
+	from #tmpa a 
+	outer apply (select top 1 noq,inmount,pack,packway from pack2s where noa=a.productno and isnull(pack,'')!='' order by inmount desc)c
+	where (len(@t_typea) = 0 or isnull(ucctype,'null') = @t_typea)
+	order by productno,storeno, gno,datea,typea,recno
+	
+	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#tmpa')is not null
+	BEGIN
+		set @cmd = 'drop table #tmpa'
+		EXECUTE sp_executesql @cmd
+	END
+	;
+----------------------------------------------------------------------------------------------------

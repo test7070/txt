@@ -1,0 +1,268 @@
+z_kpipro1:--z_kpipro1
+	SET QUOTED_IDENTIFIER OFF
+	declare @t_accy nvarchar(10) 
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	set @t_accy = '[1]'
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+	------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		gno nvarchar(10),
+		recno int,
+		kpi_name nvarchar(max),
+		kpi float,
+		kpi_value nvarchar(max)
+	)
+	------------------------------------------------------------------------------------------------	
+	
+--總抱怨件數
+	insert @tmp
+	select '0',1,'總客訴件數',count(*),CAST(count(*)as nvarchar(50))+' 件'
+	from crmservice where reason='客訴' and datea between @t_bdate and @t_edate
+	
+	--各公司抱怨件數
+	insert @tmp
+	select '0',2,'　'+cno+' 公司客訴件數',count(*),CAST(count(*) as nvarchar(50))+' 件'
+	from crmservice where reason='客訴' and datea between @t_bdate and @t_edate
+	group by cno
+	
+	--總客訴賠償金額
+	insert @tmp
+	select '0',3,'總客訴賠償金額',isnull(SUM(money),0)/10000,CAST(round(isnull(SUM(money),0)/10000,0) as nvarchar(10))+' 萬元'
+	from crmservice where reason='客訴' and datea between @t_bdate and @t_edate
+	
+	--各公司賠償金額
+	insert @tmp
+	select '0',4,'　'+cno+' 公司客訴賠償金額',isnull(SUM(money),0)/10000,CAST(round(isnull(SUM(money),0)/10000,0) as nvarchar(10))+' 萬元'
+	from crmservice where reason='客訴' and datea between @t_bdate and @t_edate
+	group by cno
+	
+	--總銷貨退回率
+	insert @tmp
+	select '0',5,'總銷貨退回率'
+	,case when sum(case when typea='1' then total else 0 end)=0 then 0 else round(sum(case when typea='2' then total else 0 end)/sum(case when typea='1' then total else 0 end)*100,2) end
+	,dbo.getComma(case when sum(case when typea='1' then total else 0 end)=0 then 0 else round(sum(case when typea='2' then total else 0 end)/sum(case when typea='1' then total else 0 end)*100,2) end ,2)+' %'
+	from view_vcc where datea between @t_bdate and @t_edate
+	
+	--總製品退回率
+	insert @tmp
+	select '0',6,'總製品退回率'
+	,isnull(case when sum(mount)=0 then 0 else sum(case when typea='2' then mount else 0 end)/sum(mount) end*1000000,0)
+	,isnull(cast(case when sum(mount)=0 then 0 else sum(case when typea='2' then mount else 0 end)/sum(mount) end*1000000 as nvarchar(100))+' PPM','無資料')
+	from view_vccs a where exists (select * from uca where noa=a.productno) and datea between @t_bdate and @t_edate
+	
+	--客訴回覆達成率
+	insert @tmp
+	select '0',7,'客訴回覆達成率' 
+	,round(sum(case when repdate!='' then 1.0 else 0.0 end )/count(*)*100,2)
+	,isnull(dbo.getComma(round(sum(case when repdate!='' then 1.0 else 0.0 end )/count(*)*100,2),2)+'%','無資料')
+	from crmservice where datea between @t_bdate and @t_edate --reason='客訴賠償'
+	
+	--客訴回覆時間達成率 3天
+	insert @tmp
+	select '0',8,'客訴回覆時間達成率(3天)' 
+	,round(sum(case when repdate!='' and dbo.q_cdn(datea,3)<=repdate then 1.0 else 0.0 end )/count(*)*100,2)
+	,isnull(dbo.getComma(round(sum(case when repdate!='' and dbo.q_cdn(datea,3)<=repdate then 1.0 else 0.0 end )/count(*)*100,2),2)+'%','無資料')
+	from crmservice where datea between @t_bdate and @t_edate --reason='客訴賠償'
+		
+	--供應商交期達成率(準時交貨數/總應交貨數*100%) 
+	insert @tmp 
+	select '0',9,'供應商交期達成率',SUM(case when a.datea<=b.trandate or b.datea='' then b.mount else 0 end)/SUM(b.mount) 
+	,isnull(dbo.getComma(ROUND(SUM(case when a.datea<=b.trandate or b.datea='' then b.mount else 0 end)/SUM(b.mount)*100,2),2)+'%','無資料') 
+	from view_rc2s a 
+	left join view_ordcs b on a.ordeno=b.noa and a.no2=b.no2 
+	where (a.datea between @t_bdate and @t_edate) and isnull(b.noa,'')!='' 
+	
+	--供應商品質達成率(不良進料批數/進料總批數*100% ) 
+	declare @wcount float=(select count(*) from view_rc2bs where (isnull(wmount,0)!=0 or ISNULL(bkmount,0)!=0 ) and (datea between @t_bdate and @t_edate)) 
+	declare @rcount float=(select count(*) from view_rc2bs where (datea between @t_bdate and @t_edate))+(select count(*) from view_rc2s where (datea between @t_bdate and @t_edate)) 
+	insert @tmp 
+	select '0',11,'供應商品質達成率',@wcount/nullif(@rcount,0)
+	,isnull(dbo.getComma(ROUND(@wcount/nullif(@rcount,0)*100,2),2)+'%','無資料') 
+	from view_rc2bs 
+	where (datea between @t_bdate and @t_edate)
+	group by accy
+	
+	-- 進料檢驗不良批率(進料不良批/進料總檢驗批*100%) 
+	declare @rccount float=(select count(*) from view_rc2bs where (datea between @t_bdate and @t_edate)) 
+	insert @tmp 
+	select '0',13,'進料檢驗不良批率',@wcount/nullif(@rccount,0) 
+	,isnull(dbo.getComma(ROUND(@wcount/nullif(@rccount,0)*100,2),2)+'%','無資料') 
+	from view_rc2bs 
+	where (datea between @t_bdate and @t_edate)
+	group by accy 
+	
+	--進料檢驗批退率=(批退批數/總進料批數)X100% 
+	declare @recount float=(select count(*) from view_rc2bs where qcresult='RE' and (datea between @t_bdate and @t_edate)) 
+	insert @tmp 
+	select '0',14,'進料檢驗批退率',@recount/nullif(@rccount,0)
+	,isnull(dbo.getComma(ROUND(@recount/nullif(@rccount,0)*100,2),2)+'%','無資料') 
+	from view_rc2bs 
+	where (datea between @t_bdate and @t_edate)
+	group by accy 
+	
+	--補料成本
+	insert @tmp
+	select '0',15,'補料成本',SUM(a.mount*b.salecost),isnull(dbo.getComma(SUM(a.mount*b.salecost)/10000,2)+' 萬元','無資料') 
+	from workfixs a
+	outer apply (select  top 1 * from view_costs where productno=a.productno order by datea desc)b
+	where (a.datea between @t_bdate and @t_edate)
+	
+	--內部失敗成本
+	insert @tmp
+	select '0',16,'內部失敗成本',SUM((a.rmount+a.wmount)*b.salecost),isnull(dbo.getComma(SUM((a.rmount+a.wmount)*b.salecost)/10000,2)+' 萬元','無資料') 
+	from view_work a
+	outer apply (select  top 1 * from view_costs where productno=a.productno order by datea desc)b
+	where (a.datea between @t_bdate and @t_edate)
+		
+	select * from @tmp order by recno,kpi_name;
+	
+--------------------------------------------------------------------------------------------------------------------
+z_kpipro2:--z_kpipro2
+SET QUOTED_IDENTIFIER OFF 
+	declare @t_accy nvarchar(10) 
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	set @t_accy = '[1]'
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+
+	declare @tmp table(
+		gno nvarchar(10),
+		recno int,
+		typeno nvarchar(10),
+		typea nvarchar(50),
+		datea nvarchar(10),
+		noa nvarchar(50),
+		cno nvarchar(50),
+		acomp nvarchar(100),
+		custno nvarchar(100),
+		cust nvarchar(100),
+		reason nvarchar(max),
+		mount float,
+		money float
+	)
+	
+	--客訴件數
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by cno order by custno,datea,noa),01,'客訴賠償',datea,noa,cno,acomp,custno,comp,product+' '+question,NULL,money
+	from crmservice where reason='客訴' and datea between @t_bdate and @t_edate
+	
+	--銷貨退回
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by cno order by custno,datea,noa),02,'銷貨退回',datea,noa,cno,acomp,custno,comp,memo,mount,total
+	from view_vcc a
+	where typea='2' and (datea between @t_bdate and @t_edate)
+	
+	--總製品退回
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by b.cno order by a.custno,a.datea,a.noa),03,'總製品退回',a.datea,a.noa,isnull(b.cno,''),b.acomp,a.custno,comp,productno+' '+a.memo,a.mount,a.total
+	from view_vccs a 
+	left join view_vcc b on a.noa=b.noa
+	where exists (select * from uca where noa=a.productno) and (a.datea between @t_bdate and @t_edate) and a.typea='2'
+	
+	--客訴未回覆
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by cno order by custno,datea,noa),04,'客訴未回覆',datea,noa,cno,acomp,custno,comp,question,Null,money
+	from crmservice where datea between @t_bdate and @t_edate
+	and isnull(repdate,'')=''
+	
+	--客訴回覆時間大於3天
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by cno order by custno,datea,noa),05,'客訴回覆時間大於3天',datea,noa,cno,acomp,custno,comp,question,Null,money
+	from crmservice where datea between @t_bdate and @t_edate
+	and dbo.q_cdn(datea,3)<=repdate
+	
+	--供應商交期達成率(準時交貨數/總應交貨數*100%)
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by a.cno order by a.tggno,a.datea,a.noa),06,'進料未準時交貨',a.datea,a.noa,c.cno,c.acomp,a.tggno,c.tgg,a.productno+' '+a.memo,a.mount,a.total
+	from view_rc2s a
+	left join view_ordcs b on a.ordeno=b.noa and a.no2=b.no2
+	left join view_rc2 c on a.noa=c.noa
+	where (a.datea between @t_bdate and @t_edate) and a.datea>b.trandate
+	
+	-- 進料檢驗不良
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by a.cno order by a.tggno,a.datea,a.noa),07,'進料不良報廢',a.datea,a.noa,b.cno,acomp,a.tggno,b.tgg,productno+' '+wrea,wmount,wmount*a.price
+	from view_rc2bs a
+	left join view_rc2b b on a.noa=b.noa
+	where (a.datea between @t_bdate and @t_edate) and (isnull(wmount,0)!=0)
+	insert @tmp
+	select '0',ROW_NUMBER()over(partition by a.cno order by a.tggno,a.datea,a.noa),08,'進料不良退回',a.datea,a.noa,b.cno,acomp,a.tggno,b.tgg,productno+' '+bkrea,bkmount,bkmount*a.price
+	from view_rc2bs a
+	left join view_rc2b b on a.noa=b.noa
+	where (a.datea between @t_bdate and @t_edate) and (isnull(bkmount,0)!=0)
+		
+	update @tmp 
+	set gno= case when recno='1' then 1 else 2 end,typea=case when recno='1' then typea else '' end
+	
+	if((select count(*)from @tmp)>0)
+	begin
+		insert @tmp(gno,cno,typeno,acomp)
+		select '3',cno,CHAR(255),acomp
+		from @tmp
+		group by cno,acomp
+	end
+	
+	select 
+	dbo.getComma(mount,2)mount
+	,dbo.getComma(money,0)money
+	,* from @tmp
+	order by cno,acomp,typeno
+	;
+	
+--------------------------------------------------------------------------------------------------------------------
+z_kpipro3:--z_kpipro3
+SET QUOTED_IDENTIFIER OFF 
+	declare @t_accy nvarchar(10) 
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	set @t_accy = '[1]'
+	set @t_bdate = case when '#non'=[2] then '' else [2] end
+	set @t_edate = case when '#non'=[3] then char(255) else [3] end
+declare @tmp table(
+	gno nvarchar(1),
+	tggno nvarchar(50),
+	tgg nvarchar(200),
+	noa nvarchar(50),
+	mount1 float,--按期數量
+	mount2 float,--交期數量
+	mount3 float,--合格數量
+	mount4 float,--驗收總數量
+	v1 float,
+	v2 float
+)
+insert @tmp
+select '9',a.tggno,c.nick,a.noa,b.mount,case when a.datea<=b.trandate then a.inmount else 0 end,a.mount,a.inmount,'',''
+from view_rc2bs a left join view_ordcs b on a.ordeno=b.noa and a.no2=b.no2
+left join tgg c on a.tggno=c.noa
+where (a.datea between @t_bdate and @t_edate)
+
+insert @tmp
+select '9',a.tggno,c.nick,a.noa,b.mount,a.mount,Null,'','',''
+from view_rc2s a left join view_ordcs b on a.ordeno=b.noa and a.no2=b.no2
+left join tgg c on a.tggno=c.noa
+where (a.datea<=b.trandate or ISNULL(b.datea,'')='') and b.noa!=''
+and (a.datea between @t_bdate and @t_edate)
+
+insert @tmp
+select '0',tggno,tgg,'',SUM(mount1),SUM(mount2),SUM(mount3),SUM(mount4),(SUM(mount2)/nullif(SUM(mount1),0))*100,(SUM(mount3)/nullif(SUM(mount4),0))*100
+from @tmp
+group by tggno,tgg
+
+delete @tmp where gno='9'
+
+if((select count(*) from @tmp)=0)
+begin
+	insert @tmp(gno,tggno)
+	select '1',''
+end 
+ 
+
+select 
+dbo.getComma(v1,2)+'%'v1,
+dbo.getComma(v2,2)+'%'v2,
+* from @tmp
+order by tggno,gno
+;

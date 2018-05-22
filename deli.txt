@@ -1,0 +1,538 @@
+﻿post_rk:--deli RK用
+	--報關轉進貨單
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @t_noa nvarchar(20)=[1]--報關贖單單據編號
+	declare @t_condition nvarchar(20)=[2]--動作 0 刪除, 1 新增
+	declare @t_userno nvarchar(20)=[3]--使用者
+	---------------------------------------------------------------------------------
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name]
+	---------------------------------------------------------------------------------
+	declare @rc2key nvarchar(10) = 'B'
+	-- 進口報單修改時不能改數量、重量
+	declare @accy nvarchar(10)=''
+	declare @rc2no nvarchar(20)=''
+	declare @datea nvarchar(20)=''
+	declare @floata float = 0
+	declare @maxno nvarchar(20) = ''
+	declare @n int
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+	if @t_condition='0'
+	begin
+		-- rc2.ordeno = deli.noa
+		select @accy=accy,@rc2no=noa from view_rc2 where ordeno=@t_noa
+		
+		set @cmd =
+		"delete rc2"+@accy+" where noa=@rc2no 
+		delete rc2s"+@accy+" where noa=@rc2no"
+		begin try
+			execute sp_executesql @cmd,N'@rc2no nvarchar(20)',@rc2no=@rc2no
+		end try
+		begin catch
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+			select @rc2no rc2no,error_message() memo
+			return
+		end catch
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		select @rc2no rc2no,'' memo
+		return
+	end
+	
+	--依報關日
+	select @datea=datea,@floata=floata from deli where noa=@t_noa
+	--找進貨單號
+	select @rc2no=rc2no from deli where noa=@t_noa
+	if len(ISNULL(@rc2no,''))>0
+	begin
+		if exists(select * from view_rc2 where noa=@rc2no)
+		begin
+			select @accy=accy from view_rc2 where noa=@rc2no
+		end
+		else
+		begin
+			select @accy=LEFT(@datea,3)
+		end
+	end
+	else
+	begin
+		select top 1 @maxno=noa from view_rc2 where noa like @rc2key+REPLACE(@datea,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+		if LEN(ISNULL(@maxno,''))=0
+		begin
+			set @maxno = '000'
+		end
+		set @n = (charindex(left(right(@maxno,3),1),@string)-1)*100 + cast(RIGHT(@maxno,2) as int) + 1
+		set @rc2no = @rc2key+REPLACE(@datea,'/','')+ substring(@string,floor(@n/100)+1,1) + right('00'+cast(@n%100 as nvarchar),2)
+		select @accy=LEFT(@datea,3)
+	end
+	----------------------------------------------
+	
+	
+	---------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#z_deli')is not null
+	BEGIN
+		drop table #z_deli
+	END
+	create table #z_deli(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,typea nvarchar(10)
+		,tggno nvarchar(20)
+		,comp nvarchar(50)
+		,nick nvarchar(20)
+		,tel nvarchar(50)
+		,post nvarchar(20)
+		,addr nvarchar(100)
+		,datea nvarchar(10)
+		,[money] float
+		,tax float
+		,total float
+		,totalus float
+		,memo nvarchar(max)
+		,mon nvarchar(10)
+		,kind nvarchar(20)
+		,cno nvarchar(20)
+		,acomp nvarchar(30)
+		,coin nvarchar(20)
+		,floata float
+	)
+	IF OBJECT_ID('tempdb..#z_delis')is not null
+	BEGIN
+		drop table #z_delis
+	END
+	create table #z_delis(
+		sel int identity(1,1)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+		,ordeno nvarchar(20)
+		,no2 nvarchar(10)
+		,tggno nvarchar(20)
+		,datea nvarchar(20)
+		,productno nvarchar(20)
+		,product nvarchar(50)
+		,spec nvarchar(20)
+		,unit nvarchar(20)
+		,price float
+		,mount float
+		,total float
+		,totalus float
+		,aprice float
+		,mon nvarchar(20)
+		,storeno nvarchar(20)
+		,store nvarchar(20)
+		,place nvarchar(20)
+		,[weight] float
+		,sprice float
+		--,uno nvarchar(30) rc2.post
+		,cno nvarchar(20)
+		,memo nvarchar(max)
+		,dime float
+		,width float
+		,lengthb float
+		,radius float
+		,gweight float 
+		,kind nvarchar(20)
+		,[source] nvarchar(20)
+		,uno2 nvarchar(30)
+	)
+	insert into #z_deli(noa,typea,tggno,comp,nick,tel,post,addr,datea,memo,mon,kind
+		,cno,acomp,[money],tax,total,totalus,coin,floata)
+	select @rc2no,'1',a.tggno,a.comp,a.nick,b.tel,b.zip_fact,b.addr_fact,a.datea,a.memo,LEFT(a.datea,6),a.kind
+		,a.cno,a.acomp,0,0,0 total,0 totalus,a.coin,a.floata
+	from deli a
+	left join tgg b on a.tggno=b.noa
+	where a.noa=@t_noa
+	
+	insert into #z_delis(noa,noq,ordeno,no2,tggno,datea,productno,product,spec,unit,price,mount,total,totalus,aprice
+		,mon,storeno,store,place,[weight],sprice,cno,memo,dime,width,lengthb,radius
+		,gweight,kind,[source],uno2)
+	select @rc2no,a.noq,a.ordcno,no2,b.tggno,b.datea,a.productno,a.product,a.spec,a.unit,a.price,a.mount
+		,a.total total--本幣
+		,a.cointotal totalus --外幣小計
+		,a.aprice
+		,LEFT(b.datea,6),a.storeno,a.store,a.place,a.[weight],a.sprice,b.cno,a.memo,a.dime,a.width,a.lengthb,a.radius
+		,a.[weight],b.kind,a.[source],a.uno2
+	from delis a
+	left join deli b on a.noa=b.noa
+	where b.noa=@t_noa
+	------------------------------------------------------------------------------------
+	set @cmd = ''
+	-- 寫入RC2
+	begin try
+		if exists(select * from view_rc2 where accy=@accy and noa=@rc2no)
+		begin
+			--update
+			set @cmd =
+			"update rc2"+@accy+" set tggno=b.tggno,tgg=b.comp,nick=b.nick,tel=b.tel,post=b.post,addr=b.addr
+				,datea=b.datea,[money]=b.[money],tax=b.tax,total=b.total,totalus=b.totalus
+				,memo=b.memo,mon=b.mon,kind=b.kind,cno=b.cno,acomp=b.acomp
+				,coin=b.coin,floata=b.floata
+			from rc2"+@accy+" a
+			left join #z_deli b on a.noa=b.noa
+			where b.noa is not null"
+			execute sp_executesql @cmd,N'@t_noa nvarchar(20),@rc2no nvarchar(20)',@t_noa=@t_noa,@rc2no=@rc2no
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end
+		else
+		begin
+			--insert
+			set @cmd = 
+			"insert into rc2"+@accy+"(noa,typea,tggno,tgg,nick,tel,post,addr,datea,[money],tax,total,totalus
+				,memo,mon,kind,cno,acomp,taxtype,ordeno,coin,floata)
+			select noa,typea,tggno,comp,nick,tel,post,addr,datea,[money],tax,total,totalus
+				,memo,mon,kind,cno,acomp,'5',@t_noa,coin,floata
+			from #z_deli"
+			execute sp_executesql @cmd,N'@t_noa nvarchar(20),@rc2no nvarchar(20)',@t_noa=@t_noa,@rc2no=@rc2no
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end
+		
+		set @cmd = 
+		"update rc2s"+@accy+" set ordeno=b.ordeno,no2=b.no2,tggno=b.tggno,datea=b.datea
+			,productno=b.productno,product=b.product,spec=b.spec,unit=b.unit,price=b.price,aprice=b.aprice,mount=b.mount,total=b.total,totalus=b.totalus
+			,mon=b.mon,storeno=b.storeno,store=b.store,place=b.place,[weight]=b.[weight],sprice=b.sprice
+			,cno=b.cno,memo=b.memo,dime=b.dime,width=b.width,lengthb=b.lengthb,radius=b.radius,gweight=b.gweight
+			,kind=b.kind,[source]=b.[source],uno2=b.uno2
+		from rc2s"+@accy+" a
+		left join #z_delis b on a.noa=b.noa and a.noq=b.noq
+		where b.noa is not null"
+		execute sp_executesql @cmd,N'@t_noa nvarchar(20),@rc2no nvarchar(20)',@t_noa=@t_noa,@rc2no=@rc2no
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		set @cmd =
+		"insert into rc2s"+@accy+"(noa,noq,ordeno,no2,tggno,datea,productno,product,spec,unit,price,mount,total,totalus,aprice
+			,mon,storeno,store,place,[weight],sprice,cno,memo,dime,width,lengthb,radius,gweight,kind,[source],uno2)
+		select a.noa,a.noq,a.ordeno,a.no2,a.tggno,a.datea,a.productno,a.product,a.spec,a.unit,a.price,a.mount,a.total,a.totalus,a.aprice
+			,a.mon,a.storeno,a.store,a.place,a.[weight],a.sprice,a.cno,a.memo,a.dime,a.width,a.lengthb,a.radius
+			,a.gweight,a.kind,a.[source],a.uno2
+		from #z_delis a
+		left join rc2s"+@accy+" b on a.noa=b.noa and a.noq=b.noq
+		where b.noa is null"
+		execute sp_executesql @cmd,N'@t_noa nvarchar(20),@rc2no nvarchar(20)',@t_noa=@t_noa,@rc2no=@rc2no
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		update deli set rc2no=@rc2no where noa=@t_noa and len(isnull(rc2no,''))=0
+		
+		set @cmd = 
+		"update rc2"+@accy+" set [money]=b.total,total=b.total,totalus=b.totalus
+		from rc2"+@accy+" a
+		outer apply(select SUM(isnull(total,0)) total,SUM(isnull(totalus,0)) totalus from rc2s"+@accy+" where noa=a.noa ) b
+		where a.noa=@rc2no"
+		execute sp_executesql @cmd,N'@t_noa nvarchar(20),@rc2no nvarchar(20)',@t_noa=@t_noa,@rc2no=@rc2no
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+	end try
+	begin catch
+		print error_message()
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select @rc2no rc2no,error_message() memo,'1' err
+		return
+	end catch
+	
+	IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		select @rc2no rc2no,error_message() memo,'2' err
+		return
+	END
+	ELSE BEGIN
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		select @rc2no rc2no,'' memo,'0' err
+	END
+	;
+
+post:--deli
+--報關轉進貨單
+SET QUOTED_IDENTIFIER OFF
+declare @year nvarchar(20)=[1]--年度[1]
+declare @noa nvarchar(20)=[2]--報關贖單單據編號[2]   deli.noa
+declare @condition nvarchar(20)=[3]--動作 0 刪除, 1 新增[3]
+declare @userno nvarchar(20)=[4]--使用者
+declare @t_err nvarchar(200)=''
+-----------------------------------------------------------------------
+	declare @nowdate nvarchar(30) --今天日期
+	set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+	set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
+
+	--104/07/16依報關日
+	set @nowdate=isnull((select top 1 datea from deli where noa=@noa),@nowdate)
+
+	declare @cmd nvarchar(max)
+	declare @rc2no nvarchar(50)=''
+	declare @accy nvarchar(20)='' --rc2的年度
+
+	select @rc2no=rc2no from deli where noa=@noa
+	select top 1 @accy=accy from view_rc2 where noa=@rc2no
+	if len(@accy)=0
+	begin
+		set @accy = LEFT(@nowdate,3)
+	end
+
+	--批號有領用、禁止刪除
+	declare @uno nvarchar(30)
+	declare @isExists int = 0
+	
+	declare cursor_table cursor for
+	select uno from view_rc2s where noa=@rc2no and len(isnull(uno,''))>0
+	open cursor_table
+	fetch next from cursor_table
+	into @uno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if exists(select * from view_vccs where uno=@uno)
+		begin
+			set @isExists = 1
+			break
+		end
+		if exists(select * from view_gets where uno=@uno)
+		begin
+			set @isExists = 1
+			break
+		end
+		if exists(select * from view_cut where uno=@uno)
+		begin
+			set @isExists = 1
+			break
+		end
+		if exists(select * from view_cubt where uno=@uno)
+		begin
+			set @isExists = 1
+			break
+		end
+		
+		fetch next from cursor_table
+		into @uno
+	end
+	close cursor_table
+	deallocate cursor_table
+
+	if @isExists = 1
+	begin
+		--有領料記錄，禁止異動進貨單
+		select '' rc2no,'有領料記錄，禁止異動進貨單' memo
+ 		return
+	end
+
+	if(@condition='0')
+	begin
+		--刪除產生的rc2
+		set @cmd="delete rc2"+@accy+" where noa=@rc2no"
+		EXECUTE sp_executesql @cmd,N'@rc2no nvarchar(20)',@rc2no=@rc2no
+		set @cmd="delete rc2s"+@accy+" where noa=@rc2no"
+		EXECUTE sp_executesql @cmd,N'@rc2no nvarchar(20)',@rc2no=@rc2no
+	end
+
+	declare @rc2no_new nvarchar(50)='' --新的rc2no
+	declare @number nvarchar(max)
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @nn int
+	declare @mm nvarchar(max)
+			
+	if(@condition='1')
+	begin
+		--檢查deli的rc2no是否已有編號(表示修改)
+		if(LEN(@rc2no)=0)
+		begin	
+			select top 1 @rc2no_new = noa from view_rc2 where noa like 'B'+REPLACE(@nowdate,'/','')+'[0-9,A-Z][0-9][0-9]' order by noa desc
+			if LEN(ISNULL(@rc2no_new,'')) = 0
+				set @rc2no_new = 'B'+REPLACE(@nowdate,'/','')+'000'
+			set @number  = right(@rc2no_new,3)				
+			set @nn = (charindex(left(@number,1),@string)-1) * 100 + cast(right(@number,2) as int) + 1
+			set @mm = substring(@string,floor(@nn/100)+1,1)
+			set @rc2no_new =  'B'+REPLACE(@nowdate,'/','')+@mm+RIGHT('00'+cast(@nn as nvarchar),2)
+		end
+		else
+		begin
+			set @rc2no_new=@rc2no
+		end
+		
+		--KIND抓第一筆資料的
+		declare @kind nvarchar(20) = ''
+		select top 1 @kind=a.kind 
+		from view_ordc a
+		outer apply(select top 1 ordcno from delis where noa=@noa and a.noa=ordcno and len(ISNULL(ordcno,''))>0 order by noq) b
+		where b.ordcno is not null
+		
+		DECLARE @chk tinyint = 0
+		Begin Transaction [Trans_Name]
+		--將deli的內容轉至rc2
+		--104/10/02 傑期 coin 寫入到 part2 12/14 entryno寫到 lcno
+		if((select count(*) from acomp where acomp like '%傑期%')>0)
+		begin
+			set @cmd="insert rc2"+@accy+"(noa,ordeno,typea,kind,datea,tggno,tgg,comp,nick,tel,post,addr,salesno,sales
+			,cno,acomp,paytype,trantype,floata,part2,taxtype,worker,worker2,memo,mon
+			,money,tax,total,unpay,payed,totalus,lcno)
+			select @rc2no_new noa,a.noa ordeno,'1',@kind,@nowdate,a.tggno,a.comp,a.comp,b.nick,b.tel,b.zip_fact,b.addr_fact,b.salesno,b.sales
+			,a.cno,a.acomp,b.paytype,b.trantype,a.floata,a.coin,case when a.vatrate!=0 then '1' else  '' end,''
+			,case when a.worker2!='' then a.worker2 else a.worker end,a.memo,left(@nowdate,6)
+			,0,0,0,0,0,a.cointotal,a.entryno
+			from deli a left join tgg b on a.tggno=b.noa where a.noa=@noa"
+			EXECUTE sp_executesql @cmd,N'@noa nvarchar(20),@rc2no_new nvarchar(20),@nowdate nvarchar(10),@kind nvarchar(20)'
+			,@noa=@noa,@rc2no_new=@rc2no_new,@nowdate=@nowdate,@kind=@kind
+			
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end
+		else
+		begin
+			set @cmd="insert rc2"+@accy+"(noa,ordeno,typea,kind,datea,tggno,comp,nick,tel,post,addr,salesno,sales
+			,cno,acomp,paytype,trantype,floata,coin,taxtype,worker,worker2,memo,mon
+			,money,tax,total,unpay,payed,totalus)
+			select @rc2no_new noa,a.noa ordeno,'1',@kind,@nowdate,a.tggno,a.comp,b.nick,b.tel,b.zip_fact,b.addr_fact,b.salesno,b.sales
+			,a.cno,a.acomp,b.paytype,b.trantype,a.floata,a.coin,case when a.vatrate!=0 then '1' else  '' end,''
+			,case when a.worker2!='' then a.worker2 else a.worker end,a.memo,left(@nowdate,6)
+			,0,0,0,0,0,a.cointotal
+			from deli a left join tgg b on a.tggno=b.noa where a.noa=@noa"
+			EXECUTE sp_executesql @cmd,N'@noa nvarchar(20),@rc2no_new nvarchar(20),@nowdate nvarchar(10),@kind nvarchar(20)'
+			,@noa=@noa,@rc2no_new=@rc2no_new,@nowdate=@nowdate,@kind=@kind
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end
+		
+		IF OBJECT_ID('tempdb..#z_deli')is not null
+		BEGIN
+			drop table #z_deli
+		END
+		
+		create table #z_deli(
+			sel int identity(1,1)
+			,noq_new nvarchar(10)
+			,noa nvarchar(20)
+			,noq nvarchar(10)
+			,datea nvarchar(10)
+			,typea nvarchar(20)
+			,kind nvarchar(20)
+			,productno nvarchar(50)
+			,product nvarchar(200)
+			,unit nvarchar(20)
+			,unit2 nvarchar(20)
+			,spec nvarchar(20)
+			,style nvarchar(20)
+			,uno nvarchar(30)
+			,uno2 nvarchar(30)
+			,class nvarchar(20)
+			,dime float
+			,width float
+			,lengthb float
+			,size nvarchar(50)
+			,dime2 float
+			,lengthc float
+			,source	nvarchar(50)
+			,memo nvarchar(max)
+			,ordeno nvarchar(20)
+			,no2 nvarchar(10)
+			,tggno nvarchar(20)
+			,storeno nvarchar(20)
+			,store nvarchar(20)
+			,ucolor nvarchar(20)
+			,scolor nvarchar(20)
+			,lengthd nvarchar(20)
+			,mount float
+			,[weight] float
+			,price float
+			,sprice float
+			,sprice2 float
+			,counta float
+			,total float
+		)
+		declare @xnoq nvarchar(10)
+		declare @xmount float
+		declare @xweight float
+		declare @xtotal float
+		declare @xunit2 nvarchar(20)
+		
+		declare cursor_table cursor for
+		select noq,mount,unit2,[weight],total from delis where noa=@noa order by noq 
+		open cursor_table
+		fetch next from cursor_table
+		into @xnoq,@xmount,@xunit2,@xweight,@xtotal
+		while(@@FETCH_STATUS <> -1)
+		begin
+			insert into #z_deli(noa,noq,datea,typea,productno,product,unit,unit2
+			,spec,style,uno,uno2,class,dime,width,lengthb,size,dime2,lengthc,source	,memo,ordeno,no2,tggno,storeno,store
+			,ucolor,scolor,lengthd,mount,weight,price,sprice,sprice2,total)		
+			select @rc2no_new noa,a.noq,@nowdate,'1' typea,a.productno,a.product,a.unit,a.unit2
+			,a.spec,a.style,a.uno,a.uno2,a.class,a.dime,a.width,a.lengthb,a.size,a.dime2,a.lengthc,a.source,a.memo,a.ordcno,a.no2,b.tggno,a.storeno,a.store
+			,a.ucolor,a.scolor,a.lengthd,a.mount,a.weight
+			,a.price
+			--須與 z_uccpkk01 算法一致
+			,case when a.unit2='PC'
+				then (case when a.[weight]=0 then 0 else ROUND(a.total/a.[weight],4) end)
+				else (case when isnull(b.floata,0)=0 then a.price else ROUND(a.price*b.floata,4) end) end
+			,case when isnull(b.floata,0)=0 then a.price else ROUND(a.price*b.floata,4) end
+			--,case when upper(isnull(a.unit,'')) in ('','KG','MT','公斤','噸','頓') then case when a.weight=0 then 0 else round(a.cost/a.weight,3) end else case when a.mount=0 then 0 else round(a.cost/a.mount,3) end end
+			--,case when upper(isnull(a.unit,'')) in ('','KG','MT','公斤','噸','頓') then case when a.weight=0 then 0 else round(a.total/a.weight,3) end else case when a.mount=0 then 0 else round(a.total/a.mount,3) end end
+			,a.total
+			from delis a 
+			left join deli b on a.noa=b.noa 
+			where a.noa=@noa and a.noq=@xnoq
+
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+			fetch next from cursor_table
+			into @xnoq,@xmount,@xunit2,@xweight,@xtotal
+		end
+		close cursor_table
+		deallocate cursor_table
+		
+		--總重  回寫到 rc2.weight
+		declare @totweight float = 0
+		select @totweight=sum(isnull(weight,0)) from #z_deli
+		set @cmd="update rc2"+@accy+" set [weight]=isnull(@totweight,0) where noa=@rc2no_new "
+		EXECUTE sp_executesql @cmd,N'@rc2no_new nvarchar(20),@totweight float',@rc2no_new=@rc2no_new,@totweight=@totweight
+
+		--明細應該不會超過999筆
+		update #z_deli set noq_new= b.recno
+		from #z_deli a
+		left join (select sel,right('000'+cast(ROW_NUMBER()over(order by noq,sel) as nvarchar),3) recno from #z_deli) b on a.sel=b.sel
+		
+		set @cmd="insert rc2s"+@accy+"(noa,noq,datea,typea,productno,product,unit,unit2
+		,spec,style,uno,uno2,class,dime,width,lengthb,size,dime2,lengthc,source	,memo,ordeno,no2,tggno,storeno,store
+		,ucolor,scolor,lengthd,mount,weight,price,sprice,sprice2,counta,total)
+		select noa,noq_new,datea,typea,productno,product,unit,unit2
+		,spec,style,uno,uno2,class,dime,width,lengthb,size,dime2,lengthc,source	,memo,ordeno,no2,tggno,storeno,store
+		,ucolor,scolor,lengthd,mount,weight,price,sprice,sprice2,counta,total
+		from #z_deli"
+		EXECUTE sp_executesql @cmd
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		drop table #z_deli
+		
+		set @cmd="update rc2"+@accy+" 
+		set money=isnull((select sum(total) from view_rc2s where noa=@rc2no_new),0)
+		,total=isnull((select sum(total) from view_rc2s where noa=@rc2no_new),0)
+		,unpay=isnull((select sum(total) from view_rc2s where noa=@rc2no_new),0)-isnull((select sum(paysale) from pays where rc2no=@rc2no_new),0)
+		,payed=isnull((select sum(paysale) from pays where rc2no=@rc2no_new),0)
+		where noa=@rc2no_new "
+		
+		EXECUTE sp_executesql @cmd,N'@noa nvarchar(20),@rc2no_new nvarchar(20),@nowdate nvarchar(10)',@noa=@noa,@rc2no_new=@rc2no_new,@nowdate=@nowdate
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		if(LEN(@rc2no)=0)
+		begin
+			--資料寫入dno 避免下次自動產生出現問題
+			insert dno(tablea,noa,usera)
+			select 'rc2',@rc2no_new,@userno
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			
+			insert drun(datea,timea,usera,action,noa,tablea,memo)
+			select replace(CONVERT (VARCHAR(10), GETDATE(),20),'-','/')
+			,left(right(CONVERT (VARCHAR(20), GETDATE(),20),8),5)
+			,@userno,'update',@rc2no_new	,'rc2','手動更新'
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+			
+			--更新rc2no
+			
+			set @cmd="update deli set rc2no=@rc2no_new where noa=@noa"
+			EXECUTE sp_executesql @cmd,N'@noa nvarchar(20),@rc2no_new nvarchar(20),@nowdate nvarchar(10)',@noa=@noa,@rc2no_new=@rc2no_new,@nowdate=@nowdate
+			IF @@Error <> 0 BEGIN SET @chk = 1 END
+		end
+		IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+			Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		END
+		ELSE BEGIN
+			Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		END
+		
+		set @rc2no=@rc2no_new
+		
+	end
+
+		select @rc2no rc2no,'' memo
+	;

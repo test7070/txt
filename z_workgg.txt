@@ -1,0 +1,1973 @@
+z_workgg1:--z_workgg1 0511
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(30)
+declare @t_estationno nvarchar(30)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_showover nvarchar(10)
+declare @t_realwork nvarchar(10)
+declare @t_bstationgno nvarchar(30)
+declare @t_estationgno nvarchar(30)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_proj nvarchar(50)
+declare @t_ordeno nvarchar(50)
+declare @t_ordeno2 nvarchar(50)
+
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then @t_bdate else [2] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+set @t_bproductno = case when '#non' = [7] then '' else [7] end
+set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_showover = case when '#non' = [9] then '' else [9] end
+set @t_realwork = case when '#non' = [11] then '' else [11] end
+set @t_bstationgno = case when '#non' = [12] then '' else [12] end
+set @t_estationgno = case when '#non' = [13] then char(255) else [13] end
+set @t_cuanoa = case when '#non' = [14] then '' else [14] end
+set @t_cuanoq = case when '#non' = [15] then '' else [15] end
+set @t_proj = case when '#non' = [16] then '' else [16] end
+set @t_ordeno = case when '#non' = [19] then '' else [19] end
+set @t_ordeno2 = case when '#non' = [20] then '' else [20] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(max),
+	datea nvarchar(10),
+	gen float,
+	mount float
+)
+
+insert into @tmp
+	select '99' gno,a.stationno,b.station,a.datea--,isnull(c.gen,isnull(b.gen,0))
+	--106/08/15 暫時將 指定每小時最大產能 只抓 標準日工時 拿掉
+	--,isnull(c.gen,case when ISNULL(b.maxgen,0)>0 then isnull(b.hours,0) else case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end end)
+	,isnull(c.gen,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end)
+	,sum(a.hours)
+	from view_cugu a left join station b on (a.stationno=b.noa) 
+	outer apply(select top 1 gen from view_cugt where (datea=a.datea) and (stationno=a.stationno)) c
+	left join view_work d on (isnull(a.workno,'')=d.noa)
+	where (a.datea between @t_bdate and @t_edate) 
+	and (a.stationno between @t_bstationno and @t_estationno)
+	and isnull(d.productno,'') between @t_bproductno and @t_eproductno
+	and (isnull(a.workno,'') != '')
+	and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+	--and (len(@t_realwork)=0 or left(a.workno,2)!='WJ')
+	and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+	and (len(@t_cuanoa)=0 or d.cuano=@t_cuanoa)
+	and (len(@t_cuanoq)=0 or d.cuanoq=@t_cuanoq)
+	and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(d.productno,''),5)!='D4302')
+	and (len(@t_ordeno)=0 or d.ordeno=@t_ordeno) 
+	and (len(@t_ordeno2)=0 or d.no2=@t_ordeno2) 
+	group by a.stationno,b.station,a.datea,c.gen,b.gen,b.wages,b.gensel,b.hours--,b.maxgen
+
+update @tmp set gen=8 where gen=0
+
+insert into @tmp
+	select '0' gno,a.stationno,a.station,a.datea,a.gen,sum(a.mount)
+	from @tmp a
+	group by a.stationno,a.station,a.datea,a.gen
+
+delete @tmp where gno='99' or mount=0
+
+if(@t_showover='1')
+begin
+	delete @tmp where mount<gen
+end
+
+select a.gno,a.stationno,a.station,a.datea,a.gen,a.mount
+from @tmp a order by a.stationno,a.station,a.datea;
+--------------------------------------------------------------------------------------*
+z_workgg2:--z_workgg2
+declare @now_date nvarchar(15)
+set @now_date=CONVERT (nvarchar(15), cast(getdate() as datetime),12 )+0890000
+set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(90)
+declare @t_estationno nvarchar(90)
+
+set @t_bdate = case when '#non' = [2] then @now_date else [2] end
+set @t_edate = case when '#non' = [3] then @t_bdate else [3] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+
+declare @t_issaturday int = 1
+declare @dateList table(
+	idno int identity(1,1),
+	datea nvarchar(10)
+)
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	gen float,
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	datea nvarchar(10),
+	nos nvarchar(10),
+	workno nvarchar(90),
+	hours float,
+	mount float
+)
+declare @result table(
+	gno nvarchar(10),
+	idno int identity(0,1),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	gen float,
+	ogen float,
+	usegen float,
+	datea nvarchar(10),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	hours float,
+	mount float
+)
+insert into @tmp
+	select
+		'0' gno,a.stationno,b.station,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end ,a.cuadate,a.uindate,c.datea,c.nos,a.noa,isnull(c.hours,0),isnull(c.mount,0)
+	from view_cugu c
+	left join view_work a on (a.noa=c.workno)
+	left join station b on (a.stationno=b.noa)
+	where (isnull(a.cuadate,'')!='' and isnull(a.uindate,'')!='' ) and (isnull(b.noa,'') != '') and
+		  (a.stationno between @t_bstationno and @t_estationno)
+	order by a.stationno,a.cuadate,a.uindate
+	
+declare @t_adbdate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_bdate,3))+1911)+'/'+SUBSTRING(@t_bdate,5,2)+'/'+RIGHT(@t_bdate,2)
+declare @t_adedate nvarchar(15) = convert(nvarchar(4),convert(int,LEFT(@t_edate,3))+1911)+'/'+SUBSTRING(@t_edate,5,2)+'/'+RIGHT(@t_edate,2)
+declare @CountAdDate nvarchar(15) = @t_adbdate
+while(1=1)
+begin
+	if((isdate(@CountAdDate)=1) and (datepart(weekday,@CountAdDate) != 1))
+	begin
+		if(@t_issaturday='1' or (@t_issaturday!='1' and ((datepart (DW,@CountAdDate)) !=7)))
+		begin
+			-------將日期轉為民國年
+			set @now_date=CONVERT (nvarchar(15), cast(@CountAdDate as datetime),12 )+0890000
+			set @now_date=left(@now_date,3)+'/'+substring(@now_date,4,2)+'/'+right(@now_date,2)
+			insert into @dateList(datea) values(@now_date)
+		end
+	end
+	set @CountAdDate = convert(nvarchar,dateadd(day,1,@CountAdDate),111)
+	if(@CountAdDate > @t_adedate)
+	begin
+		break
+	end
+end
+
+insert into @result(gno,stationno,station,ogen,gen,usegen,datea)
+	select
+		'0' gno,a.noa,a.station--,isnull(a.gen,0),isnull(a.gen,0),isnull(a.gen,0)
+		,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(a.gensel,'')='2' then isnull(a.wages,0) else isnull(a.gen,0) end
+		,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(a.gensel,'')='2' then isnull(a.wages,0) else isnull(a.gen,0) end
+		,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(a.gensel,'')='2' then isnull(a.wages,0) else isnull(a.gen,0) end
+		,b.datea
+	from station a,@dateList b
+where (a.noa between @t_bstationno and @t_estationno) 
+and exists (select stationno from view_cugu where datea between @t_bdate and @t_edate and stationno=a.noa)
+order by a.noa,b.datea
+
+update a
+	set a.gen = isnull(d.gen,a.gen)
+from @result a
+outer apply(select top 1 cugt.gen from view_cugt cugt where (cugt.noa=a.stationno) and (cugt.datea=a.datea)) d
+
+declare @datea nvarchar(10)
+declare @workno nvarchar(max)
+declare @stationno nvarchar(max)
+declare @station nvarchar(max)
+declare @gen float
+declare @usegen float
+declare @cuadate nvarchar(10)
+declare @uindate nvarchar(10)
+declare @mount float
+declare @hours float
+declare cursor_table cursor for
+	select
+		a.stationno,a.station,a.gen,a.cuadate,a.uindate,a.datea,a.workno,a.hours,a.mount
+	from @tmp a
+	order by a.stationno,a.datea,a.nos
+open cursor_table
+fetch next from cursor_table
+into @stationno,@station,@gen,@cuadate,@uindate,@datea,@workno,@hours,@mount
+while(@@FETCH_STATUS <> -1)
+begin
+	declare @workno2 nvarchar(max) = (select top 1 workno from @result where (stationno=@stationno) and (datea=@datea))
+	if(@workno2 is null)
+	begin
+		update a
+			set hours=@hours,cuadate=@cuadate,uindate=@uindate,workno=@workno,mount=@mount
+		from @result a
+		where (a.stationno=@stationno) and (a.datea=@datea)
+	end
+	else
+	begin
+		insert into @result(gno,stationno,station,ogen,gen,usegen,hours,datea,cuadate,uindate,workno,mount)
+			select '0',@stationno,@station,@gen,@gen,@gen,@hours,@datea,@cuadate,@uindate,@workno,@mount
+	end
+	fetch next from cursor_table
+	into @stationno,@station,@gen,@cuadate,@uindate,@datea,@workno,@hours,@mount
+end
+close cursor_table
+deallocate cursor_table
+insert into @result(gno,stationno,station,datea,hours)
+	select
+		'1' gno,stationno,station,'' datea,sum(hours)
+	from @result
+	group by stationno,station
+delete @result where stationno in (select stationno from @result where (isnull(hours,0)=0) and (gno='1'))
+declare @idno int
+declare @stationno_tmp nvarchar(max) = ''
+declare @datea_tmp nvarchar(10) = ''
+declare @nowgen float = 0
+declare cursor_table cursor for
+	select idno,stationno,datea,gen,hours from @result where gno='0' order by stationno,datea,idno
+open cursor_table
+fetch next from cursor_table
+into @idno,@stationno,@datea,@gen,@hours
+while(@@FETCH_STATUS <> -1)
+begin
+	if((@stationno_tmp <> @stationno) or (@datea_tmp <> @datea))
+	begin
+		set @nowgen = @gen
+		set @stationno_tmp = @stationno
+		set @datea_tmp = @datea
+	end
+	set @nowgen = @nowgen-isnull(@hours,0)
+	update @result set usegen = @nowgen where idno=@idno
+	fetch next from cursor_table
+	into @idno,@stationno,@datea,@gen,@hours
+end
+close cursor_table
+deallocate cursor_table
+select
+	a.gno,a.idno,a.stationno,a.station stations,a.ogen ogena,a.gen gena,
+	round(a.usegen,4) usegen,round(a.hours,4) hours,a.datea,a.cuadate,
+	a.uindate,a.workno,round(a.mount,4) mount,
+	ROW_NUMBER()over(partition by a.stationno order by a.stationno,a.gno,a.datea,a.workno) recno,
+	'work?left(noa,'+cast(len(b.noa) as nvarchar)+')=$workno?'+b.accy qhref
+from @result a
+outer apply(select top 1 accy,noa from view_work where noa=a.workno) b
+order by a.stationno,a.gno,a.datea,a.workno;
+-------------------------------------------------------------------------------------*
+z_workgg3:--z_workgg3
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_showdiff nvarchar(20)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_showfinished nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_bstationgno nvarchar(50)
+declare @t_estationgno nvarchar(50)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_proj nvarchar(50)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_xgroupano = case when '#non' = [7] then '' else [7] end
+set @t_showdiff = case when '#non' = [6] then '' else [6] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_showfinished = case when '#non' = [11] then '' else [11] end
+set @t_realwork = case when '#non' = [12] then '' else [12] end
+set @t_bstationgno = case when '#non' = [13] then '' else [13] end
+set @t_estationgno = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_cuanoa = case when '#non' = [15] then '' else [15] end
+set @t_cuanoq = case when '#non' = [16] then '' else [16] end
+set @t_proj = '[21]'
+
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(90),
+	stations nvarchar(max),
+	gen float,
+	datea nvarchar(10),
+	mount float,
+	inmount float,
+	hours float,
+	mans float,
+	rate float,
+	value float
+)
+
+insert into @tmp
+	select '0' gno,isnull(a.stationno,''),b.station
+	--,isnull(d.gen,isnull(b.gen,0))
+	,isnull(d.gen,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end)
+	,a.datea,a.mount
+	,case when g.bdate=a.datea then isnull((select sum(mount) from view_workbs where workno=a.workno and datea<=a.datea),0)
+	when g.edate=a.datea then isnull((select sum(mount) from view_workbs where workno=a.workno and datea>=a.datea),0)
+	else isnull((select sum(mount) from view_workbs where workno=a.workno and datea=a.datea),0) end
+	,a.hours,isnull(f.minutes,0),0 rate,0 value
+	from view_cugu a left join station b on (isnull(a.stationno,'')=b.noa) left join view_work c on (isnull(a.workno,'')=c.noa)
+	outer apply(select top 1 gen from view_cugt where (stationno=a.stationno) and (datea=a.datea)) d
+	left join uca e on c.productno=e.noa
+	outer apply(
+		select sum(borntime+addtime) minutes
+		from view_cuw cuw left join view_cuws cuws on (cuw.noa=cuws.noa)
+		where (a.stationno=cuw.stationno) and (a.datea=cuw.datea)
+	) f outer apply(select MIN(datea)bdate,MAX(datea)edate from view_cugu where workno=a.workno) g
+	where (isnull(a.datea,'') between @t_bdate and @t_edate) 
+		and (isnull(a.stationno,'') between @t_bstationno and @t_estationno) 
+		and (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano) 
+		and (isnull(c.noa,'') != '')/*----預防 cugu有work被刪掉*/ and (isnull(c.tggno,'')='') 
+		and ((len(@t_showfinished)=0) or (@t_showfinished='1' and isnull(e.typea,'2')='2'))
+		and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+		--and (len(@t_realwork)=0 or left(a.workno,2)!='WJ')
+		and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+		and (len(@t_cuanoa)=0 or c.cuano=@t_cuanoa)
+		and (len(@t_cuanoq)=0 or c.cuanoq=@t_cuanoq)
+		and isnull(c.productno,'') between @t_bproductno and @t_eproductno
+		and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(c.productno,''),5)!='D4302')
+
+insert into @tmp(gno,stationno,stations,datea,gen,mount,inmount,hours,mans)
+	select '1' gno,a.stationno,a.stations,a.datea,avg(a.gen),sum(a.mount),MAX(a.inmount),sum(a.hours),max(a.mans)
+	from @tmp a
+	group by a.stationno,a.stations,a.datea
+
+update @tmp set rate = (isnull(gen,0)-isnull(hours,0)) where gno='1'
+if(@t_showdiff='1')
+begin
+	declare @datea nvarchar(10)
+	declare @stationno nvarchar(50)
+	declare @stations nvarchar(90)
+	declare cursor_table cursor for
+		select datea,stationno,stations from @tmp where (rate not between -5 and 5) and (gno='1')
+	open cursor_table
+	fetch next from cursor_table
+	into @datea,@stationno,@stations
+	while(@@FETCH_STATUS <> -1)
+	begin
+		delete @tmp where (datea=@datea) and (stationno=@stationno) and (stations=@stations)
+		fetch next from cursor_table
+		into @datea,@stationno,@stations
+	end
+	close cursor_table
+	deallocate cursor_table
+end
+
+delete @tmp where gno='0'
+update @tmp set gno='0' where gno='1'
+update @tmp set value=(case when gen=0 then 0 else round((hours/gen)*100,3) end)
+
+insert into @tmp(gno,stationno,stations,mount,inmount,hours,mans)
+	select '1' gno,a.stationno,a.stations,sum(a.mount),sum(inmount),sum(a.hours),sum(a.mans) from @tmp a where a.gno='0' group by a.stationno,a.stations
+	
+select a.gno,a.stationno stno ,a.stations,a.gen,a.datea
+,dbo.getComma(round(a.mount,3),-1) mount
+,dbo.getComma(round(a.inmount,3),-1) inmount
+,round(a.hours,3) hours,round(a.mans,3) mans
+,round(a.rate,3) rate,cast(a.value as nvarchar)+' %' value
+from @tmp a order by a.stationno,a.gno,a.datea;
+------------------------------------------------------------------------------------------------------------
+z_workgg4:--z_workgg4
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+declare @t_xgroupano nvarchar(90)
+declare @t_showdiff nvarchar(20)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_showfinished nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_bstationgno nvarchar(50)
+declare @t_estationgno nvarchar(50)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_ordeno nvarchar(50)
+declare @t_ordeno2 nvarchar(50)
+declare @t_proj nvarchar(50)
+declare @t_bmodelno nvarchar(20)
+declare @t_emodelno nvarchar(20)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_xgroupano = case when '#non' = [7] then '' else [7] end
+set @t_showdiff = case when '#non' = [6] then '' else [6] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_showfinished = case when '#non' = [11] then '' else [11] end
+set @t_realwork = case when '#non' = [12] then '' else [12] end
+set @t_bstationgno = case when '#non' = [13] then '' else [13] end
+set @t_estationgno = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_cuanoa = case when '#non' = [15] then '' else [15] end
+set @t_cuanoq = case when '#non' = [16] then '' else [16] end
+set @t_ordeno = case when '#non' = [24] then '' else [24] end
+set @t_ordeno2 = case when '#non' = [25] then '' else [25] end
+set @t_proj = '[21]'
+set @t_bmodelno = case when '#non' = [27] then '' else [27] end
+set @t_emodelno = case when '#non' = [28] then CHAR(255) else [28] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	accy nvarchar(10),
+	stationno nvarchar(90),
+	stations nvarchar(max),
+	gen float,
+	datea nvarchar(10),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	productno nvarchar(max),
+	mount float,
+	inmount float,
+	unit nvarchar(15),
+	hours float,
+	mans float,
+	rate float,
+	cuanoa nvarchar(30),
+	cuanoq nvarchar(30)
+)
+
+insert into @tmp
+	select '0' gno,a.accy,isnull(a.stationno,''),b.station
+	--,isnull(d.gen,isnull(b.gen,0))
+	,isnull(d.gen,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end)
+	,a.datea,c.cuadate,c.uindate,a.workno,c.productno
+	,a.mount
+	,case when g.bdate=a.datea then isnull((select sum(mount) from view_workbs where workno=a.workno and datea<=a.datea),0)
+	when g.edate=a.datea then isnull((select sum(mount) from view_workbs where workno=a.workno and datea>=a.datea),0)
+	else isnull((select sum(mount) from view_workbs where workno=a.workno and datea=a.datea),0) end
+	,c.unit,a.hours,isnull(f.minutes,0),0 rate,c.cuano,c.cuanoq
+	from view_cugu a left join station b on (isnull(a.stationno,'')=b.noa) left join view_work c on (isnull(a.workno,'')=c.noa)
+	outer apply(select top 1 gen from view_cugt where (stationno=a.stationno) and (datea=a.datea)) d
+	left join uca e on c.productno=e.noa
+	outer apply(
+		select sum(borntime+addtime) minutes
+		from view_cuw cuw
+		left join view_cuws cuws on (cuw.noa=cuws.noa)
+		where (a.stationno=cuw.stationno) and (a.datea=cuw.datea)
+	) f
+	outer apply(select MIN(datea)bdate,MAX(datea)edate from view_cugu where workno=a.workno) g
+	where (isnull(a.datea,'') between @t_bdate and @t_edate) 
+			and (isnull(a.stationno,'') between @t_bstationno and @t_estationno) 
+			and (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano) 
+			and (isnull(c.noa,'') != '')/*----預防 cugu有work被刪掉*/ and (isnull(c.tggno,'')='') 
+ 			and ((len(@t_showfinished)=0) or (@t_showfinished='1' and isnull(e.typea,'2')='2'))
+			and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+			--and (len(@t_realwork)=0 or left(a.workno,2)!='WJ')
+			and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+			and (len(@t_cuanoa)=0 or c.cuano=@t_cuanoa)
+			and (len(@t_cuanoq)=0 or c.cuanoq=@t_cuanoq)
+			and isnull(c.productno,'') between @t_bproductno and @t_eproductno
+			and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(c.productno,''),5)!='D4302')
+			and isnull(c.modelno,'') between @t_bmodelno and @t_emodelno
+			and (len(@t_ordeno)=0 or c.ordeno=@t_ordeno)
+			and (len(@t_ordeno2)=0 or c.no2=@t_ordeno2)
+
+insert into @tmp(gno,stationno,stations,datea,gen,mount,hours,mans)
+	select '1' gno,a.stationno,a.stations,char(255),avg(a.gen),sum(a.mount),sum(a.hours),sum(a.mans)
+	from @tmp a group by a.stationno,a.stations
+	
+update a
+set rate=b.gen-a.hours
+from @tmp a outer apply (select SUM(gen)gen from (select datea,gen from @tmp where gno='0' and stationno=a.stationno group by datea,gen)tmp)b
+where gno='1'
+
+--update @tmp set rate = (isnull(gen,0)-isnull(hours,0)) where gno='1'
+
+if(@t_showdiff='1')
+begin
+	declare @datea nvarchar(10)
+	declare @stationno nvarchar(50)
+	declare @stations nvarchar(90)
+	declare cursor_table cursor for
+		select datea,stationno,stations from @tmp where (rate not between -5 and 5) and (gno='1')
+	open cursor_table
+	fetch next from cursor_table
+	into @datea,@stationno,@stations
+	while(@@FETCH_STATUS <> -1)
+	begin
+		delete @tmp where (datea=@datea) and (stationno=@stationno) and (stations=@stations)
+		fetch next from cursor_table
+		into @datea,@stationno,@stations
+	end
+	close cursor_table
+	deallocate cursor_table
+end
+
+insert into @tmp(gno,stationno,stations,datea)
+select '2' gno,a.stationno,a.stations,char(255) from @tmp a where gno='0' group by a.stationno,a.stations
+	
+select a.gno,a.accy,a.stationno stno,a.stations,a.gen,a.datea,a.cuadate,a.uindate,
+	a.workno,a.productno,a.cuanoa,a.cuanoq
+	,dbo.getComma(round(a.mount,3),-1) mount
+	,dbo.getComma(round(a.inmount,3),-1) inmount
+	,a.unit,round(a.hours,3) hours,round(a.mans,3) mans,round(a.rate,3) rate,
+	'work?left(noa,'+cast(len(a.workno) as nvarchar)+')=$workno?'+a.accy qhref
+from @tmp a order by a.stationno,a.datea,a.gno;
+--------------------------------------------------------------------------------------------------------*
+z_workgg5:--z_workgg5
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(max)
+declare @t_estationno nvarchar(max)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_xgroupano nvarchar(max)
+declare @t_showfinished nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_bstationgno nvarchar(10)
+declare @t_estationgno nvarchar(10)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_proj nvarchar(50)
+declare @t_ordeno nvarchar(50) 
+declare @t_ordeno2 nvarchar(50)
+declare @t_xshownowork nvarchar(50)
+
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then char(255) else [2] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+set @t_bproductno = case when '#non' = [7] then '' else [7] end
+set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_xgroupano = case when '#non' = [6] then '' else [6] end
+set @t_showfinished = case when '#non' = [10] then '' else [10] end
+set @t_realwork = case when '#non' = [11] then '' else [11] end
+set @t_bstationgno = case when '#non' = [12] then '' else [12] end
+set @t_estationgno = case when '#non' = [13] then char(255) else [13] end
+set @t_cuanoa = case when '#non' = [14] then '' else [14] end
+set @t_cuanoq = case when '#non' = [15] then '' else [15] end
+set @t_proj = case when '#non' = [16] then '' else [16] end
+set @t_ordeno = case when '#non' = [19] then '' else [19] end
+set @t_ordeno2 = case when '#non' = [20] then '' else [20] end
+set @t_xshownowork = case when '#non' = [21] then '' else [21] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	datea nvarchar(10),
+	productno nvarchar(90),
+	product nvarchar(max),
+	stationno nvarchar(90),
+	station nvarchar(max),
+	gen nvarchar(max),
+	value float,
+	ivalue float
+)
+
+insert into @tmp
+	select '0' gen,a.datea,c.productno,c.product,a.stationno,b.station,
+	case when isnull(d.minutes,0)=0 and isnull(d.sec,0)=0 then null when isnull(d.sec,0)>0 then cast(round(d.sec,3) as nvarchar) + ' Sec.' when isnull(d.minutes,0)>0 then cast(round(d.minutes,3) as nvarchar) + ' Min.' end
+	+case when len(d.unit)>0 then '/ '+d.unit else '' end
+	,SUM(a.mount)
+	,case when ISNULL(SUM(f.inmount),0)>ISNULL(SUM(a.mount),0) then 0 else ISNULL(SUM(a.mount),0)-ISNULL(SUM(f.inmount),0) end
+	from view_cugu a left join station b on (a.stationno=b.noa) left join view_work c on (a.workno=c.noa)
+	outer apply(select case when isnull(minutes,0)>isnull(hminutes,0) then minutes else hminutes end minutes
+	,case when isnull(sec,0)>isnull(hsec,0) then sec else hsec end sec
+	,unit from uca where noa=c.productno) d
+	left join uca e on c.productno=e.noa
+	--當天排產數量-當天或提前入庫數量(之後入庫的不算)
+	--outer apply (select SUM(mount)inmount from view_workbs where workno=a.workno and datea<=a.datea)f
+	--106/08/23 不管是甚麼時候入庫
+	outer apply (select SUM(mount)inmount from view_workbs where workno=a.workno)f
+	where (a.datea between @t_bdate and @t_edate) 
+			and (c.productno between @t_bproductno and @t_eproductno) 
+			and (a.stationno between @t_bstationno and @t_estationno) 
+			and (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano) 
+			and ((len(@t_showfinished)=0) or (@t_showfinished='1' and isnull(e.typea,'2')='2'))
+			and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+			--and (len(@t_realwork)=0 or left(a.workno,2)!='WJ')
+			and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+			and (len(@t_cuanoa)=0 or c.cuano=@t_cuanoa)
+			and (len(@t_cuanoq)=0 or c.cuanoq=@t_cuanoq)
+			and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(c.productno,''),5)!='D4302')
+			and (len(@t_ordeno)=0 or c.ordeno=@t_ordeno) 
+			and (len(@t_ordeno2)=0 or c.no2=@t_ordeno2)
+			and (len(@t_xshownowork)=0 or isnull(c.enda,0)!=1 )
+	 group by c.productno,c.product,a.stationno,b.station,a.datea,d.minutes,d.sec,d.unit
+	 
+select a.gno,a.datea,a.productno,a.product,a.stationno,a.station,a.gen,a.value,a.ivalue
+from @tmp a order by a.stationno,a.productno,a.datea;
+-----------------------------------------------------------------------------------------*
+z_workgg6:--z_workgg6
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_xgroupano nvarchar(max)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @now_date nvarchar(15)
+declare @t_proj nvarchar(50)
+
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then char(255) else [2] end
+set @t_xgroupano = case when '#non' = [6] then '' else [6] end
+set @t_bproductno = case when '#non' = [7] then '' else [7] end
+set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_realwork = case when '#non' = [11] then '' else [11] end
+set @t_proj = case when '#non' = [16] then '' else [16] end
+
+--105/06/29 改成 已預交日顯示
+declare @tmp table(
+	gno nvarchar(10),
+	datea nvarchar(10),
+	productno nvarchar(200),
+	product nvarchar(max),
+	value float,
+	workmount float
+)
+insert into @tmp
+	select
+		'0' gno,b.datea,b.productno,b.product,sum(b.mount),isnull(c.mount,0)
+	from view_orde a
+	left join view_ordes b on (a.noa=b.noa)
+	left join(
+		select work.productno,cugu.datea,sum(cugu.mount) mount
+		from view_cugu cugu
+		left join view_work work on (cugu.workno=work.noa)
+		where --(len(@t_realwork)=0 or left(cugu.workno,2)!='WJ')
+		(len(@t_realwork)=0 or cugu.workno like 'W[0-9]%')
+		group by work.productno,cugu.datea
+	) c on (c.productno=b.productno) and (c.datea=b.datea)
+	left join uca e on b.productno=e.noa
+	where (b.datea between @t_bdate and @t_edate) and
+		  (b.productno between @t_bproductno and @t_eproductno) and
+		  (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano)
+		  and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(b.productno,''),5)!='D4302')
+	group by b.datea,b.productno,b.product,c.mount
+	order by b.datea
+select
+	a.gno,a.datea,a.productno,a.product,a.value,a.workmount
+from @tmp a
+order by a.productno,a.datea;
+-----------------------------------------------------------------------------------------*
+z_workgg7:--z_workgg7
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @now_date nvarchar(15)
+declare @t_xgroupano nvarchar(max)
+declare @t_showfinished nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_proj nvarchar(50)
+
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then char(255) else [2] end
+set @t_bproductno = case when '#non' = [7] then '' else [7] end
+set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_xgroupano = case when '#non' = [6] then '' else [6] end
+set @t_showfinished = case when '#non' = [10] then '' else [10] end
+set @t_realwork = case when '#non' = [11] then '' else [11] end
+set @t_proj = case when '#non' = [16] then '' else [16] end
+-----------------------------------------------------------------------------------------------
+declare @tmp table(
+	gno nvarchar(10),
+	datea nvarchar(10),
+	productno nvarchar(200),
+	product nvarchar(max),
+	value float
+)
+insert into @tmp
+	select '0' gno,a.datea,b.productno,b.product,sum(a.mount)
+	from view_cugu a
+	left join view_work b on a.workno=b.noa
+	left join uca e on b.productno=e.noa
+	where (a.datea between @t_bdate and @t_edate) 
+		and (b.productno between @t_bproductno and @t_eproductno) 
+		and (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano) 
+		and ((len(@t_showfinished)=0) or (@t_showfinished='1' and isnull(e.typea,'2')='2'))
+		--and (len(@t_realwork)=0 or left(a.workno,2)!='WJ')
+		and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+		and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(b.productno,''),5)!='D4302')
+	group by a.datea,b.productno,b.product order by a.datea
+	
+select a.gno,a.datea,a.productno,a.product,a.value
+from @tmp a order by a.productno,a.datea;
+--************************************************************************************************
+z_workgg8:--z_workgg8
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_workh nvarchar(10)
+declare @t_edate nvarchar(20)
+declare @r_len nvarchar(20)
+declare @t_six nvarchar(20)
+declare @t_proj nvarchar(50)
+
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_realwork = case when '#non' = [12] then '' else [12] end
+set @t_workh = case when '#non' = [17] then '' else [17] end
+set @t_edate = case when '#non' = [18] then '' else [18] end
+set @r_len = [19]
+set @t_six = [20]
+set @t_proj = '[21]'
+-----------------------------------------------------------------------------------------------
+declare @nowdate nvarchar(30) --今天日期
+if(@r_len=3)
+begin
+	set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+	set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
+end
+else
+begin
+	set @nowdate=REPLACE(CONVERT (VARCHAR(10), GETDATE(),21 ),'-','/')
+end
+
+declare @tmp table(
+	typea nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(max),
+	gen float,--標準日產能/機時
+	workno nvarchar(50),
+	productno nvarchar(100),
+	product nvarchar(MAX),
+	mount float,--排產數量
+	hours float,--需工時
+	ordeno nvarchar(50),
+	no2 nvarchar(50)
+)
+
+insert @tmp
+select case when noa like 'W[0-9]%' then '1' else '2' end
+,stationno,station,0,noa,productno,product,isnull(mount,0)-isnull(inmount,0) ,hours
+,ordeno,no2
+from view_work a
+where stationno between @t_bstationno and @t_estationno
+and isnull(productno,'') between @t_bproductno and @t_eproductno
+and a.cuadate<=@t_edate
+and isnull(isfreeze,0)=0
+and (len(@t_realwork)=0 or noa like 'W[0-9]%')
+and isnull(mount,0)-isnull(inmount,0)!=0
+and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(productno,''),5)!='D4302')
+and a.cuadate>=dbo.q_cdn(@nowdate,-14) --只看2周前之後的單子
+
+if(@t_workh='1')
+begin
+	insert @tmp
+	select '3',stationno,station,0,noa,productno,product,isnull(mount,0)-isnull(inmount,0) ,hours
+	,ordeno,no2
+	from view_workh a
+	where stationno between @t_bstationno and @t_estationno
+	and isnull(productno,'') between @t_bproductno and @t_eproductno
+	and a.uindate<=@t_edate
+	and isnull(isfreeze,0)=0
+	and isnull(mount,0)-isnull(inmount,0)!=0
+	and not exists (select* from view_work where ordeno=a.ordeno)
+	and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(a.productno,''),5)!='D4302')
+	and a.uindate>=dbo.q_cdn(@nowdate,-14) --只看2周前之後的單子
+end
+
+update a
+set gen=case when case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0)  else isnull(b.gen,0) end=0 then 8
+else case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0)  else isnull(b.gen,0) end end
+from @tmp a left join station b on a.stationno=b.noa
+
+declare @tmpa table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(max),
+	gen float,
+	mount float,
+	hours float,
+	days float,
+	mmount float,
+	mhours float,
+	mdays float,
+	smount float,
+	shours float,
+	sdays float,
+	udate nvarchar(50)
+)
+
+insert @tmpa
+select '0',stationno,MAX(station)station,gen
+,round(SUM(case when typea='1' then mount else 0 end),4) mount
+,SUM(case when typea='1' then hours else 0 end)
+,0--,round(SUM(case when typea='1' then hours else 0 end)/gen,2)days
+,round(SUM(case when typea='2' then mount else 0 end),4) mmount
+,SUM(case when typea='2' then hours else 0 end)
+,0--,round(SUM(case when typea!='1' then hours else 0 end)/gen,2)sdays
+,round(SUM(case when typea='3' then mount else 0 end),4) smount
+,SUM(case when typea='3' then hours else 0 end)
+,0--,round(SUM(case when typea!='1' then hours else 0 end)/gen,2)sdays
+,CONVERT (NVARCHAR(10),DATEADD(dd,ceiling(SUM(hours)/gen), GETDATE()),20)udate
+from @tmp group by stationno,gen
+
+declare @stationno nvarchar(50)
+declare @gen float
+declare @hours float
+declare @mhours float
+declare @shours float
+declare @t_ndate datetime = GETDATE()
+declare @t_date nvarchar(50)
+declare @t_gen float
+declare @t_week float
+declare @days float
+declare @mdays float
+declare @sdays float
+declare @add3 float
+declare @isadd3 float
+declare @t_startdate datetime = GETDATE()
+declare @startdate nvarchar(50)=CONVERT(NVARCHAR(10),DATEADD(dd,1,@t_startdate),20)
+set @startdate=case when @r_len='4' then replace(@startdate,'-','/') else replace(cast(cast(left(@startdate,4) as int)-1911 as nvarchar(10))+SUBSTRING(@startdate,5,len(@startdate)),'-','/') end
+
+declare cursor_table cursor for
+select stationno,gen,hours,mhours,shours from @tmpa order by stationno
+open cursor_table
+fetch next from cursor_table
+into @stationno,@gen,@hours,@mhours,@shours
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_ndate=DATEADD(dd,1,@t_startdate) --隔天開始計算
+	set @days=0
+	set @mdays=0
+	set @sdays=0
+	set @add3=0
+	set @t_date=CONVERT(NVARCHAR(10),@t_ndate,20)
+	set @t_date=case when @r_len='4' then replace(@t_date,'-','/') else replace(cast(cast(left(@t_date,4) as int)-1911 as nvarchar(10))+SUBSTRING(@t_date,5,len(@t_date)),'-','/') end
+	
+	while(@hours+@shours+@mhours>0)
+	begin
+		set @t_date=CONVERT(NVARCHAR(10),@t_ndate,20)
+		set @t_date=case when @r_len='4' then replace(@t_date,'-','/') else replace(cast(cast(left(@t_date,4) as int)-1911 as nvarchar(10))+SUBSTRING(@t_date,5,len(@t_date)),'-','/') end
+		set @t_week=DATEPART(dw ,@t_ndate)-1
+		set @t_gen=isnull((select gen from view_cugt where stationno=@stationno and datea=@t_date),0)
+		if(@t_gen=0)
+		begin
+			--假日主檔上班日
+			if((select count(*) from holiday where noa=@t_date and iswork=1)>0)
+			begin
+				set @t_gen=@gen
+			end
+			--正常上班日 排除假日
+			else if(@t_week!=0 and (@t_week!=6 or @t_six='1') and
+			(select count(*) from holiday where noa=@t_date and iswork=0)=0 )
+			begin
+				set @t_gen=@gen
+			end
+		end
+		
+		if(@t_gen>0)
+		begin
+			if(@hours>0)
+			begin
+				set @days=@days+1
+				set @hours=case when @hours>=@t_gen then @hours-@t_gen else 0 end
+				set @t_gen=case when @hours>=@t_gen then 0 else @t_gen-@hours end
+			end
+		end
+		if(@t_gen>0)
+		begin
+			if(@mhours>0)
+			begin
+				set @mdays=@mdays+1
+				set @mhours=case when @mhours>=@t_gen then @mhours-@t_gen else 0 end
+				set @t_gen=case when @mhours>=@t_gen then 0 else @t_gen-@mhours end
+			end
+		end
+		if(@t_gen>0)
+		begin
+			if(@shours>0)
+			begin
+				set @sdays=@sdays+1
+				set @shours=case when @shours>=@t_gen then @shours-@t_gen else 0 end
+				set @t_gen=case when @shours>=@t_gen then 0 else @t_gen-@shours end
+			end
+		end
+		
+		set @t_ndate=DATEADD(dd,1,@t_ndate)
+	end
+	
+	--+3天
+	while(@add3<4)
+	begin
+		set @t_date=CONVERT(NVARCHAR(10),@t_ndate,20)
+		set @t_date=case when @r_len='4' then replace(@t_date,'-','/') else replace(cast(cast(left(@t_date,4) as int)-1911 as nvarchar(10))+SUBSTRING(@t_date,5,len(@t_date)),'-','/') end
+		set @t_week=DATEPART(dw ,@t_ndate)-1
+		set @isadd3=0
+
+		--假日主檔上班日
+		if((select count(*) from holiday where noa=@t_date and iswork=1)>0)
+		begin
+			set @isadd3=1
+		end
+		--正常上班日 排除假日
+		else if(@t_week!=0 and (@t_week!=6 or @t_six='1') and
+		(select count(*) from holiday where noa=@t_date and iswork=0)=0 )
+		begin
+			set @isadd3=1
+		end
+		
+		if(@isadd3>0)
+		begin
+			set @add3=@add3+1
+		end
+		set @t_ndate=DATEADD(dd,1,@t_ndate)
+	end
+	
+	update @tmpa
+	set days=@days,mdays=@mdays,sdays=@sdays,udate=@t_date
+	where stationno=@stationno
+	
+	fetch next from cursor_table
+	into @stationno,@gen,@hours,@mhours,@shours
+end
+close cursor_table
+deallocate cursor_table
+
+insert @tmpa(gno,udate,stationno)
+select '1',MAX(udate),CHAR(255) from @tmpa
+where stationno!=''
+
+declare @udate nvarchar(50)=isnull((select top 1 udate from @tmpa where gno='1'),'')
+set @udate=case when @r_len='4' then replace(@udate,'-','/') else replace(cast(cast(left(@udate,4) as int)-1911 as nvarchar(10))+SUBSTRING(@udate,5,len(@udate)),'-','/') end
+
+if(@t_edate>=@nowdate and @udate='' and (select count(*) from @tmpa where gno='0')=0)
+begin
+	set @udate=@nowdate
+end
+
+--106/03/15寫入orde.dodate
+if(@udate!='')
+begin
+	if((select count(*) from qsys where noa='orde.dodate')>0)
+	begin
+		update qsys
+		set value=@udate
+		where noa='orde.dodate' and value<@udate
+	end
+	else
+	begin
+		insert qsys(noa,value,name)
+		select 'orde.dodate',@udate,'最後交期'
+	end
+	
+	if((left(@t_proj,2)='AD' or left(@t_proj,2)='JO'))
+	begin
+		--同步更新到典盈st4
+		if((select count(*) from st4.dbo.qsys where noa='orde.dodate')>0)
+		begin
+			update st4.dbo.qsys
+			set value=@udate
+			where noa='orde.dodate' and value<@udate
+		end
+		else
+		begin
+			insert st4.dbo.qsys(noa,value,name)
+			select 'orde.dodate',@udate,'最後交期'
+		end
+	end
+end
+
+select
+gno,stationno stno
+,station stations 
+,dbo.getComma(gen,-1)gen
+,dbo.getComma(mount,-1)mount
+,dbo.getComma(round(hours,0),-1)hours
+,dbo.getComma(days,-1)days
+,dbo.getComma(mmount,-1)mmount
+,dbo.getComma(round(mhours,0),-1)mhours
+,dbo.getComma(mdays,-1)mdays
+,dbo.getComma(smount,-1)smount
+,dbo.getComma(round(shours,0),-1)shours
+,dbo.getComma(sdays,-1)sdays
+,case when @r_len='4' then replace(udate,'-','/') else replace(cast(cast(left(udate,4) as int)-1911 as nvarchar(10))+SUBSTRING(udate,5,len(udate)),'-','/') end udate
+,@startdate startdate
+from @tmpa where stationno!='' order by stationno,gno
+;
+--************************************************************************************************
+z_workgg9:--z_workgg9
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_workh nvarchar(10)
+declare @t_edate nvarchar(20)
+declare @r_len nvarchar(20)
+declare @t_six nvarchar(20)
+declare @t_proj nvarchar(50)
+
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_realwork = case when '#non' = [12] then '' else [12] end
+set @t_workh = case when '#non' = [17] then '' else [17] end
+set @t_edate = case when '#non' = [18] then '' else [18] end
+set @r_len = [19]
+set @t_six = [20]
+set @t_proj = '[21]'
+-----------------------------------------------------------------------------------------------
+declare @nowdate nvarchar(30) --今天日期
+if(@r_len=3)
+begin
+	set @nowdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+	set @nowdate=left(@nowdate,3)+'/'+substring(@nowdate,4,2)+'/'+right(@nowdate,2)
+end
+else
+begin
+	set @nowdate=REPLACE(CONVERT (VARCHAR(10), GETDATE(),21 ),'-','/')
+end
+
+declare @tmp table(
+	typea nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(max),
+	gen float,--標準日產能/機時
+	workno nvarchar(50),
+	productno nvarchar(100),
+	product nvarchar(MAX),
+	mount float,--排產數量
+	hours float,--需工時
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	isw bit--製成品
+)
+
+insert @tmp
+select case when a.noa like 'W[0-9]%' then '1' else '2' end
+,a.stationno,a.station,0,a.noa,a.productno,a.product,isnull(a.mount,0)-isnull(a.inmount,0),a.hours
+,a.ordeno,a.no2,case when a.productno=b.productno then 1 else 0 end
+from view_work a outer apply (select productno from view_workgs where noa=a.cuano and noq=cuanoq) b
+where a.stationno between @t_bstationno and @t_estationno
+and isnull(a.productno,'') between @t_bproductno and @t_eproductno
+and a.cuadate<=@t_edate
+and isnull(a.isfreeze,0)=0
+and (len(@t_realwork)=0 or a.noa like 'W[0-9]%')
+and isnull(a.mount,0)-isnull(a.inmount,0)!=0
+and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(a.productno,''),5)!='D4302')
+and a.cuadate>=dbo.q_cdn(@nowdate,-14) --106/12/29只看2周前之後的單子
+
+if(@t_workh='1')
+begin
+	insert @tmp
+	select '3',a.stationno,a.station,0,a.noa,a.productno,a.product,isnull(a.mount,0)-isnull(a.inmount,0),a.hours
+	,ordeno,no2,case when a.productno=b.productno then 1 else 0 end
+	from view_workh a
+	outer apply (select productno from view_ordes where noa=a.cuano and no2=cuanoq) b
+	where stationno between @t_bstationno and @t_estationno
+	and isnull(a.productno,'') between @t_bproductno and @t_eproductno
+	and a.uindate<=@t_edate
+	and isnull(isfreeze,0)=0
+	and isnull(mount,0)-isnull(inmount,0)!=0
+	and not exists (select* from view_work where ordeno=a.ordeno)
+	and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(a.productno,''),5)!='D4302')
+	and a.uindate>=dbo.q_cdn(@nowdate,-14) --只看2周前之後的單子
+end
+
+update a
+set gen=case when case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0)  else isnull(b.gen,0) end=0 then 8
+else case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0)  else isnull(b.gen,0) end end
+from @tmp a left join station b on a.stationno=b.noa
+
+declare @tmpa table(
+	gno nvarchar(10),
+	idno int,
+	stationno nvarchar(50),
+	station nvarchar(max),
+	gen float,
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	workno nvarchar(50),
+	productno nvarchar(100),
+	mount float,
+	sproductno nvarchar(100),
+	smount float,
+	hours float,
+	days float,
+	udate nvarchar(50)
+)
+
+insert @tmpa
+select '0',ROW_NUMBER()over (order by stationno,ordeno,no2,workno),stationno,station,gen,ordeno,no2,workno
+,case when isw=1 then productno else '' end
+,case when isw=1 then mount else null end
+,case when isw=0 then productno else '' end
+,case when isw=0 then mount else null end
+,hours,0,''
+from @tmp 
+
+insert @tmpa
+select '1',MAX(idno)+1,stationno,MAX(station),gen,'','','','',SUM(mount),'',SUM(smount),sum(hours),0,''
+from @tmpa group by stationno,gen
+
+declare @stationno nvarchar(50)
+declare @gen float
+declare @hours float
+declare @t_ndate datetime = GETDATE()
+declare @t_date nvarchar(50)
+declare @t_gen float
+declare @t_week float
+declare @days float
+declare @add3 float
+declare @isadd3 float
+declare @t_startdate datetime = GETDATE()
+declare @startdate nvarchar(50)=CONVERT(NVARCHAR(10),DATEADD(dd,1,@t_startdate),20)
+set @startdate=case when @r_len='4' then replace(@startdate,'-','/') else replace(cast(cast(left(@startdate,4) as int)-1911 as nvarchar(10))+SUBSTRING(@startdate,5,len(@startdate)),'-','/') end
+
+declare cursor_table cursor for
+select stationno,gen,hours from @tmpa where gno='1' order by stationno
+open cursor_table
+fetch next from cursor_table
+into @stationno,@gen,@hours
+while(@@FETCH_STATUS <> -1)
+begin
+	set @t_ndate=DATEADD(dd,1,@t_startdate) --隔天開始計算
+	set @days=0
+	set @add3=0
+	set @t_date=CONVERT(NVARCHAR(10),@t_ndate,20)
+	set @t_date=case when @r_len='4' then replace(@t_date,'-','/') else replace(cast(cast(left(@t_date,4) as int)-1911 as nvarchar(10))+SUBSTRING(@t_date,5,len(@t_date)),'-','/') end
+
+	while(@hours>0)
+	begin
+		set @t_date=CONVERT(NVARCHAR(10),@t_ndate,20)
+		set @t_date=case when @r_len='4' then replace(@t_date,'-','/') else replace(cast(cast(left(@t_date,4) as int)-1911 as nvarchar(10))+SUBSTRING(@t_date,5,len(@t_date)),'-','/') end
+		set @t_week=DATEPART(dw ,@t_ndate)-1
+		set @t_gen=isnull((select gen from view_cugt where stationno=@stationno and datea=@t_date),0)
+		if(@t_gen=0)
+		begin
+			--假日主檔上班日
+			if((select count(*) from holiday where noa=@t_date and iswork=1)>0)
+			begin
+				set @t_gen=@gen
+			end
+			--正常上班日 排除假日
+			else if(@t_week!=0 and (@t_week!=6 or @t_six='1') and
+			(select count(*) from holiday where noa=@t_date and iswork=0)=0 )
+			begin
+				set @t_gen=@gen
+			end
+		end
+		
+		if(@t_gen>0)
+		begin
+			if(@hours>0)
+			begin
+				set @days=@days+1
+				set @hours=case when @hours>=@t_gen then @hours-@t_gen else 0 end
+				set @t_gen=case when @hours>=@t_gen then 0 else @t_gen-@hours end
+			end
+		end
+		
+		set @t_ndate=DATEADD(dd,1,@t_ndate)
+	end
+	
+	--+3天
+	while(@add3<4)
+	begin
+		set @t_date=CONVERT(NVARCHAR(10),@t_ndate,20)
+		set @t_date=case when @r_len='4' then replace(@t_date,'-','/') else replace(cast(cast(left(@t_date,4) as int)-1911 as nvarchar(10))+SUBSTRING(@t_date,5,len(@t_date)),'-','/') end
+		set @t_week=DATEPART(dw ,@t_ndate)-1
+		set @isadd3=0
+
+		--假日主檔上班日
+		if((select count(*) from holiday where noa=@t_date and iswork=1)>0)
+		begin
+			set @isadd3=1
+		end
+		--正常上班日 排除假日
+		else if(@t_week!=0 and (@t_week!=6 or @t_six='1') and
+		(select count(*) from holiday where noa=@t_date and iswork=0)=0 )
+		begin
+			set @isadd3=1
+		end
+		
+		if(@isadd3>0)
+		begin
+			set @add3=@add3+1
+		end
+		set @t_ndate=DATEADD(dd,1,@t_ndate)
+	end
+	
+	update @tmpa
+	set days=@days,udate=@t_date
+	where stationno=@stationno
+	
+	fetch next from cursor_table
+	into @stationno,@gen,@hours
+end
+close cursor_table
+deallocate cursor_table
+
+select
+stationno stno
+,station stations 
+,dbo.getComma(gen,-1)gen
+,dbo.getComma(mount,-1)mount
+,dbo.getComma(smount,-1)smount
+,dbo.getComma(round(hours,0),-1)hours
+,dbo.getComma(days,-1)days
+,case when @r_len='4' then replace(udate,'-','/') else replace(cast(cast(left(udate,4) as int)-1911 as nvarchar(10))+SUBSTRING(udate,5,len(udate)),'-','/') end udate
+,@startdate startdate
+,'orde_r?noa=$ordeno' qhrefa
+,'uca_jo?noa=$productno' qhrefb
+,'uca_jo?noa=$sproductno' qhrefc
+,isnull((select cuano+'-'+cuanoq from view_work where noa=a.workno),'')workgno
+,*
+from @tmpa a where stationno!=''  order by stationno,gno,idno
+;
+--************************************************************************************************
+z_workgg10:--z_workgg10
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_edate nvarchar(20)
+declare @t_proj nvarchar(50)
+
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_edate = case when '#non' = [18] then '' else [18] end
+set @t_proj = '[21]'
+
+declare @tmpa table(
+	gno nvarchar(10),
+	productno nvarchar(50),
+	mount float
+)
+
+insert @tmpa (gno,productno,mount)
+select '9',a.productno,sum(a.mount) mount
+from view_inas a left join view_ina b on a.noa=b.noa
+where exists (select * from uca where noa=a.productno and typea='3')--半成品
+and b.datea<=@t_edate
+group by a.productno
+
+insert @tmpa (gno,productno,mount)
+select '9',a.productno,-1*sum(case when a.gmount!=0 then a.gmount else a.mount end) gmount
+from view_gets a left join view_get b on a.noa=b.noa
+where exists (select * from uca where noa=a.productno and typea='3')--半成品
+and b.datea<=@t_edate
+group by a.productno
+
+insert @tmpa (gno,productno,mount)
+select '0',productno,SUM(mount) from @tmpa
+where productno between @t_bproductno and @t_eproductno
+group by productno
+
+delete @tmpa where gno ='9'
+delete @tmpa where gno ='0' and mount=0
+
+select a.gno,a.productno,b.product,b.spec,b.unit,b.style
+,dbo.getComma(a.mount,-1) mount
+from @tmpa a left join uca b on a.productno=b.noa
+order by a.productno
+
+;
+--------------------------------------------------------------------------------------------------
+z_workgg11:--z_workgg11
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(30)
+declare @t_estationno nvarchar(30)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_showover nvarchar(10)
+declare @t_realwork nvarchar(10)
+declare @t_bstationgno nvarchar(30)
+declare @t_estationgno nvarchar(30)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_proj nvarchar(50)
+declare @t_maxgen nvarchar(50) 
+declare @t_dayclass nvarchar(50) 
+declare @t_ordeno nvarchar(50) 
+declare @t_ordeno2 nvarchar(50) 
+
+set @t_bdate = case when '#non' = [1] then '' else [1] end
+set @t_edate = case when '#non' = [2] then @t_bdate else [2] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then char(255) else [5] end
+set @t_bproductno = case when '#non' = [7] then '' else [7] end
+set @t_eproductno = case when '#non' = [8] then char(255) else [8] end
+set @t_showover = case when '#non' = [9] then '' else [9] end
+set @t_realwork = case when '#non' = [11] then '' else [11] end
+set @t_bstationgno = case when '#non' = [12] then '' else [12] end
+set @t_estationgno = case when '#non' = [13] then char(255) else [13] end
+set @t_cuanoa = case when '#non' = [14] then '' else [14] end
+set @t_cuanoq = case when '#non' = [15] then '' else [15] end
+set @t_proj = case when '#non' = [16] then '' else [16] end
+set @t_maxgen = case when '#non' = [17] then '24000' else [17] end
+set @t_dayclass = case when '#non' = [18] then '120' else [18] end
+set @t_ordeno = case when '#non' = [19] then '' else [19] end
+set @t_ordeno2 = case when '#non' = [20] then '' else [20] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	stationno nvarchar(50),
+	station nvarchar(50),
+	modelno nvarchar(50),
+	model nvarchar(max),
+	datea nvarchar(10),
+	mmount float, --模具數
+	gen float, --最大日產能 (station.maxmodmount每日可生產最大數量)
+	mount float, --生產數量
+	smaxop float,--工作線最大圈數
+	smaxmod float,--工作線最大模數
+	smodmounts float, --工作線穴數
+	modmounts float, --模具穴數
+	maxmodmount float --每圈可生產最大數量
+)
+
+insert into @tmp
+select '99' gno,a.stationno,b.station,isnull(d.modelno,'')
+,case when ISNULL(e.namea,'')!='' then ISNULL(e.namea,'') else d.model end
+,a.datea,f.mount,isnull(b.maxop,1)*isnull(b.maxmod,1)*isnull(b.modmounts,1),sum(a.mount)
+,isnull(b.maxop,1),isnull(b.maxmod,1),isnull(b.modmounts,1),isnull(g.modmounts,1),f.mount*isnull(g.modmounts,1)
+from view_cugu a left join station b on (a.stationno=b.noa) 
+left join view_work d on (isnull(a.workno,'')=d.noa)
+--left join model e on e.noa=d.modelno
+left join modg e on e.noa=d.modelno
+outer apply (select SUM(inmount) mount from model where modgno=d.modelno)f
+outer apply (select top 1 * from model where modgno=d.modelno order by noa)g
+where (a.datea between @t_bdate and @t_edate) 
+and (a.stationno between @t_bstationno and @t_estationno)
+and isnull(d.productno,'') between @t_bproductno and @t_eproductno
+and (isnull(a.workno,'') != '')
+and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+and (len(@t_cuanoa)=0 or d.cuano=@t_cuanoa)
+and (len(@t_cuanoq)=0 or d.cuanoq=@t_cuanoq)
+and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(d.productno,''),5)!='D4302')
+and (len(@t_ordeno)=0 or d.ordeno=@t_ordeno)
+and (len(@t_ordeno2)=0 or d.no2=@t_ordeno2)
+group by isnull(d.modelno,''),case when ISNULL(e.namea,'')!='' then ISNULL(e.namea,'') else d.model end,a.datea,f.mount
+,a.stationno,b.station,isnull(b.maxop,1)*isnull(b.maxmod,1)*isnull(b.modmounts,1)
+,b.maxop,b.maxmod,b.modmounts,g.modmounts
+	
+--update @tmp set gen=@t_dayclass where gen=0
+
+insert into @tmp
+select '0' gno,a.stationno,a.station,a.modelno,a.model,a.datea,a.mmount,a.gen,sum(a.mount)
+,a.smaxop,a.smaxmod,a.smodmounts,a.modmounts,a.maxmodmount
+from @tmp a
+group by a.stationno,a.station,a.modelno,a.model,a.datea,a.mmount,a.gen
+,a.smaxop,a.smaxmod,a.smodmounts,a.modmounts,a.maxmodmount
+
+delete @tmp where gno='99' or mount=0 or isnull(modelno,'')=''
+
+if(@t_showover='1')
+begin
+	--delete @tmp where mount<gen
+	delete @tmp where (mount/case when modmounts>1 then modmounts else 1 end)<(mmount*smaxop)+1
+end
+
+select a.gno,a.stationno,a.station,a.modelno,a.model,a.datea,a.mmount,a.gen,a.mount
+,a.smaxop,a.smaxmod,a.smodmounts,a.modmounts,a.maxmodmount,@t_maxgen maxgen
+from @tmp a order by a.stationno,a.modelno,a.model,a.datea;
+
+------------------------------------------------------------------------------------------------------------
+z_workgg12:--z_workgg12
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bstationno nvarchar(max)
+declare @t_estationno nvarchar(max)
+declare @t_xgroupano nvarchar(max)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_showfinished nvarchar(max)
+declare @t_realwork nvarchar(10)
+declare @t_bstationgno nvarchar(10)
+declare @t_estationgno nvarchar(10)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_proj nvarchar(50)
+declare @t_ordeno nvarchar(50) 
+declare @t_ordeno2 nvarchar(50)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_xgroupano = case when '#non' = [7] then '' else [7] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_showfinished = case when '#non' = [11] then '' else [11] end
+set @t_realwork = case when '#non' = [12] then '' else [12] end
+set @t_bstationgno = case when '#non' = [13] then '' else [13] end
+set @t_estationgno = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_cuanoa = case when '#non' = [15] then '' else [15] end
+set @t_cuanoq = case when '#non' = [16] then '' else [16] end
+set @t_proj = '[21]'
+set @t_ordeno = case when '#non' = [24] then '' else [24] end
+set @t_ordeno2 = case when '#non' = [25] then '' else [25] end
+
+declare @tmp table(
+	gno nvarchar(10),
+	accy nvarchar(10),
+	stationno nvarchar(90),
+	stations nvarchar(max),
+	gen float,
+	datea nvarchar(10),
+	cuadate nvarchar(10),
+	uindate nvarchar(10),
+	workno nvarchar(90),
+	productno nvarchar(max),
+	mount float,
+	inmount float,
+	unit nvarchar(15),
+	hours float,
+	mans float,
+	rate float
+)
+
+insert into @tmp
+	select '0' gno,a.accy,isnull(a.stationno,''),b.station
+	--,isnull(d.gen,isnull(b.gen,0))
+	,isnull(d.gen,case when isnull(b.gensel,'')='3' then isnull(b.wages,0)+isnull(b.gen,0) when isnull(b.gensel,'')='2' then isnull(b.wages,0) else isnull(b.gen,0) end)
+	,a.datea,c.cuadate,c.uindate,a.workno,c.productno
+	,a.mount
+	,case when g.bdate=a.datea then isnull((select sum(mount) from view_workbs where workno=a.workno and datea<=a.datea),0)
+	when g.edate=a.datea then isnull((select sum(mount) from view_workbs where workno=a.workno and datea>=a.datea),0)
+	else isnull((select sum(mount) from view_workbs where workno=a.workno and datea=a.datea),0) end
+	,c.unit,a.hours,isnull(f.minutes,0),0 rate
+	from view_cugu a left join station b on (isnull(a.stationno,'')=b.noa) left join view_work c on (isnull(a.workno,'')=c.noa)
+	outer apply(select top 1 gen from view_cugt where (stationno=a.stationno) and (datea=a.datea)) d
+	left join uca e on c.productno=e.noa
+	outer apply(
+		select sum(borntime+addtime) minutes
+		from view_cuw cuw
+		left join view_cuws cuws on (cuw.noa=cuws.noa)
+		where (a.stationno=cuw.stationno) and (a.datea=cuw.datea)
+	) f
+	outer apply(select MIN(datea)bdate,MAX(datea)edate from view_cugu where workno=a.workno) g
+	where (isnull(a.datea,'') between @t_bdate and @t_edate) 
+			and (isnull(a.stationno,'') between @t_bstationno and @t_estationno) 
+			and (len(@t_xgroupano)=0 or isnull(e.groupano,'')=@t_xgroupano) 
+			and (isnull(c.noa,'') != '')/*----預防 cugu有work被刪掉*/ and (isnull(c.tggno,'')='') 
+ 			and ((len(@t_showfinished)=0) or (@t_showfinished='1' and isnull(e.typea,'2')='2'))
+			and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+			--and (len(@t_realwork)=0 or left(a.workno,2)!='WJ')
+			and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+			and (len(@t_cuanoa)=0 or c.cuano=@t_cuanoa)
+			and (len(@t_cuanoq)=0 or c.cuanoq=@t_cuanoq)
+			and isnull(c.productno,'') between @t_bproductno and @t_eproductno
+			and (len(@t_ordeno)=0 or c.ordeno=@t_ordeno) 
+			and (len(@t_ordeno2)=0 or c.no2=@t_ordeno2)
+			and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(c.productno,''),5)!='D4302')
+			
+			--未完工
+			and isnull(isfreeze,0)!=1 and ISNULL(enda,0)!=1
+			and ISNULL(c.mount,0)-ISNULL(c.inmount,0)>0
+			
+insert into @tmp(gno,stationno,stations,datea,gen,mount,hours,mans)
+	select '1' gno,a.stationno,a.stations,char(255),avg(a.gen),sum(a.mount),sum(a.hours),sum(a.mans)
+	from @tmp a group by a.stationno,a.stations
+	
+update a
+set rate=b.gen-a.hours
+from @tmp a outer apply (select SUM(gen)gen from (select datea,gen from @tmp where gno='0' and stationno=a.stationno group by datea,gen)tmp)b
+where gno='1'
+
+insert into @tmp(gno,stationno,stations,datea)
+select '2' gno,a.stationno,a.stations,char(255) from @tmp a where gno='0' group by a.stationno,a.stations
+	
+select a.gno,a.accy,a.stationno stno,a.stations,a.gen,a.datea,a.cuadate,a.uindate,
+	a.workno,a.productno
+	,dbo.getComma(round(a.mount,3),-1) mount
+	,dbo.getComma(round(a.inmount,3),-1) inmount
+	,a.unit,round(a.hours,3) hours,round(a.mans,3) mans,round(a.rate,3) rate,
+	'work?left(noa,'+cast(len(a.workno) as nvarchar)+')=$workno?'+a.accy qhref
+from @tmp a order by a.stationno,a.datea,a.gno;
+
+--******************************************************************************************************
+z_workgg13:--z_workgg13
+SET QUOTED_IDENTIFIER OFF
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_xgroupano nvarchar(max)
+declare @t_bproductno nvarchar(max)
+declare @t_eproductno nvarchar(max)
+declare @t_proj nvarchar(50)
+declare @t_ordeno nvarchar(50) 
+declare @t_ordeno2 nvarchar(50)
+declare @t_bcust nvarchar(max)
+declare @t_ecust nvarchar(max)
+declare @t_bcust2 nvarchar(max)
+declare @t_ecust2 nvarchar(max)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then @t_bdate else [3] end
+set @t_xgroupano = case when '#non' = [7] then '' else [7] end
+set @t_bproductno = case when '#non' = [8] then '' else [8] end
+set @t_eproductno = case when '#non' = [9] then CHAR(255) else [9] end
+set @t_proj = '[21]'
+set @t_ordeno = case when '#non' = [24] then '' else [24] end
+set @t_ordeno2 = case when '#non' = [25] then '' else [25] end
+
+set @t_bcust = case when '#non' = [30] then '' else [30] end
+set @t_ecust = case when '#non' = [31] then CHAR(255) else [31] end
+set @t_bcust2 = case when '#non' = [32] then '' else [32] end
+set @t_ecust2 = case when '#non' = [33] then CHAR(255) else [33] end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(10),
+	ordeno nvarchar(50), --銷售訂單號
+	no2 nvarchar(10), --序號
+	ordesisvcc nvarchar(50),--銷售訂單明細狀態
+	custno nvarchar(90),--客戶編號
+	nick nvarchar(MAX),--客戶簡稱
+	omount float,--銷售訂單明細數量
+	vmount float,--已出貨
+	uvmount float,--未出貨
+	packno nvarchar(MAX),--包裝方式
+	packname nvarchar(MAX),--包裝名稱
+	packd nvarchar(MAX),--包裝明細(未出貨)
+	ctn float,--包裝總箱數(未出貨)
+	cuft float,--包裝總材積(未出貨)
+	bwdate nvarchar(MAX),--開工日期
+	ewdate nvarchar(MAX),--完工日期
+	wmount float,--開工數量
+	wbmount float,--完工數量
+	uwbmount float,--未做量
+	worksatus nvarchar(MAX),--工令入庫單狀態
+	ordesdatea nvarchar(20),--銷售訂單明細預定交期
+	odweek float, --週別
+	odate nvarchar(10),--訂單日期
+	custorde nvarchar(50),--客戶訂單
+	vcceno nvarchar(50),--出貨通知單號
+	shiporderno nvarchar(50),--Booking No.
+	cldate nvarchar(50),--結關日期
+	shipno nvarchar(MAX),--運輸航次
+	cuordevcceno nvarchar(MAX),--運輸記錄
+	trantype nvarchar(MAX),--運輸方式
+	casetype nvarchar(MAX),--櫃型
+	groupbno nvarchar(MAX),--次產品線
+	productno nvarchar(MAX),--件號代號
+	products nvarchar(MAX),--件號名稱
+	engpro nvarchar(MAX),--銷售明細註記一
+	spec nvarchar(MAX), --型號
+	groupeno nvarchar(MAX),--車縫
+	scolor nvarchar(MAX), --皮料1
+	classno nvarchar(MAX),--皮料2
+	classa nvarchar(MAX),--皮料3
+	zinc nvarchar(MAX),--皮料4
+	sourceno nvarchar(MAX), --轉印代號
+	sourcename nvarchar(MAX), --轉印名稱
+	groupfno nvarchar(MAX),--護片代號
+	groupfname nvarchar(MAX),--護片顏色
+	sizeano nvarchar(MAX),--網烙印代號
+	sizeaname nvarchar(MAX),--網烙印名稱
+	groupgino nvarchar(MAX),--大弓/座管代號
+	groupginame nvarchar(MAX),--大弓/座管名稱
+	grouphno nvarchar(MAX),--中束代號
+	grouphnmae nvarchar(MAX),--中束名稱
+	uccmemo nvarchar(MAX),--銷售明細註記八
+	amemo nvarchar(MAX),--備註
+	worker1 nvarchar(MAX),--開立人員姓名
+	cust2no nvarchar(MAX),--付款客戶
+	cust2name nvarchar(MAX),--付款客戶名稱
+	worker2 nvarchar(MAX),--維護人員
+	storeno nvarchar(MAX),--出貨倉庫編號
+	storename nvarchar(MAX),--出貨倉庫
+	custpname nvarchar(MAX),--客戶件號名稱
+	bmemo nvarchar(MAX),--銷售明細註記三
+	stype nvarchar(MAX),--內銷/外銷
+	sourcetype nvarchar(MAX),--來源類別
+	custpno nvarchar(MAX),--客戶件號
+)
+
+insert #tmp
+select '0',a.noa,b.no2
+,case when isnull(d.vmount,0)>0 then '已出足' else '未出足' end
+,a.custno,a.nick,b.mount,isnull(d.vmount,0),b.mount-isnull(d.vmount,0)
+,b.packwayno,b.packway
+,case when b.mount-isnull(d.vmount,0)<=0 and isnull(d.vmount,0)>0 then '已出足'
+when isnull(e.inmount,0)>0 and isnull(e.outmount,0)>0 
+then cast(e.inmount*e.outmount as nvarchar(20))+'*'+cast(floor((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount)) as nvarchar(20))
++'+'+cast((b.mount-isnull(d.vmount,0))-(floor((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount))*(e.inmount*e.outmount)) as nvarchar(50))
+else '無提供包裝方式' end packd
+,case when e.inmount*e.outmount=0 then 0 else ceiling((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount)) end ctn
+,case when e.inmount*e.outmount=0 then 0 else ceiling((b.mount-isnull(d.vmount,0))/(e.inmount*e.outmount))*isnull(e.cuft,0) end cuft
+,case when len(isnull(f1.bwdate1,''))=0 and len(isnull(f1.bwdate2,''))=0 then '' else isnull(f1.bwdate1,'')+'~'+isnull(f1.bwdate2,'') end bwdate
+,case when len(isnull(f2.ewdate1,''))=0 and len(isnull(f2.ewdate2,''))=0 then '' else isnull(f2.ewdate1,'')+'~'+isnull(f2.ewdate2,'') end ewdate
+,isnull(g.wmount,0)wmount,isnull(g.wbmount,0) wbmount,isnull(g.wbmount,0)-isnull(b.mount,0) uwbmount
+,case when isnull(g.wbmount,0)>0 then '結案' else '未開立' end worksatus
+,b.datea ordesdatea
+,case when len(b.datea)=0 then '' when len(b.datea)=9 then DATEPART(ISO_WEEK,dbo.ChineseEraName2AD(b.datea)) else DATEPART(ISO_WEEK,b.datea) end
+,a.odate,a.custorde
+,stuff((select ','+noa from view_vcces where ordeno=a.noa and no2=b.no2 FOR XML PATH('')),1,1,'')
+,i.sono,i.cldate,i.ship
+,stuff((select ','+noa from view_vcces where ordeno=a.noa and no2=b.no2 FOR XML PATH('')),1,1,'')
+,a.trantype,replace(a.casetype,'~#$',"'")
+,c.groupbno,b.productno,b.product,c.engpro,c.spec,c.groupeno
+,b.scolor,b.class,b.classa,b.zinc
+,b.source,isnull((select top 1 mon from adpro where noa=b.source),'')
+,c.groupfno,isnull((select top 1 mon from adsss where noa=c.groupfno),'')
+,b.sizea,isnull((select top 1 mon from adoth where noa=b.sizea),'')
+,case when isnull(c.groupgno,'')!='' then isnull(c.groupgno,'') else isnull(c.groupino,'') end
+,case when isnull(c.groupgno,'')!='' then isnull((select top 1 mon from adknife where noa=c.groupgno),'') 
+else isnull((select top 1 mon from adtran where noa=c.groupino),'') end
+,c.grouphno,isnull((select top 1 mon from adpipe where noa=c.grouphno),'')
+,c.memo,a.memo,a.worker,a.custno2,a.cust2,a.worker2,j.storeno,j.store
+,k.product,b.memo,case when a.stype='3' then '外銷' else '內銷' end
+,case when len(b.quatno)>0 then '報價單' else '非計畫' end,k.productno
+from view_orde a left join view_ordes b on a.noa=b.noa
+left join uca c on b.productno=c.noa
+outer apply (select sum(case when va.typea='2' then -1 else 1 end*vb.mount)vmount from view_vcc va left join view_vccs vb on va.noa=vb.noa where vb.ordeno=a.noa and vb.no2=b.no2)d
+outer apply (select top 1 * from pack2s where noa=b.productno and packway=b.packwayno)e
+outer apply (select MIN(cuadate)bwdate1,MAX(cuadate)bwdate2 from view_work where ordeno=a.noa and no2=b.no2 and isnull(cuadate,'')!='')f1
+outer apply (select MIN(uindate)ewdate1,MAX(uindate)ewdate2 from view_work where ordeno=a.noa and no2=b.no2 and isnull(uindate,'')!='')f2
+outer apply (select sum(mount)wmount ,sum(inmount)wbmount,count(*)iswork from view_work where ordeno=a.noa and no2=b.no2 and productno=b.productno)g
+outer apply (select top 1 * from view_vcces where ordeno=a.noa and no2=b.no2)h
+outer apply (select top 1 * from boaj where noa=h.noa)i
+outer apply (select top 1 * from view_vccs where ordeno=a.noa and no2=b.no2)j
+outer apply (select top 1 * from ucccust where noa=c.noa)k
+where isnull(b.datea,'') between @t_bdate and @t_edate
+and (len(@t_xgroupano)=0 or isnull(c.groupano,'')=@t_xgroupano)
+and isnull(b.productno,'') between @t_bproductno and @t_eproductno
+and (len(@t_ordeno)=0 or a.noa=@t_ordeno)
+and (len(@t_ordeno2)=0 or b.no2=@t_ordeno2)
+and c.noa is not null --只抓製成品 或半成品
+and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(b.productno,''),5)!='D4302')
+and a.custno between @t_bcust and @t_ecust
+and a.custno2 between @t_bcust2 and @t_ecust2
+
+select 
+dbo.getComma(omount,-1)omount,
+dbo.getComma(vmount,-1)vmount,
+dbo.getComma(uvmount,-1)uvmount,
+dbo.getComma(ctn,-1)ctn,
+dbo.getComma(cuft,-1)cuft,
+dbo.getComma(wmount,-1)wmount,
+dbo.getComma(wbmount,-1)wbmount,
+dbo.getComma(uwbmount,-1)uwbmount,
+* from #tmp order by ordesdatea,odate,ordeno,no2
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;
+--******************************************************************************************************
+z_workgg14:--z_workgg14
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bstationno nvarchar(20)
+declare @t_estationno nvarchar(20)
+declare @t_realwork nvarchar(20)
+declare @t_bstationgno nvarchar(20)
+declare @t_estationgno nvarchar(20)
+declare @t_cuanoa nvarchar(50)
+declare @t_cuanoq nvarchar(50)
+declare @t_proj nvarchar(50)
+declare @t_ordeno nvarchar(50) 
+declare @t_ordeno2 nvarchar(50)
+declare @t_xshownowork nvarchar(20)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bstationno = case when '#non' = [4] then '' else [4] end
+set @t_estationno = case when '#non' = [5] then CHAR(255) else [5] end
+set @t_realwork = case when '#non' = [12] then '' else [12] end
+set @t_bstationgno = case when '#non' = [13] then '' else [13] end
+set @t_estationgno = case when '#non' = [14] then CHAR(255) else [14] end
+set @t_cuanoa = case when '#non' = [15] then '' else [15] end
+set @t_cuanoq = case when '#non' = [16] then '' else [16] end
+set @t_proj = '[21]'
+set @t_ordeno = case when '#non' = [24] then '' else [24] end
+set @t_ordeno2 = case when '#non' = [25] then '' else [25] end
+set @t_xshownowork = case when '#non' = [26] then '' else [26] end
+----------------------------------------------------------
+
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	workno nvarchar(100),
+	noq nvarchar(100),
+	stationno nvarchar(100),
+	datea nvarchar(20),
+	mount float,
+	inmount float,
+	ldatea nvarchar(20),
+	linmount float
+)
+
+insert #tmp (gno,workno,noq,stationno,datea,mount)
+select '9',a.workno,a.noq,a.stationno,a.datea,a.mount
+from view_cugu a 
+left join station b on a.stationno=b.noa
+where a.datea between @t_bdate and @t_edate
+and (isnull(a.stationno,'') between @t_bstationno and @t_estationno)
+and (isnull(b.stationgno,'') between @t_bstationgno and @t_estationgno)
+and (len(@t_realwork)=0 or a.workno like 'W[0-9]%')
+
+declare @workno nvarchar(100)
+declare @t_workno nvarchar(100)='$#@%$^@#^#^'
+declare @stationno nvarchar(100)
+declare @datea nvarchar(20)
+declare @bdatea nvarchar(20)
+declare @t_datea nvarchar(20)=''
+declare @mount float
+declare @bmount float
+declare @t_bmount float=0
+declare @inmount float=0
+declare @linmount float=0
+
+declare @isenda bit
+
+declare cursor_table cursor for
+select workno,stationno,datea,isnull(mount,0) from #tmp where gno='9' order by workno,datea,noq
+open cursor_table
+fetch next from cursor_table
+into @workno,@stationno,@datea,@mount
+while(@@FETCH_STATUS <> -1)
+begin
+	set @isenda=0
+	set @inmount=0
+	set @linmount=0
+	if(@workno!=@t_workno) --製令不同時workb日期重新抓
+	begin
+		set @t_datea=''
+	end
+	else
+	begin
+		--判斷是否有剩餘入庫存
+		--入庫日期小於等於排程日期
+		if(@bdatea<=@datea)
+		begin
+			--本次入庫量+已入庫量
+			if(@t_bmount>@mount)
+			begin
+				set @t_bmount=(@t_bmount)-@mount
+				set @inmount=@mount
+				set @isenda=1
+				
+				insert #tmp(gno,workno,stationno,datea,mount,inmount,ldatea,linmount)
+				select '0',@workno,@stationno,@datea,@mount,@inmount,@bdatea,0
+			end
+			else
+			begin
+				set @inmount=@inmount+@t_bmount
+				set @t_bmount=0
+			end
+		end
+		else --延遲入庫
+		begin
+			--本次入庫量+已入庫量+已延遲入庫量
+			if(@t_bmount>@mount)
+			begin
+				set @t_bmount=(@t_bmount)-@mount
+				set @linmount=@mount
+				set @isenda=1
+				
+				insert #tmp(gno,workno,stationno,datea,mount,inmount,ldatea,linmount)
+				select '0',@workno,@stationno,@datea,@mount,@inmount,@bdatea,@linmount
+			end
+			else
+			begin
+				set @linmount=@linmount+@t_bmount
+				set @t_bmount=0
+			end
+		end
+	end
+	
+	set @bdatea=''
+	
+	declare cursor_table2 cursor for
+	select a.datea,isnull(b.mount,0) from view_workb a left join view_workbs b on a.noa=b.noa
+	where b.workno=@workno and a.datea>@t_datea
+	open cursor_table2
+	fetch next from cursor_table2
+	into @bdatea,@bmount
+	while(@@FETCH_STATUS <> -1)
+	begin
+		set @t_datea=@bdatea
+		
+		--入庫日期小於等於排程日期
+		if(@bdatea<=@datea)
+		begin
+			--本次入庫量+已入庫量
+			if(@bmount+@inmount>@mount)
+			begin
+				set @t_bmount=(@bmount+@inmount)-@mount
+				set @inmount=@inmount+(@bmount-@t_bmount)
+				set @isenda=1
+				
+				insert #tmp(gno,workno,stationno,datea,mount,inmount,ldatea,linmount)
+				select '0',@workno,@stationno,@datea,@mount,@inmount,@bdatea,0
+			end
+			else
+			begin
+				set @inmount=@inmount+@bmount
+			end
+		end
+		else --延遲入庫
+		begin
+			--本次入庫量+已入庫量+已延遲入庫量
+			if(@bmount+@inmount+@linmount>@mount)
+			begin
+				set @t_bmount=(@bmount+@inmount+@linmount)-@mount
+				set @linmount=@linmount+(@bmount-@t_bmount)
+				set @isenda=1
+				
+				insert #tmp(gno,workno,stationno,datea,mount,inmount,ldatea,linmount)
+				select '0',@workno,@stationno,@datea,@mount,@inmount,@bdatea,@linmount
+			end
+			else
+			begin
+				set @linmount=@linmount+@bmount
+			end
+		end
+		
+		if(@isenda=1)
+		begin
+			break
+		end
+		
+		fetch next from cursor_table2
+		into @bdatea,@bmount
+	end
+	close cursor_table2
+	deallocate cursor_table2
+	
+	if(@isenda=0)
+	begin
+		insert #tmp(gno,workno,stationno,datea,mount,inmount,ldatea,linmount)
+		--select '0',@workno,@stationno,@t_datea,@mount,@inmount,@bdatea,@linmount
+		--106/08/24 延遲入庫改為 該日排程入庫的延遲入庫量
+		select '0',@workno,@stationno,@datea,@mount,@inmount,@bdatea,@linmount
+	end
+
+	set @t_workno=@workno
+
+	fetch next from cursor_table
+	into @workno,@stationno,@datea,@mount
+end
+close cursor_table
+deallocate cursor_table
+
+delete #tmp where gno='9'
+------------------------------------------------------------------------------
+
+declare @tmp table(
+	gno nvarchar(1),
+	datea nvarchar(10),
+	stationno nvarchar(100),
+	stations nvarchar(255),
+	workno nvarchar(50),
+	cuanoa nvarchar(100),
+	cuanoq nvarchar(50),
+	ordeno nvarchar(100),
+	no2 nvarchar(50),
+	pno nvarchar(100),
+	product nvarchar(MAX),
+	enda bit,
+	inmount float, --入庫量
+	errmount float, --重工量
+	wmount float, --106/08/15 製令數量
+	linmount float, --106/08/15 延遲入庫量
+	qerrmount float, --106/08/15 不良數量
+	qerrrate float --106/08/15 不良率
+)
+
+--明細
+insert @tmp (gno,stationno,stations,workno,datea,wmount,inmount,linmount,errmount,qerrmount,qerrrate)
+select '0' gno,noa,station,workno,datea,SUM(isnull(wmount,0))
+,SUM(isnull(inmount,0)),SUM(isnull(linmount,0)),SUM(isnull(errmount,0)),SUM(isnull(qerrmount,0)),SUM(isnull(qerrrate,0))
+from station a
+outer apply (
+	--排程數量
+	select xa.workno,xa.datea,SUM(mount)wmount
+	,0 inmount,0 linmount,0 errmount,0 qerrmount,0 qerrrate
+	from view_cugu xa where xa.datea between @t_bdate and @t_edate and stationno=a.noa
+	and (len(@t_realwork)=0 or xa.workno like 'W[0-9]%')
+	group by xa.workno,xa.datea
+	
+	--入庫數量
+	union all
+	select xa.workno,xa.datea,0 wmount
+	,sum(xa.inmount) inmount,SUM(xa.linmount) linmount,0 errmount,0 qerrmount,0 qerrrate
+	from #tmp xa
+	left join view_work c on xa.workno=c.noa
+	where isnull(c.isrework,0)=0 and xa.stationno=a.noa and xa.datea between @t_bdate and @t_edate
+	and (len(@t_realwork)=0 or xa.workno like 'W[0-9]%')
+	group by xa.workno,xa.datea
+	--重工
+	union all
+	select xa.workno,xa.datea,0 wmount
+	,0 inmount,0 linmount,sum(xa.inmount+xa.linmount) errmount,0 qerrmount,0 qerrrate
+	from #tmp xa
+	left join view_work c on xa.workno=c.noa
+	where isnull(c.isrework,0)=1 and xa.stationno=a.noa and xa.datea between @t_bdate and @t_edate
+	and (len(@t_realwork)=0 or xa.workno like 'W[0-9]%')
+	group by xa.workno,xa.datea
+	--不良數量
+	union all
+	select xb.workno,xa.datea,0 wmount
+	,0 inmount,0 linmount,0 errmount,sum(xb.errmount) qerrmount,case when sum(xb.born)>0 then sum(xb.errmount)/sum(xb.born) else 0 end qerrrate
+	from view_workbq xa
+	left join view_workbqs xb on xa.noa = xb.noa
+	left join view_work c on xb.workno=c.noa
+	where xa.stationno=a.noa and xa.datea between @t_bdate and @t_edate
+	and (len(@t_realwork)=0 or xa.workno like 'W[0-9]%')
+	group by xb.workno,xa.datea
+)b
+where (a.noa between @t_bstationno and @t_estationno)
+and (a.stationgno between @t_bstationgno and @t_estationgno)
+and b.datea is not null
+group by noa,station,datea,workno
+
+update a
+set cuanoa=b.cuano,cuanoq=b.cuanoq,ordeno=b.ordeno,no2=b.no2,pno=b.productno,product=b.product,enda=b.enda
+from @tmp a
+outer apply (select * from view_work where noa=a.workno)b
+
+delete @tmp
+where not((len(@t_cuanoa)=0 or cuanoa=@t_cuanoa)
+	and (len(@t_cuanoq)=0 or cuanoq=@t_cuanoq)
+	and ((left(@t_proj,2)!='AD' and left(@t_proj,2)!='JO') or left(isnull(pno,''),5)!='D4302')
+	and (len(@t_ordeno)=0 or ordeno=@t_ordeno) 
+	and (len(@t_ordeno2)=0 or no2=@t_ordeno2)
+	and (len(@t_xshownowork)=0 or isnull(enda,0)!=1 ))
+
+--不良率
+update @tmp set qerrrate=round(qerrrate*100,2)
+
+delete @tmp
+where inmount=0 and errmount=0
+and wmount=0 and linmount=0 and qerrmount=0 and qerrrate=0
+
+select
+	gno,datea,stationno,stations,workno
+	,case when len(cuanoq)>0 then cuanoa+'-'+cuanoq else cuanoa end cuano
+	,case when len(no2)>0 then ordeno+'-'+no2 else ordeno end ordeno
+	,pno,product
+	,@t_bdate bdate,@t_edate edate
+	,dbo.getComma(inmount,-1)inmount
+	,dbo.getComma(errmount,0)errmount
+	,dbo.getComma(wmount,-1)wmount
+	,dbo.getComma(linmount,-1)linmount
+	,dbo.getComma(qerrmount,-1)qerrmount
+	,dbo.getComma(qerrrate,2)qerrrate
+	,dbo.getComma(wmount-inmount-linmount,-1)unmount
+from @tmp order by stationno,gno,datea
+
+---------------------------------------------------------------
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+;

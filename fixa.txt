@@ -1,0 +1,153 @@
+fixa4tgg2fixa:--fixa4tgg2fixa
+	declare @t_worker nvarchar(20)
+	declare @t_btggno nvarchar(20)
+	declare @t_etggno nvarchar(20)
+	declare @t_bdate nvarchar(10)
+	declare @t_edate nvarchar(10)
+	
+	set @t_worker = [1]
+	set @t_bdate = [2]
+	set @t_edate = [3]
+	set @t_btggno = [4]
+	set @t_etggno = [5]
+	
+	set @t_etggno = case when len(@t_etggno)=0 then char(255) else @t_etggno end
+	-----------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		fixano nvarchar(20),
+		fixanoq nvarchar(10),
+		fixa4tggno nvarchar(20),
+		fixa4tggnoq nvarchar(10),
+		datea nvarchar(10),
+		tggno nvarchar(20),
+		tgg nvarchar(50),
+		nick nvarchar(50),
+		carno nvarchar(20),
+		carplateno nvarchar(20),
+		mile float,
+		
+		wtype nvarchar(10),
+		productno nvarchar(20),
+		product nvarchar(50),
+		mount float,
+		price float,
+		[money] float
+	)
+	-----------------------------------------------------------------------------------------------------
+	
+	insert into @tmp(fixano,fixanoq,fixa4tggno,fixa4tggnoq
+		,datea,tggno,tgg,nick,carno,carplateno,mile
+		,wtype,productno,product,mount,price,[money])
+	select c.noa,c.noq,a.noa,a.noq
+		,b.datea,b.tggno,b.tgg,b.nick,a.carno,a.carplateno,a.mile
+		,'A',a.productno,a.product,a.mount,a.price,a.[money]
+	from fixa4tggs a
+	left join fixa4tgg b on a.noa=b.noa
+	left join fixas c on a.noa=c.fixa4tggno and a.noq=c.fixa4tggnoq
+	where (b.tggno between @t_btggno and @t_etggno) 
+	and (b.datea between @t_bdate and @t_edate)
+	--將資料完整化
+	update @tmp set carno=isnull(b.carno,''),carplateno=isnull(b.carplateno,''),mile=ISNULL(b.mile,0)
+	from @tmp a
+	outer apply (select top(1) carno,carplateno,mile from @tmp 
+		where fixa4tggno=a.fixa4tggno 
+		and cast(fixa4tggnoq as int)<cast(a.fixa4tggnoq as int) 
+		and len(ISNULL(carno,''))>0
+		order by cast(fixa4tggnoq as int) desc) b
+	where len(ISNULL(a.carno,''))=0
+	-----------------------------------------------------------------------------------------------------
+	--已匯過的就不再匯出,除非刪除FIXAS中已存在的	
+	delete @tmp
+	from @tmp a
+	left join (select fixa4tggno from @tmp where fixano is not null group by fixa4tggno) b on a.fixa4tggno=b.fixa4tggno
+	where b.fixa4tggno is not null
+	-----------------------------------------------------------------------------------------------------
+	declare @tggno nvarchar(20)
+	declare @carno nvarchar(20)
+	declare @datea nvarchar(10)
+	
+	declare @noa nvarchar(20)
+	declare @noq nvarchar(10)
+	declare @string nvarchar(max)
+	set @string = '0123456789ABCDEFGHIJKLMN'
+	declare @num int
+	
+	declare cursor_table cursor for
+	select tggno,carno,datea from @tmp group by tggno,carno,datea
+	open cursor_table
+	fetch next from cursor_table
+	into @tggno,@carno,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin	
+		select @noa = MAX(noa) 
+		from(select noa from fixa where LEFT(noa,9)='DA'+replace(@datea,'/','')
+		union all
+		select fixano from @tmp where LEFT(fixano,9)='DA'+replace(@datea,'/','')) as a
+		
+		if(LEN(ISNULL(@noa,''))=0)
+		begin
+			set @noq='001'
+		end
+		else
+		begin
+			set @noq = right(@noa,3)
+			if(right(@noq,2)='99')
+			begin
+				set @noq = Substring(@string,Charindex(LEFT(@noq,1),@string)+1,1)+'00'
+			end
+			else
+			begin
+				set @noq = LEFT(@noq,1) + right('00'+CAST(CAST(right(@noq,2) as int)+1 as nvarchar),2)
+			end
+		end
+		set @noa = 'DA'+replace(@datea,'/','')+@noq
+		update @tmp set fixano= @noa where tggno=@tggno and carno=@carno and datea=@datea
+		
+		fetch next from cursor_table
+		into @tggno,@carno,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update @tmp set fixanoq= right('00'+cast(b.recno as nvarchar),3)
+	from @tmp a
+	left join(select ROW_NUMBER()over(partition by tggno,carno,datea order by fixa4tggnoq) recno
+		,fixa4tggno,fixa4tggnoq
+		from @tmp )b on a.fixa4tggno=b.fixa4tggno and a.fixa4tggnoq=b.fixa4tggnoq
+	----------------------------------------------------------------------------------------------------
+	insert into fixas(noa,noq,wtype,productno,product,mount,price,[money],fixa4tggno,fixa4tggnoq)
+	select fixano,fixanoq,wtype,productno,product,mount,price,[money],fixa4tggno,fixa4tggnoq
+	from @tmp
+
+	insert into fixa(noa,datea,fixadate,mon,tggno,tgg,nick
+		,carno,carplateno,miles
+		,wmoney,wacc1,wacc2
+		,cmoney,cacc1,cacc2
+		,[money],tax,discount,total,worker,driverno,driver)
+	select a.* 
+		,isnull(c.wmoney,0),'5850.03','修繕費'
+		,0,'5850.02','輪胎'
+		,isnull(c.wmoney,0),0,0,isnull(c.wmoney,0),@t_worker,ISNULL(d.driverno,''),ISNULL(e.namea,'')
+	from(
+		select a.fixano,a.datea,a.datea fixadate,LEFT(a.datea,6) mon
+			,a.tggno,ISNULL(b.comp,'') tgg,ISNULL(b.nick,'') nick
+			,a.carno,a.carplateno,a.mile
+		from @tmp a 
+		left join tgg b on a.tggno=b.noa
+		group by a.fixano,a.datea,a.datea,a.tggno,ISNULL(b.comp,''),ISNULL(b.nick,'')
+			,a.carno,a.carplateno,a.mile ) a
+	outer apply(select SUM(ISNULL([money],0)) wmoney from @tmp where fixano=a.fixano) c	
+	left join car2 d on a.carno=d.carno
+	left join driver e on d.driverno=e.noa
+	
+	--上次維修日期
+	update fixas set memo2= e.fixadate
+	from fixas a
+	left join @tmp b on a.noa=b.fixano and a.noq=b.fixanoq
+	outer apply (select top 1 d.fixadate
+			from fixas c
+			left join fixa d on c.noa=d.noa
+			where b.carno=d.carno and b.productno=c.productno 
+				and b.fixano != c.noa
+				and b.datea>=d.fixadate) e
+	where b.fixa4tggno is not null;

@@ -1,0 +1,520 @@
+z_uccage01:--z_uccage01
+	declare @t_bpno nvarchar(50)
+	declare @t_epno nvarchar(50)
+	declare @t_bsno nvarchar(50) 
+	declare @t_esno nvarchar(50)
+	declare @t_typea nvarchar(15)
+	declare @t_group nvarchar(15)
+	declare @t_getdate nvarchar(15)
+	declare @t_enddate nvarchar(30)
+	declare @t_showzero  nvarchar(15)
+	declare @t_showcost  nvarchar(15)
+	declare @t_day1 int
+	declare @t_day21 int
+	declare @t_day22 int
+	declare @t_day31 int
+	declare @t_day32 int
+	declare @t_day41 int
+	declare @t_day42 int
+	declare @t_day51 int
+	declare @t_day52 int
+	declare @t_day6 int
+	
+	declare @r_len nvarchar(10)='[2]'
+	declare @t_project nvarchar(10)='[6]'
+	declare @r_lenm nvarchar(10)
+	
+	set @t_bpno = case when '#non'=[10] then '' else [10] end
+	set @t_epno = case when '#non'=[11] then char(255) else [11] end
+	set @t_bsno = case when '#non' = [12] then '' else [12] end
+	set @t_esno = case when '#non' = [13] then CHAR(255) else [13] end
+	set @t_typea = case when '#non'=[14] then '' else [14] end
+	set @t_group = case when '#non'=[15] then '' else [15] end
+	set @t_getdate = case when '#non'=[16] then '1' else [16] end
+	set @t_enddate = case when '#non'=[17] then '' else [17] end
+	set @t_showzero = case when '#non'=[18] then '' else [18] end
+	set @t_showcost = case when '#non'=[19] then '' else [19] end
+	set @t_day1 = cast(case when '#non'=[20] then '60' else [20] end as int)
+	set @t_day21 = cast(case when '#non'=[21] then '61' else [21] end as int)
+	set @t_day22 = cast(case when '#non'=[22] then '120' else [22] end as int)
+	set @t_day31 = cast(case when '#non'=[23] then '121' else [23] end as int)
+	set @t_day32 = cast(case when '#non'=[24] then '180' else [24] end as int)
+	set @t_day41 = cast(case when '#non'=[25] then '181' else [25] end as int)
+	set @t_day42 = cast(case when '#non'=[26] then '360' else [26] end as int)
+	set @t_day51 = cast(case when '#non'=[27] then '361' else [27] end as int)
+	set @t_day52 = cast(case when '#non'=[28] then '720' else [28] end as int)
+	set @t_day6 = cast(case when '#non'=[29] then '721' else [29] end as int)
+	
+	
+	declare @t_stkdate nvarchar(30)
+	if(@r_len='4')
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(10), GETDATE(),111)
+		set @r_lenm='7'
+	end
+	else
+	begin
+		set @t_stkdate=CONVERT (VARCHAR(7), GETDATE(),12 )+0890000
+		set @t_stkdate=left(@t_stkdate,3)+'/'+substring(@t_stkdate,4,2)+'/'+right(@t_stkdate,2)
+		set @r_lenm='6'
+	end
+	
+	if(len(@t_enddate)>0)
+	begin
+		set @t_stkdate=@t_enddate
+	end
+	
+	------------報表設定<<Start>>------------
+	declare @pageline int = case when @t_showcost='1' then 20 else 40 end --每頁幾行
+	------------報表設定<<End>>------------
+	
+	declare @cmd nvarchar(max) 
+	
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	--庫存表
+	create table #stkucc(
+		idno int identity(0,1),
+		storeno nvarchar(80),
+		store nvarchar(255),
+		productno nvarchar(100),
+		product nvarchar(255),
+		spec nvarchar(255),
+		style nvarchar(255),
+		unit nvarchar(50),
+		mount float,
+		weight float,
+		primary key(idno,storeno,productno)
+	) 
+	
+	create table #tmp(
+		typea int,--0表示盤點
+		datea nvarchar(80),
+		storeno nvarchar(80),
+		productno nvarchar(100),
+		mount float,
+		weight float
+		--primary key(typea,datea,storeno,productno)
+	)
+	
+	insert into #tmp(typea,datea,storeno,productno,mount,weight)
+	--103/10/22避免溢位
+	select
+		'1',isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,''),sum(cast(mount as decimal(38,6))) mount,sum(cast(weight as decimal(38,6))) weight
+	from (
+		select
+			isnull(a.datea,'') datea,isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gmount,0)!=0 then isnull(b.gmount,0) else isnull(b.mount,0) end))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*(case when isnull(b.gweight,0)!=0 then isnull(b.gweight,0) else isnull(b.weight,0) end))*(-1) weight
+		from view_vcc a
+		left join view_vccs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0)) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_rc2 a
+		left join view_rc2s b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_ina a
+		left join view_inas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(a.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_get a
+		left join view_gets b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(a.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_worka a
+		left join view_workas b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_workb a
+		left join view_workbs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate)  and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(a.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.mount,0))*(-1) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0))*(-1) weight
+		from view_workc a
+		left join view_workcs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			((case when a.typea='1' then 1 else -1 end)*(isnull(b.mount,0)+isnull(b.inmount,0)-isnull(b.outmount,0))) mount,
+			((case when a.typea='1' then 1 else -1 end)*isnull(b.weight,0)) weight
+		from view_workd a
+		left join view_workds b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cut a
+		left join view_cuts b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(a.productno,'') productno,
+			(isnull(a.mount,0))*(-1) mount,(isnull(a.gweight,0))*(-1) weight
+		from view_cut a
+		where (a.datea<= @t_stkdate) and (isnull(a.productno,'') between @t_bpno and @t_epno)
+		and (isnull(a.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cub a
+		left join view_cubu b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(a.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.gmount,0))*(-1) mount,(isnull(b.gweight,0))*(-1) weight
+		from view_cub a
+		left join view_cubt b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		--103/10/22 調撥一定要有入庫倉庫與出庫倉庫
+		select
+			isnull(a.datea,''),isnull(a.storeno,'') storeno,isnull(b.productno,'') productno,
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(a.storeno,'') between @t_bsno and @t_esno) 
+		--and isnull(a.storeno,'')!=''
+		union all
+		select
+			isnull(a.datea,''),isnull(a.storeinno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from view_cng a
+		left join view_cngs b on a.noa=b.noa
+		where (a.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(a.storeinno,'') between @t_bsno and @t_esno) 
+		--and isnull(a.storeinno,'')!=''
+		--103/10/21 增加要增減庫存的資料表
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0)) mount,(isnull(b.weight,0)) weight
+		from vcf a
+		left join vcfs b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+		union all
+		select
+			isnull(b.datea,''),isnull(b.storeno,'') storeno,isnull(b.productno,''),
+			(isnull(b.mount,0))*(-1) mount,(isnull(b.weight,0))*(-1) weight
+		from vcf a
+		left join vcft b on a.noa=b.noa
+		where (b.datea<= @t_stkdate) and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)	
+	) a group by isnull(a.datea,''),isnull(a.storeno,''),isnull(a.productno,'')
+		
+	--105/06/30 有達盤點 換成最小單位
+	if(@t_project='XY')
+	begin
+		insert #tmp
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,'')
+		,isnull(b.mount,0)*case when isnull(d.inmount,0)>0 then d.inmount else 1 end 
+		,isnull(b.weight,0)*case when isnull(d.inmount,0)>0 then d.inmount else 1 end 
+		from view_ucce a left join view_ucces b on a.noa=b.noa 
+		left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c
+		on b.storeno=c.storeno and b.productno=c.productno  
+		left join pack2s d on b.productno=d.noa and b.unit=d.pack
+		where a.datea<= @t_stkdate and a.noa=c.noa and a.datea=c.mdate
+		and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+	end
+	else
+	begin
+		insert #tmp
+		select '0',isnull(a.datea,''),isnull(b.storeno,''),isnull(b.productno,''),isnull(b.mount,0),isnull(b.weight,0) 
+		from view_ucce a left join view_ucces b on a.noa=b.noa 
+		left join (select MAX(datea)mdate,MAX(noa)noa,storeno,productno from view_ucces where datea<= @t_stkdate group by storeno,productno) c
+		on b.storeno=c.storeno and b.productno=c.productno  
+		where a.datea<= @t_stkdate and a.noa=c.noa and a.datea=c.mdate
+		and (isnull(b.productno,'') between @t_bpno and @t_epno)
+		and (isnull(b.storeno,'') between @t_bsno and @t_esno)
+	end
+		
+	delete a from #tmp a
+	where datea<(select MAX(datea) from #tmp where typea='0' and storeno=a.storeno and productno=a.productno)
+		
+	insert #stkucc
+	select a.storeno,MAX(isnull(c.store,'')),a.productno,MAX(isnull(b.product,''))
+	,MAX(isnull(b.spec,'')),MAX(isnull(b.style,'')),MAX(isnull(b.unit,''))
+	,sum(cast(a.mount as decimal(38,6))) mount,sum(cast(a.weight as decimal(38,6))) weight
+	from #tmp a left join ucc b on a.productno=b.noa left join store c on a.storeno=c.noa
+	where (isnull(a.productno,'') between @t_bpno and @t_epno)
+	and (isnull(a.storeno,'') between @t_bsno and @t_esno)
+	group by a.productno,a.storeno
+	order by a.productno,a.storeno
+		
+	
+	--顯示table
+	declare @result table(
+		gno nvarchar(1),
+		idno int ,
+		pageno int,
+		productno nvarchar(30),
+		xproduct nvarchar(100),
+		storeno nvarchar(80),
+		stores nvarchar(255),
+		spec nvarchar(200),
+		unit nvarchar(10),
+		mount float,
+		total float,
+		vccdatea nvarchar(10),
+		rc2datea nvarchar(10),
+		tdays float,
+		m1 float,
+		m2 float,
+		m3 float,
+		m4 float,
+		m5 float,
+		m6 float,
+		t1 float,
+		t2 float,
+		t3 float,
+		t4 float,
+		t5 float,
+		t6 float
+	)
+	
+	insert into @result (gno,idno,pageno,productno,xproduct,storeno,stores,spec,unit,mount,total)
+	select '0' gno,0 idno,0 pageno
+	,a.productno,a.product xproduct,a.storeno,a.store,b.spec,b.unit
+	,a.mount,a.mount*isnull(c.price,0) total
+	from (
+		select productno,MAX(product)product,storeno,MAX(store)store,sum(mount) mount from #stkucc 
+		group by productno,storeno
+	) a
+	left join ucc b on a.productno=b.noa  
+	left join (select * from view_costs where mon=LEFT(@t_stkdate,@r_lenm)) c on a.productno=c.productno
+	where exists (select * from ucc where noa=a.productno) 
+	and (len(@t_typea)=0 or isnull(b.typea,'null')=@t_typea) 
+	and (len(@t_group)=0 or b.groupano=@t_group)
+	
+	--不顯示負數庫存
+	delete @result where mount<0
+	
+	if(@t_showzero!='1')
+	begin
+		delete @result where mount=0
+	end
+	
+	update a
+	set vccdatea=isnull((select MAX(datea) from view_vccs where datea<=@t_stkdate and typea='1' and productno=a.productno and storeno=a.storeno),'')
+	,rc2datea=isnull((select MAX(datea) from view_rc2s where datea<=@t_stkdate and typea='1' and productno=a.productno and storeno=a.storeno),'')
+	from @result a
+	
+	if(@t_getdate='1')
+	begin
+		if(@r_len='4')
+		begin
+			update a
+			set tdays=case when vccdatea!='' then cast(datediff(DAY, a.vccdatea, @t_stkdate) as float) else 999 end
+			from @result a 
+		end
+		else
+		begin
+			update a
+			set tdays=case when vccdatea!='' then cast(datediff(DAY, cast(dbo.ChineseEraName2AD(a.vccdatea) as nvarchar(20)), cast(dbo.ChineseEraName2AD(@t_stkdate) as nvarchar(20))) as float) else 999 end
+			from @result a 
+		end
+	end
+	else if(@t_getdate='2')
+	begin
+		if(@r_len='4')
+		begin
+			update a
+			set tdays=case when rc2datea!='' then cast(datediff(DAY, a.rc2datea, @t_stkdate) as float) else 999 end
+			from @result a 
+		end
+		else
+		begin
+			update a
+			set tdays=case when rc2datea!='' then cast(datediff(DAY, cast(dbo.ChineseEraName2AD(a.rc2datea) as nvarchar(20)), cast(dbo.ChineseEraName2AD(@t_stkdate) as nvarchar(20))) as float) else 999 end
+			from @result a 
+		end
+	end
+	else
+	begin
+		if(@r_len='4')
+		begin
+			update a
+			set tdays=case when rc2datea='' and vccdatea='' then 999
+			when rc2datea> vccdatea then cast(datediff(DAY, a.rc2datea,@t_stkdate) as float) 
+			else cast(datediff(DAY, a.vccdatea,@t_stkdate) as float) end
+			from @result a 
+		end
+		else
+		begin
+			update a
+			set tdays=case when rc2datea='' and vccdatea='' then 999 
+			when rc2datea> vccdatea then cast(datediff(DAY, cast(dbo.ChineseEraName2AD(a.rc2datea) as nvarchar(20))	,cast(dbo.ChineseEraName2AD(@t_stkdate) as nvarchar(20))) as float) 
+			else cast(datediff(DAY, cast(dbo.ChineseEraName2AD(a.vccdatea) as nvarchar(20)),cast(dbo.ChineseEraName2AD(@t_stkdate) as nvarchar(20))) as float) 	end
+			from @result a 
+		end
+	end
+	
+	update @result
+	set m1=case when tdays<=@t_day1 then mount else null end
+	,m2=case when tdays between @t_day21 and @t_day22 then mount else null end
+	,m3=case when tdays between @t_day31 and @t_day32 then mount else null end
+	,m4=case when tdays between @t_day41 and @t_day42 then mount else null end
+	,m5=case when tdays between @t_day51 and @t_day52 then mount else null end
+	,m6=case when tdays>=@t_day6 then mount else null end
+	,t1=case when tdays<=@t_day1 then total else null end
+	,t2=case when tdays between @t_day21 and @t_day22 then total else null end
+	,t3=case when tdays between @t_day31 and @t_day32 then total else null end
+	,t4=case when tdays between @t_day41 and @t_day42 then total else null end
+	,t5=case when tdays between @t_day51 and @t_day52 then total else null end
+	,t6=case when tdays>=@t_day6 then total else null end
+	
+	update a
+	set idno=rr,gno=case when @t_showcost='1' then '5' else '4' end
+	from (select gno,idno,ROW_NUMBER() over (order by productno)rr from @result) a
+	
+	------------更新頁數<<Start>>------------
+	declare @idno int
+	declare @pageno int
+	declare @recCount int = 1
+	declare @pageno_int int = 0
+	declare @lastnoa nvarchar(max) = ''
+	declare @nextidno int
+	declare cursor_table cursor for
+	select a.idno from @result a order by a.idno
+	open cursor_table
+	fetch next from cursor_table
+	into @idno
+	while(@@FETCH_STATUS <> -1)
+	begin
+		if((@recCount > @pageline))
+		begin
+			set @recCount = 1
+			set @pageno_int = @pageno_int+1
+		end
+		if(@recCount = @pageline)
+		begin
+			set @nextidno = @idno+1
+		end
+		update @result set pageno=@pageno_int where idno=@idno
+		set @recCount = @recCount+1
+		fetch next from cursor_table
+		into @idno
+	end
+	close cursor_table
+	deallocate cursor_table
+	------------更新頁數<<End>>-------------
+	------------插入表頭及表尾<<Start>>-------------
+	----------gno->1=有群組表頭,2=有群組表身,3=有群組跳頁,4=無群組表頭,5=無群組表身,6=無群組跳頁
+	if((select count(*) from @result)>0)
+	begin
+		insert into @result(gno,pageno)
+		select '1',pageno from @result where gno='4' or gno='5' group by pageno
+				
+		if(@t_showcost!='1')
+		begin
+			insert into @result(gno,pageno)
+			select '2',pageno from @result where gno='4' group by pageno
+			
+			insert into @result(gno,pageno,mount,total,m1,m2,m3,m4,m5,m6,t1,t2,t3,t4,t5,t6)
+			select '6',MAX(pageno),sum(mount),sum(total) 
+			,sum(m1),sum(m2),sum(m3),sum(m4),sum(m5),sum(m6),sum(t1),sum(t2),sum(t3),sum(t4),sum(t5),sum(t6)
+			from @result where gno='4' 
+			
+		end
+		else
+		begin
+			insert into @result(gno,pageno)
+			select '3',pageno from @result where gno='5' group by pageno
+				
+			insert into @result(gno,pageno,mount,total,m1,m2,m3,m4,m5,m6,t1,t2,t3,t4,t5,t6)
+			select '7',MAX(pageno),sum(mount),sum(total) 
+			,sum(m1),sum(m2),sum(m3),sum(m4),sum(m5),sum(m6),sum(t1),sum(t2),sum(t3),sum(t4),sum(t5),sum(t6)
+			from @result where gno='5'
+		end
+		
+		insert into @result(gno,pageno)
+		select '8',pageno from @result where gno='4' or gno='5' group by pageno
+	end
+	
+	select replace(Convert(varchar(20),getdate(),20),'-','/') wtoday
+	,dbo.getComma(m1,-1)m1
+	,dbo.getComma(m2,-1)m2
+	,dbo.getComma(m3,-1)m3
+	,dbo.getComma(m4,-1)m4
+	,dbo.getComma(m5,-1)m5
+	,dbo.getComma(m6,-1)m6
+	,dbo.getComma(t1,-1)t1
+	,dbo.getComma(t2,-1)t2
+	,dbo.getComma(t3,-1)t3
+	,dbo.getComma(t4,-1)t4
+	,dbo.getComma(t5,-1)t5
+	,dbo.getComma(t6,-1)t6
+	,*
+	,@t_day1 day1
+	,@t_day21 day21
+	,@t_day22 day22
+	,@t_day31 day31
+	,@t_day32 day32
+	,@t_day41 day41
+	,@t_day42 day42
+	,@t_day51 day51
+	,@t_day52 day52
+	,@t_day6 day6
+	from @result order by pageno,gno,idno
+	
+	IF OBJECT_ID('tempdb..#stkucc')is not null
+	BEGIN
+		set @cmd = 'drop table #stkucc'
+		EXECUTE sp_executesql @cmd
+	END
+	IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		set @cmd = 'drop table #tmp'
+		EXECUTE sp_executesql @cmd
+	END
+	
+	;
+--*****************************************************************************************

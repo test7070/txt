@@ -1,0 +1,194 @@
+﻿signend:--signend--補料轉製令&排產
+SET QUOTED_IDENTIFIER OFF
+declare @noa nvarchar(50)=[1]--補料單號
+declare @datea nvarchar(50)=[2]--簽核日
+declare @accy nvarchar(50)='[3]'--年度
+----------------------------------------------------
+if(LEN(@noa)>0 and (select count(*) from workfix where noa=@noa and signend='Y')>0)
+begin
+	--原料直接 產生正式製令
+
+	--判斷是否已產生過製令
+	declare @workno nvarchar(50)=isnull((select workno from workfix where noa=@noa),'')
+	if(LEN(@workno)=0)
+		set @workno=isnull((select noa from view_work where cuano=@noa),'')
+		
+	declare @workaccy nvarchar(50)=''
+
+	if(len(@workno)=0 and (select count(*) from workfixs a where a.noa=@noa and not exists (select * from uca where noa=a.productno))>0 )
+	begin
+		set @workaccy=@accy
+		
+		--產生製令單號
+		set @workno=isnull((select MAX(replace(noa,'WJ','W')) from view_work 
+		where noa like 'W'+replace(@datea,'/','')+'%' or noa like 'WJ'+replace(@datea,'/','')+'%' ) ,'')
+		
+		if(len(@workno)=0)
+		begin
+			set @workno='W'+replace(@datea,'/','')+'001'
+		end
+		else
+		begin
+			if(charindex('-',@workno)>0)
+				set @workno=LEFT(@workno,charindex('-',@workno)-1)
+			
+			set @workno=right(@workno,3)
+			set @workno=right('000'+cast(cast(@workno as int)+1 as nvarchar(50)),3)
+			set @workno='W'+replace(@datea,'/','')+@workno
+		end
+		
+		--插入表頭
+		EXEC("
+			insert work"+@workaccy+"(noa,kdate,cuadate,uindate,workdate,enddate,mount,inmount,rmount,wmount,unit
+			,productno,product,spec,style,stationno,station,tggno,comp,processno,process
+			,hours,rank,price,ordeno,no2,modelno,model,isfreeze,cuano,cuanoq,memo)
+			select '"+@workno+"','"+@datea+"',a.cuadate,a.uindate,'','',0,0,0,0,b.unit
+			,a.productno,a.product,b.spec,b.style,a.stationno,a.station,a.tggno,a.tgg,b.processno,b.process
+			,0,0,0,'','','','',0,'"+@noa+"','',a.memo
+			from workfix a left join uca b on a.productno=b.noa
+			where a.noa='"+@noa+"'
+		")
+		
+		--插入表身
+		EXEC("
+			insert works"+@workaccy+"(noa,noq,productno,product,spec,unit,style,mount,gmount,emount,memo,processno,process)
+			select '"+@workno+"' noa,a.noq,a.productno,a.product,c.spec,a.unit,'',a.mount
+			,isnull((select SUM(mount) from view_worka where noa='"+@workno+"' and productno=a.productno),0)
+			,a.mount-isnull((select SUM(mount) from view_worka where noa='"+@workno+"' and productno=a.productno),0)
+			,a.memo,isnull(c.processno,0),isnull(c.process,0)
+			from workfixs a left join workfix b on a.noa=b.noa outer apply (select * from ucas where noa=b.productno and productno=a.productno) c
+			where a.noa='"+@noa+"' and not exists (select * from uca where noa=a.productno)
+		")
+		
+		update workfix set workno=@workno where noa=@noa
+	end
+	else
+	begin
+		set @workaccy=isnull((select accy from view_work where noa=@workno),@accy)
+		--刪除表身
+		EXEC("delete works"+@workaccy+" where noa='"+@workno+"'")
+		--重新插入表身
+		EXEC("
+			insert works"+@workaccy+"(noa,noq,productno,product,spec,unit,style,mount,gmount,emount,memo,processno,process)
+			select '"+@workno+"' noa,a.noq,a.productno,a.product,c.spec,a.unit,'',a.mount
+			,isnull((select SUM(mount) from view_worka where noa='"+@workno+"' and productno=a.productno),0)
+			,a.mount-isnull((select SUM(mount) from view_worka where noa='"+@workno+"' and productno=a.productno),0)
+			,a.memo,isnull(c.processno,0),isnull(c.process,0)
+			from workfixs a left join workfix b on a.noa=b.noa outer apply (select * from ucas where noa=b.productno and productno=a.productno) c
+			where a.noa='"+@noa+"' and not exists (select * from uca where noa=a.productno)
+		")
+		
+		if((select count(*) from view_work where noa=@workno)>0)
+		begin
+			--更新表頭
+			EXEC("
+				update a
+				set stationno=b.stationno,station=b.station
+				,tggno=b.tggno,comp=b.tgg,cuadate=b.cuadate,uindate=b.uindate
+				,productno=b.productno,product=b.product,memo=b.memo,cuano='"+@noa+"'
+				from work"+@workaccy+" a outer apply (select * from workfix where noa='"+@noa+"')b
+				where a.noa='"+@workno+"'
+			")
+		end
+		else 
+		begin
+			--插入表頭
+			EXEC("
+				insert work"+@workaccy+"(noa,kdate,cuadate,uindate,workdate,enddate,mount,inmount,rmount,wmount,unit
+				,productno,product,spec,style,stationno,station,tggno,comp,processno,process
+				,hours,rank,price,ordeno,no2,modelno,model,isfreeze,cuano,cuanoq,memo)
+				select '"+@workno+"','"+@datea+"',a.cuadate,a.uindate,'','',0,0,0,0,b.unit
+				,a.productno,a.product,b.spec,b.style,a.stationno,a.station,a.tggno,a.tgg,b.processno,b.process
+				,0,0,0,'','','','',0,'"+@noa+"','',a.memo
+				from workfix a left join uca b on a.productno=b.noa
+				where a.noa='"+@noa+"'
+			")
+		end
+	end
+	-------------------------------------------------------------------------------------------------------
+	--半成品的部份  產生  workg
+	--判斷是否已產生過排產
+	declare @workgno nvarchar(50)=isnull((select workgno from workfix where noa=@noa),'')
+	if(LEN(@workgno)=0)
+			set @workgno=isnull((select noa from view_workg where memo like '%補料單號:'+@noa+'，需求原因%'),'')
+
+	declare @workgaccy nvarchar(50)=''
+	if(len(@workgno)=0 and (select count(*) from workfixs a where a.noa=@noa and exists (select * from uca where noa=a.productno))>0)
+	begin
+		set @workgaccy=@accy
+		
+		set @workgno=isnull((select MAX(noa) from view_workg where noa like 'WG'+REPLACE(@datea,'/','')+'%'),'')
+		
+		if(len(@workgno)=0)
+		begin
+			set @workgno='WG'+replace(@datea,'/','')+'001'
+		end
+		else
+		begin
+			if(charindex('-',@workgno)>0)
+				set @workgno=LEFT(@workgno,charindex('-',@workgno)-1)
+			
+			set @workgno=right(@workgno,3)
+			set @workgno=right('000'+cast(cast(@workgno as int)+1 as nvarchar(50)),3)
+			set @workgno='WG'+replace(@datea,'/','')+@workgno
+		end
+		
+		--插入表頭
+		EXEC("
+			insert workg"+@workgaccy+"(noa,datea,bdate,edate,wbdate,wedate,memo,memo2,ordano,ordbno)
+			select '"+@workgno+"','"+@datea+"',cuadate,uindate,cuadate,uindate,'補料單號:"+@noa+"，需求原因:'+memo,'','',''
+			from workfix where noa='"+@noa+"'
+		")
+		
+		--插入表身
+		EXEC("
+			insert workgs"+@workgaccy+"(noa,noq,ordeno,rworkdate,productno,product,spec,ordemount,mount,workno,memo,enda,isfreeze,inmount,wmount)
+			select '"+@workgno+"',a.noq,a.noa+'-'+a.noq,'',a.productno,a.product,c.spec,a.mount,a.mount,'',a.memo,0,0,0,0
+			from workfixs a left join workfix b on a.noa=b.noa
+			outer apply (select * from ucas where noa=b.productno and productno=a.productno)c
+			where a.noa='"+@noa+"' and exists (select * from uca where noa=a.productno)
+		")
+		
+		update workfix set workgno=@workgno where noa=@noa
+	end
+	else
+	begin
+		set @workgaccy=isnull((select accy from view_workg where noa=@workgno),@accy)
+		
+		--刪除表身
+		EXEC("delete workgs"+@workgaccy+" where noa='"+@workgno+"'")
+		
+		--重新插入表身
+		EXEC("
+			insert workgs"+@workgaccy+"(noa,noq,ordeno,rworkdate,productno,product,spec,ordemount,mount,workno,memo,enda,isfreeze,inmount,wmount)
+			select '"+@workgno+"',a.noq,a.noa+'-'+a.noq,'',a.productno,a.product,c.spec,a.mount,a.mount,'',a.memo,0,0,0,0
+			from workfixs a left join workfix b on a.noa=b.noa
+			outer apply (select * from ucas where noa=b.productno and productno=a.productno)c
+			where a.noa='"+@noa+"' and exists (select * from uca where noa=a.productno)
+		")
+		
+		if((select count(*) from view_workg where noa=@workgno)>0)
+		begin
+			--更新表頭
+			EXEC("
+				update a
+				set memo='補料單號:"+@noa+"，需求原因:'+b.memo
+				,bdate=b.cuadate,edate=b.uindate,wbdate=b.cuadate,wedate=b.uindate
+				from workg"+@workgaccy+" a outer apply (select * from workfix where noa='"+@noa+"')b
+				where a.noa='"+@workgno+"'
+			")
+		end
+		else
+		begin
+			--插入表頭
+			EXEC("
+				insert workg"+@workgaccy+"(noa,datea,bdate,edate,wbdate,wedate,memo,memo2,ordano,ordbno)
+				select '"+@workgno+"','"+@datea+"',cuadate,uindate,cuadate,uindate,'補料單號:"+@noa+"，需求原因:'+memo,'','',''
+				from workfix where noa='"+@noa+"'
+			")
+		end
+	end
+	
+	select @workno workno,@workgno workgno
+end
+;

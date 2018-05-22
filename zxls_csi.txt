@@ -1,0 +1,232 @@
+zxls_csi:--zxls_csi  中鋼內銷
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @workerno nvarchar(max) = N[1]
+	declare @worker nvarchar(max) = N[2]
+	declare @filename nvarchar(max) = N[3]
+	declare @curdate nvarchar(max) = convert(nvarchar,getDate(),120)
+	------------------------------------------------------------------------------------------------
+	declare @tmp table(
+		sel int identity(1,1),
+		carcsbno nvarchar(20),
+		serial nvarchar(20),
+		cardealno nvarchar(20),
+		cardeal nvarchar(50),
+		custno nvarchar(20),
+		cust nvarchar(30),
+		nick nvarchar(20),
+		driverno nvarchar(20),
+		driver nvarchar(20),
+		datea nvarchar(20),
+		product nvarchar(50),
+		carno nvarchar(20),
+		calctype nvarchar(20),
+		straddrno nvarchar(max),
+		straddr nvarchar(max),
+		straddr1 nvarchar(max),
+		straddr2 nvarchar(max),
+		weight float,
+		total float,
+		price float,
+		price2 float,
+		discount float,
+		total2 float,
+		memo nvarchar(max),
+		qtime nvarchar(max)
+	)
+
+	declare @custno nvarchar(20)
+	declare @cust nvarchar(20)
+	declare @a nvarchar(max)
+	declare @serial nvarchar(20)
+	declare @datea nvarchar(20)
+	declare @product nvarchar(50)
+	declare @carno nvarchar(20)
+	declare @calctype nvarchar(20)
+	declare @straddrno nvarchar(30)
+	declare @straddr nvarchar(20)
+	declare @straddr1 nvarchar(20)
+	declare @straddr2 nvarchar(20)
+	declare @weight float
+	declare @total float
+	declare @price float
+	declare @price2 float
+	declare @discount float
+	declare @total2 float
+	declare @weight3 float
+	declare @timea float
+	
+	declare cursor_table cursor for
+	select a from ztmpxls order by CAST(noa as int)
+	open cursor_table
+	fetch next from cursor_table
+	into @a
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		set @serial = LEFT(@a,8)
+		set @datea = substring(@a,9,8)
+		set @datea = LEFT(@datea,4)+'/'+SUBSTRING(@datea,5,2)+'/'+RIGHT(@datea,2)
+		set @datea = dbo.AD2ChineseEraName(CAST(@datea as datetime))
+		set @product = SUBSTRING(@a,18,11)
+		set @carno = SUBSTRING(@a,29,7)
+		set @carno = case when @carno like '[0-9,A-Z][0-9,A-Z][0-9][0-9][0-9]%' then LEFT(@carno,2)+'-'+substring(@carno,3,3)
+			when @carno like '[0-9][0-9][0-9][0-9,A-Z][0-9,A-Z]%' then LEFT(@carno,3)+'-'+substring(@carno,4,2)
+			when @carno like '[A-Z][A-Z][A-Z][0-9][0-9][0-9][0-9]' then LEFT(@carno,3)+'-'+RIGHT(@carno,4) 
+			else @carno end
+		set @calctype = SUBSTRING(@a,36,1)
+		set @discount = 0
+		
+		set @straddrno=''
+		set @straddr1 = substring(@a,51,3)
+		set @straddr2 = substring(@a,56,10)
+		set @weight = cast(SUBSTRING(@a,67,12) as float)/1000
+		set @total = cast(SUBSTRING(@a,100,10) as float)
+		set @price = case when isnull(@weight,0)=0 then 0 else ROUND(@total/@weight,3) end	
+		
+		-- @calctype=A(半拖)、F(全拖)
+		-- discount lw1
+		if exists(select * from car2 where carno=@carno and cartype='2')
+		begin
+			--公司車
+			set @price2 = ROUND(@price*0.9,3)
+			
+			select @weight3=0,@discount=0
+			select @weight3=weight3 from car2 where carno=@carno
+			if (@calctype='A')
+			begin		
+				--半拖
+				if @weight3=35
+				begin
+					--35T
+					select @discount = discount from calctypes where noa='D' and noq='01'	
+					set @calctype='D01'
+				end
+				else
+				begin
+					--46T
+					select @discount = discount from calctypes where noa='D' and noq='03'
+					set @calctype='D03'	
+				end	
+			end
+			else
+			begin
+				--全拖
+				select @discount = discount from calctypes where noa='D' and noq='02'
+				set @calctype='D02'	
+			end
+		end
+		else
+		begin
+			--外車
+			set @price2 = @price
+			
+			select @discount = discount from calctypes where noa='E' and noq='01'	
+			set @calctype='E01'	
+		end
+		
+		set @total2 = ROUND(@weight*@price2*@discount,0)
+			
+		insert into @tmp(serial,datea,product,carno,calctype,straddrno,straddr1,straddr2,weight,total,price,price2,discount,total2,qtime)
+		select @serial,@datea,@product,@carno,@calctype,@straddrno,@straddr1,@straddr2,@weight,@total,@price,@price2,@discount,@total2,@curdate
+		
+		fetch next from cursor_table
+		into @a
+	end
+	close cursor_table
+	deallocate cursor_table
+	--車行
+	update @tmp set cardealno=b.noa,cardeal=b.comp
+	from @tmp a
+	left join cardeal b on a.serial=b.serial
+	---客戶編號回寫
+	update @tmp set custno=c.noa,cust=c.comp,nick=c.nick
+	from @tmp a
+	left join cust b on a.serial=b.serial
+	left join cust c on c.nick='中鋼'+b.nick
+	where c.noa is not null
+	--司機
+	update @tmp set driverno=ISNULL(b.driverno,''),driver=ISNULL(c.namea ,'')
+	from @tmp a
+	left join car2 b on a.carno=b.carno
+	left join driver c on b.driverno=c.noa
+		
+	update @tmp set straddrno=custno+'-002',straddr=straddr1+'-'+straddr2
+
+	--比對資料是否已存在,已存在就用舊單號
+	update @tmp set carcsbno=b.noa
+	from @tmp a
+	left join carcsb b on a.datea=b.datea and a.carno=b.carno and a.product=b.memo
+	where b.noa is not null
+	-------------------------------------------------------------------------------------------------
+	declare @sel int
+	declare @string nvarchar(max)='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+	declare @noa nvarchar(20)
+	declare @maxnoa1 nvarchar(20)
+	declare @maxnoa2 nvarchar(max)
+	declare @number nvarchar(20)
+	declare @nn int
+	declare @mm nvarchar(20)
+	
+	declare cursor_table cursor for
+	select sel,datea from @tmp where len(isnull(carcsbno,''))=0
+	open cursor_table
+	fetch next from cursor_table
+	into @sel,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin		
+		select @maxnoa1='',@maxnoa2=''
+		set @noa = REPLACE(@datea,'/','')
+		select top 1 @maxnoa1=noa from carcsb where noa like @noa+'[0-9,A-Z][0-9][0-9]' order by noa desc
+		select top 1 @maxnoa2=carcsbno from @tmp where carcsbno like @noa+'[0-9,A-Z][0-9][0-9]' order by isnull(carcsbno,'') desc
+
+		set @noa = @noa+'000'
+		set @noa = case when isnull(@maxnoa1,'')>@noa then @maxnoa1 else @noa end
+		set @noa = case when isnull(@maxnoa2,'')>@noa then @maxnoa2 else @noa end
+	
+		set @number  = right(@noa,3)				
+		set @nn = (charindex(left(@number,1),@string)-1) * 100 + cast(right(@number,2) as int) + 1
+		set @mm = substring(@string,floor(@nn/100)+1,1)
+		set @noa =  REPLACE(@datea,'/','')+@mm+RIGHT('00'+cast(@nn as nvarchar),2)
+		
+		update @tmp set carcsbno=@noa where sel=@sel
+		
+		fetch next from cursor_table
+		into @sel,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	-------------------------------------------------------------------------
+	--寫入carcsb
+	DECLARE @chk tinyint = 0
+	Begin Transaction [Trans_Name] -- Trans_Name 交易名稱可自訂或者是不寫
+	    --更新已存在的單據
+	    update carcsb set trandate=b.datea,datea=b.datea,mon=LEFT(b.datea,6),carno=b.carno
+			,driverno=b.driverno,driver=b.driver,cardealno=b.cardealno,cardeal=b.cardeal
+			,addrno=b.straddrno,addr=b.straddr,productno='C101',uccno='C101',product='鋼捲'
+			,weight=b.weight,inprice=b.price,inmount=b.weight,inmoney=b.total
+			,outprice=b.price2,outmount=b.weight,outmoney=b.total2,discount=b.discount
+			,memo=b.product,qtime=b.qtime,worker2=@worker
+		from carcsb a
+		left join @tmp b on a.noa=b.carcsbno
+		where b.carcsbno is not null
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+		
+		insert into carcsb(noa,datea,mon,carno,driverno,driver,addrno,addr
+			,productno,uccno,product,custno,comp,custnick
+			,weight,inprice,inmount,inmoney,outprice,outmount,outmoney,discount
+			,tranno,memo,nick,calctype,worker,worker2,trandate,tggno,tgg
+			,cardealno,cardeal,qtime)
+		select carcsbno,datea,LEFT(datea,6),carno,driverno,driver,straddrno,straddr
+			,'C101','C101','鋼捲',custno,cust,nick
+			,weight,price,weight,total,price2,weight,total2,discount
+			,'',product,nick,calctype,@worker,'',datea,'',''
+			,cardealno,cardeal,qtime
+		from @tmp a
+		where not exists(select noa from carcsb where noa=a.carcsbno)
+		IF @@Error <> 0 BEGIN SET @chk = 1 END
+	IF @chk <> 0 BEGIN -- 若是新增資料發生錯誤
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	END
+	ELSE BEGIN
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+	END;

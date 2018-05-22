@@ -1,0 +1,623 @@
+﻿tranvcce2tran:--tranvcce2tran txt/tran.txt
+	SET QUOTED_IDENTIFIER OFF
+	declare @cmd nvarchar(max)
+	declare @key nvarchar(20) = [1]--'BA'
+	declare @t_bdate nvarchar(20)=[2]
+	declare @t_edate nvarchar(20)=[3]
+	--------------------------------------------------------------------------------------------------
+	IF OBJECT_ID('tempdb..#tranvcce2tran')is not null
+	BEGIN
+		drop table #tranvcce2tran
+	END
+	create table #tranvcce2tran(
+		sel int identity(1,1)
+		,tranaccy nvarchar(10)
+		,tranno nvarchar(20)
+		
+		,trandate nvarchar(20)
+		,datea nvarchar(20)
+		,driverno nvarchar(20)
+		,driver nvarchar(50)
+		,mount float
+		,volume float
+		,[weight] float
+		,total float --應收金額
+		,total2 float--應付金額
+		,total3 float--盤車	
+	)
+	IF OBJECT_ID('tempdb..#tranvcce2trans')is not null
+	BEGIN
+		drop table #tranvcce2trans
+	END
+	create table #tranvcce2trans(
+		sel int identity(1,1)
+		,tranaccy nvarchar(10)
+		,tranno nvarchar(20)
+		,trannoq nvarchar(10)
+		
+		,tablea nvarchar(20)
+		,accy nvarchar(10)
+		,noa nvarchar(20)
+		,noq nvarchar(10)
+					
+		,driverno nvarchar(20)
+		,driver nvarchar(50)
+		,trandate nvarchar(20)
+		,datea nvarchar(20)
+	
+		,cstype nvarchar(20)
+		,carno nvarchar(20)
+		,custno nvarchar(20)
+		,cust nvarchar(50)
+		,straddrno nvarchar(20)
+		,straddr nvarchar(50)
+		,endaddrno nvarchar(20)
+		,endaddr nvarchar(50)
+		,mount float
+		,unit nvarchar(20)
+		,volume float
+		,[weight] float
+		,unit2 nvarchar(20)
+		,total float --應收
+		,reserve float--盤車
+		,total2 float--應付
+		,overw float--收貨
+		,overh float--代收
+		,memo nvarchar(max)
+		
+		,ordeno nvarchar(20)
+		,no2 nvarchar(10)
+	)
+	--tranvcce
+	-- 應收 收貨 代收
+	insert into #tranvcce2trans(tablea,accy,noa,noq
+		,driverno,trandate,datea
+		,cstype,carno,custno,cust,straddrno,straddr,endaddrno,endaddr
+		,mount,unit,volume,[weight],unit2
+		,total2,overw,overh,memo
+		,ordeno,no2)
+	select 'tranvcce',a.accy,a.noa,a.noq
+		,a.driverno,b.datea,b.datea
+		,a.typea,a.carno,a.custno,a.cust,a.addrno,a.addr,a.addrno2,a.addr2
+		,0 mount,'' unit,0 volume,0 [weight],'' unit2
+		,a.total,a.total2,a.total3,a.memo
+		,a.ordeno,a.no2
+	from view_tranvcces a
+	left join view_tranvcce b on a.accy=b.accy and a.noa=b.noa
+	left join view_trans c on c.ordeno=a.noa+'-'+a.noq
+	where b.datea between @t_bdate and @t_edate
+	and c.noa is null
+	--tranorde
+	-- 應收 盤車 應付
+	insert into #tranvcce2trans(tablea,accy,noa,noq
+		,driverno,trandate,datea
+		,cstype,carno,custno,cust,straddrno,straddr,endaddrno,endaddr
+		,mount,unit,volume,[weight],unit2
+		,total,reserve,total2,memo)
+	select 'tranorde',a.accy,a.noa,a.noq
+		,'' driverno,c.trandate,c.datea
+		,a.typea,a.carno,b.custno,b.nick,a.addrno,a.addr,a.addrno2,a.addr2
+		,a.mount,a.unit,a.volume,a.[weight],a.unit2
+		,a.total,a.total2,total3,a.memo
+	from view_tranordes a
+	left join view_tranorde b on a.accy=b.accy and a.noa=b.noa
+	left join (select ordeno,no2,min(trandate) trandate ,min(datea) datea
+		from #tranvcce2trans group by ordeno,no2) c on a.noa=c.ordeno and a.noq=c.no2
+	left join view_trans d on d.ordeno=a.noa+'-'+a.noq
+	where c.ordeno is not null
+	and d.noa is null
+	--------------------------------------------------------------------------------------------------
+	insert into #tranvcce2tran(driverno,trandate,datea,mount,volume,[weight],total,total2,total3)
+	select driverno,trandate,datea,sum(isnull(mount,0)),sum(isnull(volume,0)),sum(isnull([weight],0))
+		,sum(isnull(total,0)),sum(isnull(total2,0)) ,sum(isnull(reserve,0))
+	from #tranvcce2trans
+	group by driverno,trandate,datea
+	
+	-- 訂單、派車單號寫入出車單
+	update #tranvcce2trans set ordeno=noa+'-'+noq,no2=''
+	--------------------------------------------------------------------------------------------------
+	
+	declare @string nvarchar(max) = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXU'
+	declare @maxno1 nvarchar(20) = ''
+	declare @maxno2 nvarchar(20) = ''
+	declare @noa nvarchar(20) = ''
+	declare @datea nvarchar(20)
+	declare @sel int
+	declare @n int
+	declare @noq nvarchar(10)
+	
+	declare cursor_table cursor for
+	select sel,datea from #tranvcce2tran datea
+	open cursor_table
+	fetch next from cursor_table
+	into @sel,@datea
+	while(@@FETCH_STATUS <> -1)
+	begin
+		select @noa='',@maxno1='',@maxno2=''
+		select top 1 @maxno1 = tranno from #tranvcce2tran where tranno like @key+REPLACE(@datea,'/','')+'[A-Z,0-9][0-9][0-9]' order by tranno desc	
+		select top 1 @maxno2 = noa from view_trans where noa like @key+REPLACE(@datea,'/','')+'[A-Z,0-9][0-9][0-9]' order by noa desc
+
+		set @noa = case when @maxno1>@maxno2 then @maxno1 else @maxno2 end
+		set @noa = case when len(@noa)=0 then @key+REPLACE(@datea,'/','')+'000' else @noa end
+
+		set @n = (charindex(left(RIGHT(@noa,3),1),@string)-1)*100 + cast(RIGHT(@noa,2) as int) + 1
+		set @noa = @key+REPLACE(@datea,'/','')+SUBSTRING(@string, floor(@n/100)+1,1) + right('00'+cast(@n%100 as nvarchar),2)
+				
+		update #tranvcce2tran set tranaccy=LEFT(@datea,3), tranno=@noa where sel=@sel
+
+		fetch next from cursor_table
+		into @sel,@datea
+	end
+	close cursor_table
+	deallocate cursor_table
+	
+	update #tranvcce2trans set tranaccy=b.tranaccy,tranno=b.tranno
+	from #tranvcce2trans a
+	left join #tranvcce2tran b on a.driverno=b.driverno and a.trandate=b.trandate and a.datea=b.datea
+	where b.tranno is not null
+	
+	update #tranvcce2trans set trannoq=RIGHT('000'+CAST(b.rec as nvarchar),3)
+	from #tranvcce2trans a
+	left join (select sel,ROW_NUMBER()over(partition by tranaccy,tranno order by sel) rec from #tranvcce2trans) b on a.sel=b.sel
+	
+	update #tranvcce2tran set driver=ISNULL(b.namea,'')
+	from #tranvcce2tran a
+	left join driver b on a.driverno=b.noa
+	update #tranvcce2trans set driver=ISNULL(b.namea,'')
+	from #tranvcce2trans a
+	left join driver b on a.driverno=b.noa
+	--------------------------------------------------------------------------------------------------
+	declare @accy nvarchar(20)
+	
+	declare @tmp table(
+		msg nvarchar(max)
+	)
+	Begin Transaction [Trans_Name]
+	
+	begin try
+		declare cursor_table cursor for
+		select tranaccy from #tranvcce2tran group by tranaccy
+		open cursor_table
+		fetch next from cursor_table
+		into @accy
+		while(@@FETCH_STATUS <> -1)
+		begin
+			set @cmd =
+			"insert into tran"+@accy+"(noa,datea,trandate,driverno,driver,mount,volume,[weight],total,total2,total3)
+			select tranno,datea,trandate,driverno,driver,mount,volume,[weight],total,total2,total3 
+			from #tranvcce2tran where tranaccy=@accy"
+			execute sp_executesql @cmd,N'@accy nvarchar(20)',@accy=@accy
+			
+			set @cmd=
+			"insert into trans"+@accy+"(noa,noq,datea,trandate,driverno,driver,cstype,carno,custno,comp,nick
+				,straddrno,straddr,endaddrno,endaddr,mount,unit,volume,[weight],unit2
+				,total,reserve,total2,overw,overh,memo,status,ordeno,qtime)
+			select tranno,trannoq,datea,trandate,driverno,driver,cstype,carno,custno,cust,cust
+				,straddrno,straddr,endaddrno,endaddr,mount,unit,volume,[weight],unit2
+				,total,reserve,total2,overw,overh,memo,tablea,ordeno,convert(nvarchar,getDate(),120)
+			from #tranvcce2trans where tranaccy=@accy"
+			execute sp_executesql @cmd,N'@accy nvarchar(20)',@accy=@accy
+			
+			fetch next from cursor_table
+			into @accy
+		end
+		close cursor_table
+		deallocate cursor_table
+		
+		set @n=0
+		select @n=COUNT(1) from #tranvcce2tran
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		insert into @tmp(msg)values(error_message())
+	end catch
+
+	select * from @tmp
+	drop table #tranvcce2tran
+	drop table #tranvcce2trans;
+
+
+transave:--tran
+-------新增 trans 應付
+	set quoted_identifier off
+	declare @cmd nvarchar(max)
+	declare @t_accy nvarchar(30) = [1]
+	declare @t_noa nvarchar(50) = [2]
+	declare @t_total float
+	set @t_accy = rtrim(ltrim(@t_accy))
+	set @t_noa = rtrim(ltrim(@t_noa))
+	if((len(@t_accy)>0 and len(@t_noa)>0))
+	begin
+		----取得tran金額
+		set @cmd = "select @t_total = total from tran"+@t_accy+" where noa=N'"+@t_noa+"'"
+		execute sp_executesql @cmd,N'@t_total float output',@t_total=@t_total output
+		----若金額不為null回寫trans
+		if(@t_total is not null)
+		begin
+			----改寫@t_noa
+			set @t_noa = cast(@t_noa as nvarchar)+'A'
+			print @t_noa
+			----先刪除原有單據
+			set @cmd = "delete trans" + @t_accy + " where noa=N'" + @t_noa + "'"
+			execute(@cmd)
+			----新增trans -->noa,total2(應付金額)
+			set @cmd = "insert into trans"+@t_accy+"(noa,noq,total2) values(@t_noa,'001',@t_total)"
+			execute sp_executesql @cmd,N'@t_noa nvarchar(50),@t_total float',@t_noa=@t_noa,@t_total=@t_total
+		end
+	end;
+---------------------------------------------------------------------------------------------
+tranpaybjr:--tranpaybjr 
+SET QUOTED_IDENTIFIER OFF
+declare @t_key nvarchar(10) = [1]
+declare @t_mon nvarchar(10) = [2]
+declare @t_tggno nvarchar(50) = [3]
+
+declare @tmpa table( 
+	gno nvarchar(1), 
+	rr int, 
+	noa nvarchar(50), 
+	cno nvarchar(50), 
+	acomp nvarchar(100), 
+	po nvarchar(50), 
+	tggno nvarchar(50), 
+	tgg nvarchar(100), 
+	mount float, 
+	price float, 
+	total float	
+) 
+insert @tmpa 
+select '2','','',isnull(a.cno,''),isnull(a.acomp,''),b.po,b.straddrno,c.comp,sum(b.weight2),isnull(b.price2,0),sum(b.price3) 
+from view_tran a left join view_trans b on a.noa=b.noa 
+left join tgg c on b.straddrno=c.noa 
+where left(b.trandate,6)=@t_mon and (@t_tggno=b.straddrno) 
+group by a.cno,a.acomp,b.po,b.straddrno,c.comp,b.price2 
+order by a.cno,b.po,b.straddrno
+
+update a 
+set rr=rx 
+from (select ROW_NUMBER()over(partition by cno,tggno order by cno,tggno,po)rx,rr from @tmpa)a 
+
+insert @tmpa(gno,cno,acomp,tggno,tgg) 
+select '1',cno,acomp,tggno,tgg 
+from @tmpa 
+group by cno,acomp,tggno,tgg 
+
+update a 
+set rr=rx 
+from (select ROW_NUMBER()over(partition by gno order by cno,tggno) rx,rr from @tmpa where gno='1')a 
+
+--是否以立帳 
+declare @result table( 
+noa nvarchar(50), 
+cno nvarchar(50), 
+tggno nvarchar(50), 
+mon nvarchar(10) 
+) 
+insert @result 
+select noa,cno,tggno,mon 
+from payb 
+where vccno='tran' and mon=@t_mon and tggno=@t_tggno
+
+declare @datea nvarchar(10)=cast(cast(left(@t_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@t_mon,2)+'/15' 
+set @datea= CONVERT(varchar(100),DATEADD(MONTH, DATEDIFF(MONTH, -1, @datea ),-1),111) 
+set @datea=cast(cast(left(@datea,4) as int)-1911 as nvarchar(10))+'/'+RIGHT(@datea,5) 
+declare @paybnoa nvarchar(50)=(select MAX(noa) from payb where datea=@datea)
+
+if((select count(*) from @result)=0) 
+begin 
+	update @tmpa 
+	set noa=case when isnull(@paybnoa,'')!='' then @t_key+cast(cast(right(@paybnoa,10) as int)+rr as nvarchar(50)) else 
+	@t_key+replace(@datea,'/','')+REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR)) end 
+	where gno='1' 
+end 
+else 
+begin 
+	update @tmpa 
+	set noa=b.noa 
+	from @tmpa a 
+	left join payb b on a.cno=b.cno and a.tggno=b.tggno 
+	where gno='1' and left(b.datea,6)=@t_mon 
+end 
+
+update @tmpa 
+set noa=b.noa 
+from @tmpa a 
+outer apply(select noa from @tmpa where isnull(a.cno,'')=isnull(cno,'') and isnull(tggno,'')=isnull(a.tggno,'') and gno='1')b 
+where gno='2' 
+
+declare @n int
+		
+	declare @tmp table(
+		msg nvarchar(max)
+	)
+
+	Begin Transaction [Trans_Name]
+	begin try	
+		--新增
+		if((select count(*) from @result)=0)
+		begin
+			insert payb(noa,cno,acomp,datea,mon,tggno,comp,bdate,edate,vccno) 
+			select noa,cno,acomp,@datea,LEFT(@datea,6),tggno,tgg,LEFT(@datea,6)+'/01',@datea,'tran' 
+			from @tmpa a 
+			where gno='1' and not exists(select cno,tggno from @result) 
+			order by cno,tggno,rr 
+			
+			insert paybs(noa,noq,rc2no,kind,mount,price,[money],total,tablea) 
+			select noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR)) 
+			,po,'費用',mount,price,total,total,'tran' 
+			from @tmpa 
+			where gno='2' and not exists(select cno,tggno from @result) 
+			order by noa,rr 
+		end
+		else
+		begin
+			--更新
+			delete paybs where noa in(select noa from @tmpa)
+			insert paybs(noa,noq,rc2no,kind,mount,price,money,total,tablea)
+			select  a.noa,REPLICATE('0',3-LEN(rr)) + RTRIM(CAST(rr AS CHAR))
+					,b.po,'費用',b.mount,b.price,b.total,b.total,'tran'
+			from payb a left join @tmpa b on a.noa=b.noa
+			where b.gno='2' and a.noa in(select noa from @tmpa)
+		end
+			
+		set @n=(select count(*) from @tmpa where gno='1')
+		
+	Commit Transaction [Trans_Name]
+	insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name]
+		insert into @tmp(msg)values(error_message())
+	end catch
+
+	select * from @tmp
+;
+----------------------------------------------------------------------------------------------------------------------
+tranvccewj2tranwj:--tranvccewj2tranwj
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(10)=[1]
+declare @key nvarchar(20) =[2]--'BA'
+declare @t_bdate nvarchar(20)=[3]
+declare @t_edate nvarchar(20)=[4]
+declare @t_carno nvarchar(20)=[5]
+declare @curdate nvarchar(max) = replace(substring(convert(nvarchar,getDate(),120),1,10),'-','/')
+declare @curdate2 nvarchar(max) = cast(cast(substring(@curdate,1,4) as int)-1911 as nvarchar)+'/'+substring(@curdate,6,2)+'/'+substring(@curdate,9,2)
+
+if(len(@t_bdate)!=0 and len(@t_edate)!=0 and  len(@t_carno)!=0)
+begin
+	exec("delete trans"+@accy+" where (datea between '"+@t_bdate+"' and '"+@t_edate+"') and (carno='"+@t_carno+"')
+		  delete tran"+@accy+" where (datea between '"+@t_bdate+"' and '"+@t_edate+"') and (carno='"+@t_carno+"')
+	")
+end
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END
+
+create table #tmp(
+	gno nvarchar(1),
+	gno2 nvarchar(1),
+	noa nvarchar(50),
+	noq nvarchar(10),
+	orderno nvarchar(50),
+	so nvarchar(20),
+	carno nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	po nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(100),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	straddrno nvarchar(50),
+	straddr nvarchar(max),
+	saddr nvarchar(max),
+	endaddrno nvarchar(50),
+	endaddr nvarchar(max),
+	aaddr nvarchar(max),
+	addno3 nvarchar(50),
+	add3 nvarchar(max),
+	trandate nvarchar(10),
+	price float,
+	mount float,
+	weight float,
+	weight2 float,
+	cardeal nvarchar(100),
+	price2 float,
+	price3 float,
+	total float,
+	total2 float,
+	datea nvarchar(10),--卸貨日期
+	product2 nvarchar(50),--加項品名
+	plus float,
+	calctype nvarchar(50),
+	calctype2 nvarchar(50),
+	cno nvarchar(50),
+	acomp nvarchar(50),
+	chk1 bit,
+	chk2 bit,
+	chk3 bit,
+	unit nvarchar(5),
+	unit2 nvarchar(5),
+	area nvarchar(20),
+	cargb nvarchar(20),
+	vdate nvarchar(10) --派車日期
+)
+--chk1裝貨 chk2卸貨 chk3完工 chk4拉貨
+insert #tmp 
+select '1','1','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by a.carno,driverno order by a.edate,a.carno,driverno))) + RTRIM(CAST(ROW_NUMBER()over(partition by a.carno,driverno order by edate,a.carno,driverno) AS CHAR))
+,a.noa,a.noq,a.carno,driverno,driver,a.conn,a.custno,a.cust,a.productno,a.product,a.addrno,a.addr,a.address,addrno2,addr2,a.address2,a.addrno3,a.addr3,bdate
+,a.volume,a.mount,round(a.weight/1000,3),round(lengthb/1000,3),lng2,tvolume,0
+,case when a.chk2='0' then 0 else total end,case when len(a.addrno3)=0 then total2 else 0 end
+,case when a.chk1='1' and a.chk2='1' then edate else (case when a.chk4='1' or a.chk2='1' then edate else bdate end) end 
+,a.product2,a.theight,calctype,'',b.cno,b.acomp,a.chk1,a.chk4,a.chk2,a.unit,a.paths,a.lat2,unit2,b.datea
+from view_tranvcces a 
+left join view_tranvcce b on a.noa=b.noa
+where ((b.datea between @t_bdate and @t_edate))
+and (a.carno=@t_carno or len(@t_carno)=0)
+and not exists(select noa,noq from view_trans where ordeno=a.noa and so=a.noq)
+order by b.cno,a.carno,driverno,a.edate,a.bdate
+
+create table #tmpa( 
+	datea nvarchar(10), 
+	maxnoa nvarchar(50) 
+) 
+insert #tmpa 
+select datea,MAX(noa) 
+from view_tran 
+where datea between @t_bdate and @t_edate 
+group by datea 
+
+insert #tmp(gno,noa,noq,carno,driverno,driver,datea,trandate,mount,weight,total,vdate)
+select '0','',ROW_NUMBER()over(partition by vdate order by vdate,datea,carno,driverno),carno,driverno
+,driver,a.datea,datea,SUM(mount),SUM(weight),SUM(total),vdate
+from #tmp a
+group by carno,driverno,driver,datea,vdate
+order by a.datea,carno,driverno
+
+update #tmp
+set noa=case when len(isnull(b.maxnoa,''))!=0 then @key+replace(a.vdate,'/','')+REPLICATE('0',3-LEN(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4))))+ RTRIM(CAST(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4)) AS CHAR)) else @key+replace(a.vdate,'/','')+REPLICATE('0',3-LEN(noq)) + RTRIM(CAST(noq AS CHAR))  end
+from #tmp a left join #tmpa b on a.vdate=b.datea
+where a.gno='0'
+
+update #tmp
+set noa=b.noa
+from #tmp a
+outer apply(select noa from #tmp where gno='0' and a.datea=datea and a.vdate=vdate and a.carno=carno and a.driverno=driverno)b
+where gno='1'
+
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+update a set a.calctype2 =b.siteno
+from #tmp a left join addr2 b on a.straddrno = b.custno
+
+update a set a.weight= case when b.wname='毛重' then a.weight 
+							when b.wname='淨重' then a.weight2 end
+from #tmp a
+outer apply 
+(select * from addr2s where address=a.calctype2)b
+
+Begin Transaction [Trans_Name]
+begin try
+	exec("insert tran"+@accy+"(noa,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp)
+	select noa,carno,driverno,driver,vdate,trandate,mount,weight,total,cno,acomp
+	from #tmp where gno='0'")
+
+	exec("
+	insert trans"+@accy+"(noa,noq,ordeno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,timea,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,status,caseend)
+	select noa,noq,orderno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,vdate,price,mount,weight,cardeal,price2,price3,total,total2,product2,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,area,cargb
+	from #tmp
+	where gno='1' or gno='2'
+	")
+		set @n=(select count(*) from #tmp where gno='0')
+		
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+end try
+begin catch
+	Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+	insert into @tmp(msg)values(error_message())
+end catch
+
+select * from @tmp
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+BEGIN
+	drop table #tmp
+END
+IF OBJECT_ID('tempdb..#tmpa')is not null
+BEGIN
+	drop table #tmpa
+END;
+---------------------------------------------------------------------------------------------------------
+tranpaybnv:--tranpaybnv
+SET QUOTED_IDENTIFIER OFF
+declare @t_key nvarchar(10) = [1]
+declare @t_mon nvarchar(10) = [2]
+
+declare @datea nvarchar(10)=cast(cast(left(@t_mon,3) as int)+1911 as nvarchar(10))+'/'+right(@t_mon,2)+'/15' 
+set @datea= CONVERT(varchar(100),DATEADD(MONTH, DATEDIFF(MONTH, -1, @datea ),-1),111) 
+set @datea=cast(cast(left(@datea,4) as int)-1911 as nvarchar(10))+'/'+RIGHT(@datea,5) 
+
+declare @noa nvarchar(50)=(select MAX(noa) from payb where datea='107/01/31')
+
+declare @tmpa table(
+	gno nvarchar(1),
+	recno int,
+	noa nvarchar(50),
+	rc2no nvarchar(50),
+	tggno nvarchar(50),
+	tgg nvarchar(50),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	price float,
+	mount float,
+	total float
+)
+insert @tmpa
+select '1',ROW_NUMBER()over(partition by a.tggno order by a.noa,uccno),'',a.noa,a.tggno,tgg,uccno,product,price2,sum(weight),sum(cast(round(price2*weight,0) as float)) 
+from view_trans a
+where left(datea,6)=@t_mon
+and not exists(select sa.noa,tggno from paybs sa left join payb sb on sa.noa=sb.noa where a.noa=sa.rc2no and a.tggno=sb.tggno)
+group by a.noa,a.tggno,tgg,uccno,product,price2
+
+insert @tmpa(gno,tggno,tgg,total)
+select '0',tggno,tgg,sum(total)
+from @tmpa
+group by tggno,tgg
+
+update a
+set recno=rx
+from (select ROW_NUMBER()over(partition by gno order by tggno)rx,recno,noa from @tmpa where gno='0') a
+
+update @tmpa
+set noa=case when isnull(@noa,'')='' then REPLACE(@datea,'/','')+REPLICATE('0',3-LEN(recno)) + RTRIM(CAST(recno AS CHAR)) else left(@noa,9)+REPLICATE('0',3-LEN(right(@noa,3)+recno)) + RTRIM(CAST(right(@noa,3)+recno AS CHAR)) end
+where gno='0'
+
+update @tmpa
+set noa=b.noa
+from @tmpa a
+outer apply (select noa from @tmpa where gno='0' and tggno=a.tggno)b
+
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+
+Begin Transaction [Trans_Name]
+begin try	
+
+		insert payb(noa,tggno,comp,datea,mon,bdate,edate,vccno) 
+		select noa,tggno,tgg,@datea,LEFT(@datea,6),LEFT(@datea,6)+'/01',@datea,'tran' 
+		from @tmpa a 
+		where gno='0'
+		
+		insert paybs(noa,noq,rc2no,kind,mount,price,[money],total,tablea) 
+		select noa,REPLICATE('0',3-LEN(recno)) + RTRIM(CAST(recno AS CHAR)) 
+		,rc2no,'費用',mount,price,total,total,'tran' 
+		from @tmpa a
+		where gno='1'
+
+	set @n=(select count(*) from @tmpa where gno='0')
+	
+Commit Transaction [Trans_Name]
+insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+end try
+begin catch
+	Rollback Transaction [Trans_Name]
+	insert into @tmp(msg)values(error_message())
+end catch
+
+select * from @tmp
+;
+---------------------------------------------------------------------------------------------------------
