@@ -386,9 +386,12 @@ declare @t_carno nvarchar(20)=[5]
 declare @curdate nvarchar(max) = replace(substring(convert(nvarchar,getDate(),120),1,10),'-','/')
 declare @curdate2 nvarchar(max) = cast(cast(substring(@curdate,1,4) as int)-1911 as nvarchar)+'/'+substring(@curdate,6,2)+'/'+substring(@curdate,9,2)
 
-exec("delete trans"+@accy+" where (datea between '"+@t_bdate+"' and '"+@t_edate+"') and carno='"+@t_carno+"'
-	  delete tran"+@accy+" where (datea between '"+@t_bdate+"' and '"+@t_edate+"') and carno='"+@t_carno+"'
-")
+if(len(@t_bdate)!=0 and len(@t_edate)!=0 and  len(@t_carno)!=0)
+begin
+	exec("delete trans"+@accy+" where (datea between '"+@t_bdate+"' and '"+@t_edate+"') and (carno='"+@t_carno+"')
+		  delete tran"+@accy+" where (datea between '"+@t_bdate+"' and '"+@t_edate+"') and (carno='"+@t_carno+"')
+	")
+end
 
 IF OBJECT_ID('tempdb..#tmp')is not null
 BEGIN
@@ -445,7 +448,8 @@ create table #tmp(
 	unit nvarchar(5),
 	unit2 nvarchar(5),
 	area nvarchar(20),
-	cargb nvarchar(20)
+	cargb nvarchar(20),
+	vdate nvarchar(10) --派車日期
 )
 --chk1裝貨 chk2卸貨 chk3完工 chk4拉貨
 insert #tmp 
@@ -454,17 +458,17 @@ select '1','1','',REPLICATE('0',3-LEN(ROW_NUMBER()over(partition by a.carno,driv
 ,a.volume,a.mount,round(a.weight/1000,3),round(lengthb/1000,3),lng2,tvolume,0
 ,case when a.chk2='0' then 0 else total end,case when len(a.addrno3)=0 then total2 else 0 end
 ,case when a.chk1='1' and a.chk2='1' then edate else (case when a.chk4='1' or a.chk2='1' then edate else bdate end) end 
-,a.product2,a.theight,calctype,'',b.cno,b.acomp,a.chk1,a.chk4,a.chk2,a.unit,a.paths,a.lat2,unit2
+,a.product2,a.theight,calctype,'',b.cno,b.acomp,a.chk1,a.chk4,a.chk2,a.unit,a.paths,a.lat2,unit2,b.datea
 from view_tranvcces a 
 left join view_tranvcce b on a.noa=b.noa
-where ((edate between @t_bdate and @t_edate))
+where ((b.datea between @t_bdate and @t_edate))
 and (a.carno=@t_carno or len(@t_carno)=0)
 and not exists(select noa,noq from view_trans where ordeno=a.noa and so=a.noq)
 order by b.cno,a.carno,driverno,a.edate,a.bdate
 
 create table #tmpa( 
-datea nvarchar(10), 
-maxnoa nvarchar(50) 
+	datea nvarchar(10), 
+	maxnoa nvarchar(50) 
 ) 
 insert #tmpa 
 select datea,MAX(noa) 
@@ -472,22 +476,22 @@ from view_tran
 where datea between @t_bdate and @t_edate 
 group by datea 
 
-insert #tmp(gno,noa,noq,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp)
-select '0','',ROW_NUMBER()over(partition by datea order by datea,carno,driverno),carno,driverno
-,driver,a.datea,datea,SUM(mount),SUM(weight),SUM(total),cno,acomp
+insert #tmp(gno,noa,noq,carno,driverno,driver,datea,trandate,mount,weight,total,vdate)
+select '0','',ROW_NUMBER()over(partition by vdate order by vdate,datea,carno,driverno),carno,driverno
+,driver,a.datea,datea,SUM(mount),SUM(weight),SUM(total),vdate
 from #tmp a
-group by carno,driverno,driver,datea,cno,acomp
-order by cno,a.datea,carno,driverno
+group by carno,driverno,driver,datea,vdate
+order by a.datea,carno,driverno
 
 update #tmp
-set noa=case when len(isnull(b.maxnoa,''))!=0 then @key+replace(a.datea,'/','')+REPLICATE('0',3-LEN(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4))))+ RTRIM(CAST(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4)) AS CHAR)) else @key+replace(a.datea,'/','')+REPLICATE('0',3-LEN(noq)) + RTRIM(CAST(noq AS CHAR))  end
-from #tmp a left join #tmpa b on a.datea=b.datea
+set noa=case when len(isnull(b.maxnoa,''))!=0 then @key+replace(a.vdate,'/','')+REPLICATE('0',3-LEN(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4))))+ RTRIM(CAST(cast((cast(RIGHT(maxnoa,3)as int)+noq) as nvarchar(4)) AS CHAR)) else @key+replace(a.vdate,'/','')+REPLICATE('0',3-LEN(noq)) + RTRIM(CAST(noq AS CHAR))  end
+from #tmp a left join #tmpa b on a.vdate=b.datea
 where a.gno='0'
 
 update #tmp
 set noa=b.noa
 from #tmp a
-outer apply(select noa from #tmp where gno='0' and a.datea=datea and a.cno=cno and a.carno=carno and a.driverno=driverno)b
+outer apply(select noa from #tmp where gno='0' and a.datea=datea and a.vdate=vdate and a.carno=carno and a.driverno=driverno)b
 where gno='1'
 
 declare @n int
@@ -506,12 +510,12 @@ outer apply
 Begin Transaction [Trans_Name]
 begin try
 	exec("insert tran"+@accy+"(noa,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp)
-	select noa,carno,driverno,driver,datea,trandate,mount,weight,total,cno,acomp
+	select noa,carno,driverno,driver,vdate,trandate,mount,weight,total,cno,acomp
 	from #tmp where gno='0'")
 
 	exec("
 	insert trans"+@accy+"(noa,noq,ordeno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,timea,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,status,caseend)
-	select noa,noq,orderno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,datea,price,mount,weight,cardeal,price2,price3,total,total2,product2,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,area,cargb
+	select noa,noq,orderno,so,carno,driverno,driver,po,custno,comp,uccno,product,straddrno,straddr,saddr,endaddrno,endaddr,aaddr,addno3,add3,trandate,vdate,price,mount,weight,cardeal,price2,price3,total,total2,product2,plus,calctype,cno,acomp,chk1,chk2,chk3,unit,unit2,area,cargb
 	from #tmp
 	where gno='1' or gno='2'
 	")
