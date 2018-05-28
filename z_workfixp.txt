@@ -1,0 +1,199 @@
+z_workfixp01:--z_workfixp01
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bnoa nvarchar(50)
+declare @t_enoa nvarchar(50)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bnoa = case when '#non' = [4] then '' else [4] end
+set @t_enoa = case when '#non' = [5] then CHAR(255) else [5] end
+----------------------------------------------------------------
+declare @t_pageline int = 10   --------一頁幾行
+declare @tmp table(
+	gno nvarchar(10),
+	recno int,
+	pageno int,
+	topage int,
+	noa nvarchar(50),
+	noq nvarchar(50),
+	datea nvarchar(50),
+	stationno nvarchar(50),
+	stations nvarchar(90),
+	tggno nvarchar(50),
+	tcomp nvarchar(90),
+	productno nvarchar(90),
+	products nvarchar(255),
+	mount float,
+	workno nvarchar(50),
+	workgno nvarchar(50),
+	amemo nvarchar(max),
+	
+	bproductno nvarchar(90),
+	bproducts nvarchar(max),
+	bunit nvarchar(20),
+	bmount float,
+	bmemo nvarchar(max)
+)
+
+insert into @tmp(gno,recno,noa,noq,datea,stationno,stations,tggno,tcomp,productno,products,mount,workno,workgno,amemo
+,bproductno,bproducts,bunit,bmount,bmemo)
+select '0',ROW_NUMBER()over(partition by a.noa order by a.noa,b.noq)
+,a.noa,b.noq,a.datea,a.stationno,a.station,a.tggno,a.tgg,a.productno,a.product,a.mount,a.workno,a.workgno,a.memo
+,b.productno,b.product,b.unit,b.mount,b.memo
+from workfix a left join workfixs b on a.noa=b.noa
+where (a.noa between @t_bnoa and @t_enoa) and (a.datea between @t_bdate and @t_edate)
+
+declare @t_noa nvarchar(50)
+declare @count int
+declare @t_count int
+
+declare cursor_table cursor for
+select noa,count(*) from @tmp group by noa
+open cursor_table
+fetch next from cursor_table
+into @t_noa,@count
+while(@@FETCH_STATUS <> -1)
+begin
+	--新增空白欄
+	select @t_count=@t_pageline-(@count % @t_pageline)
+	while(@t_count>0)
+	begin
+		insert @tmp(gno,recno,noa)
+		select '0',@t_count+(@count % @t_pageline)+(FLOOR(cast(@count as float)/cast(@t_pageline as float))*@t_pageline),@t_noa
+		set @t_count=@t_count-1
+	end
+	
+	fetch next from cursor_table
+	into @t_noa,@count
+end
+close cursor_table
+deallocate cursor_table
+
+update @tmp 
+set pageno=ceiling(cast(recno as float)/cast(@t_pageline as float))
+where gno='0'
+
+insert @tmp(gno,pageno,noa,recno)
+
+select '1',pageno,noa,MAX(recno) from @tmp
+where gno='0' group by noa,pageno
+
+update a 
+set topage=(select MAX(pageno) from @tmp where noa=a.noa)
+from @tmp a
+
+select * from @tmp
+order by noa,pageno,recno,gno;
+---------------------------------------------------------------------------------------------------------------------------------
+z_workfixp_jo01:--z_workfixp_jo01
+declare @t_bdate nvarchar(20)
+declare @t_edate nvarchar(20)
+declare @t_bnoa nvarchar(50)
+declare @t_enoa nvarchar(50)
+
+set @t_bdate = case when '#non' = [2] then '' else [2] end
+set @t_edate = case when '#non' = [3] then CHAR(255) else [3] end
+set @t_bnoa = case when '#non' = [4] then '' else [4] end
+set @t_enoa = case when '#non' = [5] then CHAR(255) else [5] end
+
+declare @tmp table(
+	pageno int,
+	rr int,
+	gno nvarchar(10),
+	stationno nvarchar(50),station nvarchar(MAX),
+	datea nvarchar(50),days nvarchar(10),mons nvarchar(10),years nvarchar(10),
+	noa nvarchar(50),
+	noq nvarchar(50),
+	typea nvarchar(50), t1 nvarchar(50),t2 nvarchar(50),
+	kind nvarchar(50), v1 nvarchar(50),v2 nvarchar(50),v3 nvarchar(50),v4 nvarchar(50),
+	amemo nvarchar(MAX),
+	vdate nvarchar(50),
+	custno nvarchar(50),
+	comp nvarchar(MAX),
+	workno nvarchar(50),
+	productno nvarchar(100),
+	product nvarchar(MAX),
+	spec nvarchar(MAX),
+	size nvarchar(MAX),
+	mount float,
+	bmemo nvarchar(MAX)
+)
+
+insert @tmp (gno,stationno,station,datea,noa,noq,typea,kind,amemo
+,vdate,custno,comp,workno,productno,product,spec,size,mount,bmemo)
+select '0',a.stationno,a.station,a.datea,a.noa,b.noq,a.typea,a.kind,a.memo
+,d.uindate,e.custno,e.comp,a.workno,b.productno,b.product,c.spec,c.size,b.mount,b.memo
+from workfix a left join workfixs b on a.noa=b.noa
+left join view_ucaucc c on b.productno=c.noa
+left join view_work d on a.workno=d.noa
+outer apply (select top 1 * from view_orde where noa=d.ordeno)e
+where a.noa between @t_bnoa and @t_enoa and a.datea between @t_bdate and @t_edate
+
+update a
+set rr=idno,pageno=CEILING(cast(idno as float)/3)
+from (select rr,pageno,ROW_NUMBER()over(partition by noa order by noq)idno from @tmp)a
+
+--補空白行
+declare @pageno int
+declare @rr int
+declare @spaceline int
+declare @datea nvarchar(50)
+declare @noa nvarchar(50)
+
+declare cursor_table cursor for
+select noa,datea,MAX(pageno),MAX(rr) from @tmp group by noa,typea,datea having MAX(rr) %3!=0
+open cursor_table
+fetch next from cursor_table
+into @noa,@datea,@pageno,@rr
+while(@@FETCH_STATUS <> -1)
+begin
+	set @spaceline=(@pageno*3)-@rr
+	while(@spaceline>0)
+	begin
+		insert @tmp(gno,pageno,rr,noa,datea)
+		select '0',@pageno,@rr+@spaceline,@noa,@datea
+		set @spaceline=@spaceline-1
+	end
+	fetch next from cursor_table
+	into @noa,@datea,@pageno,@rr
+end
+close cursor_table
+deallocate cursor_table
+
+insert @tmp(gno,noa,datea,pageno,rr,typea,kind,amemo)
+select '1',noa,datea,pageno,MAX(rr),MAX(typea),MAX(kind),MAX(amemo)
+from @tmp where gno='0'
+group by noa,datea,pageno
+
+insert @tmp(pageno,rr,gno,datea,stationno,station,noa,noq,typea,kind,amemo,vdate,custno,comp,workno,productno,product,spec,size,mount,bmemo)
+select pageno,rr,'2',datea,stationno,station,noa,noq,typea,kind,amemo,vdate,custno,comp,workno,productno,product,spec,size,mount,bmemo
+from @tmp where gno='0'
+
+insert @tmp(gno,noa,datea,pageno,rr,typea,kind,amemo)
+select '3',noa,datea,pageno,MAX(rr),MAX(typea),MAX(kind),MAX(amemo)
+from @tmp where gno='0'
+group by noa,datea,pageno
+
+insert @tmp(gno,noa,datea,pageno,rr)
+select '4',noa,datea,pageno,MAX(rr)
+from @tmp where gno='0'
+group by noa,datea,pageno
+
+update @tmp
+set days=RIGHT(datea,2)
+,mons=left(RIGHT(datea,5),2)
+,years=case when len(datea)=10 then left(datea,4) else left(datea,3) end
+
+update @tmp
+set t1=case when typea='1' then '&#9744' else '&#9745' end
+,t2=case when typea='1' then '&#9745' else '&#9744' end
+
+update @tmp
+set v1=case when kind='1' then '&#9745' else '&#9744' end
+,v2=case when kind='2' then '&#9745' else '&#9744' end
+,v3=case when kind='3' then '&#9745' else '&#9744' end
+,v4=case when kind='4' then '&#9745' else '&#9744' end
+
+select * from @tmp order by datea,noa,pageno,gno,rr
+;
