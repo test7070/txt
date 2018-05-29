@@ -192,3 +192,79 @@ begin
 	select @workno workno,@workgno workgno
 end
 ;
+-------------------------------------------------------------------------------------------------
+toworka:--toworka--107/05/25轉worka
+SET QUOTED_IDENTIFIER OFF
+declare @accy nvarchar(50)=[1]--年度
+declare @noa nvarchar(50)=[2]--補料單號
+declare @datea nvarchar(50)=[3]--轉單日
+declare @userno nvarchar(50)=[4]--製單人
+
+--取workano
+declare @workano nvarchar(50)=isnull((select top 1 workano from workfix where noa=@noa),'')
+
+if(len(@workano)=0)
+begin
+	--不存在單號
+	set @workano=isnull((select MAX(noa) from view_worka where noa like 'WA'+replace(@datea,'/','')+'%'),'000')
+	set @workano= 'WA'+replace(@datea,'/','')+right('000'+cast(cast(right(@workano,3) as float)+1 as nvarchar(10)),3)
+	
+	EXEC("insert worka"+@accy+"(noa,typea,datea,storeno,store,stationno,station,workno,memo,worker,worker2)
+	select '"+@workano+"',a.typea,'"+@datea+"',b.storeno,b.store,a.stationno,a.station,a.workno,'由補/發料作業【"+@noa+"】轉來'
+	,(select namea from nhpe where noa='"+@userno+"'),''
+	from workfix a left join station b on a.stationno=b.noa 
+	where a.noa='"+@noa+"'")
+	
+	EXEC("insert workas"+@accy+"(noa,noq,datea,productno,product,spec,unit,mount,storeno,store,memo,workno)
+	select '"+@workano+"',b.noq,'"+@datea+"',b.productno,b.product,d.spec,b.unit,b.mount,c.storeno,c.store,b.memo,b.noa
+	from workfix a left join workfixs b on a.noa=b.noa 
+	left join station c on a.stationno=c.noa 
+	left join view_ucaucc d on b.productno=d.noa
+	where a.noa='"+@noa+"'")
+	
+end
+else
+begin
+	--bbm
+	if((select count(*) from view_worka where noa=@workano)=0)
+	begin
+		EXEC("insert worka"+@accy+"(noa,typea,datea,storeno,store,stationno,station,workno,memo,worker,worker2)
+		select '"+@workano+"',a.typea,'"+@datea+"',b.storeno,b.store,a.stationno,a.station,a.workno,'由補/發料作業【"+@noa+"】轉來'
+		,(select namea from nhpe where noa='"+@userno+"'),''
+		from workfix a left join station b on a.stationno=b.noa 
+		where a.noa='"+@noa+"'")
+	end
+	else
+	begin
+		set @accy=isnull((select top 1 accy from view_worka where noa=@workano),@accy)
+				
+		EXEC("
+			update a
+			set typea=b.typea,stationno=b.stationno,station=b.station,storeno=c.storeno,store=c.store,workno=b.workno
+			,worker2=(select namea from nhpe where noa='"+@userno+"')
+			from worka"+@accy+" a outer apply (select top 1 * from workfix where noa='"+@noa+"')b
+			left join station c on b.stationno=c.noa
+			where a.noa='"+@workano+"'
+		")
+	end
+	
+	--bbs
+	EXEC("delete workas"+@accy+" where noa='"+@workano+"'")
+	
+	EXEC("insert workas"+@accy+"(noa,noq,datea,productno,product,spec,unit,mount,storeno,store,memo,workno)
+	select '"+@workano+"',b.noq,a.datea,b.productno,b.product,d.spec,b.unit,b.mount,c.storeno,c.store,b.memo,b.noa
+	from workfix a left join workfixs b on a.noa=b.noa 
+	left join station c on a.stationno=c.noa 
+	left join view_ucaucc d on b.productno=d.noa
+	where a.noa='"+@noa+"'")
+end
+
+--更新workfix.workano
+
+update workfix
+set workano=@workano
+where noa=@noa
+
+select @noa noa,@workano workano
+
+;
