@@ -5947,3 +5947,64 @@ select @t_bdate bdatea,@t_edate edatea
 ,* from @tmp
 order by custno,vccno,idno
 ;
+-----------------------------------------------------------------------------------------------------------
+z_vcc5_kdc:--z_vcc5_kdc
+declare @t_bdate nvarchar(10)
+declare @t_edate nvarchar(10)
+declare @t_bcustno nvarchar(20)
+declare @t_ecustno nvarchar(20)
+set @t_bdate = case when '#non'=[4] then '' else [4] end
+set @t_edate = case when '#non'=[5] then char(255) else [5] end
+set @t_bcustno = case when '#non'=[8] then '' else [8] end
+set @t_ecustno = case when '#non'=[9] then char(255) else [9] end
+
+declare @tmp table(
+	gno nvarchar(1),
+	noa nvarchar(20),
+	custno nvarchar(10),
+	cust nvarchar(50),
+	datea nvarchar(10),
+	product nvarchar(100),
+	volume float,
+	mount float,
+	unit nvarchar(10),
+	price float,
+	total float,
+	ordeno nvarchar(20),
+	memo nvarchar(max),
+	invono nvarchar(20),
+	tax float
+)
+insert into @tmp(gno,noa,custno,cust,datea,product,volume,mount,unit,price,total,ordeno,memo,invono)
+select '0',a.noa,a.custno,a.comp,a.datea,b.product,a.benifit,b.mount,b.unit,b.price,b.total,a.ordeno,b.memo,a.invono
+from view_vcc a
+left join view_vccs b on a.noa=b.noa
+where a.datea between @t_bdate and @t_edate and a.custno between @t_bcustno and @t_ecustno
+
+insert into @tmp (gno,cust,total)
+select '1',cust,sum(total)
+from @tmp group by cust
+
+insert into @tmp(gno,datea,cust,invono)
+select '2',datea,cust,invono
+from @tmp where datea is not null group by datea,cust,invono
+
+--抓發票資料
+update a set a.datea=b.datea, a.total=b.money,tax=b.tax
+from @tmp a outer apply(select * from vcca where a.invono=noa)b
+where gno='2'
+--在抓一次合計
+insert into @tmp (gno,cust,total)
+select '3',cust,total
+from @tmp where gno='1'
+--最後的合計,totla+tax
+update a set a.total = a.total + isnull(b.tax,0)
+from @tmp a outer apply(select SUM(tax) tax,cust from @tmp where gno='2' group by cust)b
+where a.gno='3' and a.cust=b.cust
+
+delete from @tmp where (len(invono)=0 and gno='2') or (invono is null and gno='2')
+
+update @tmp set datea = right(datea,5) where gno='2'
+
+select a.*,substring(datea,1,3) as yy,substring(datea,5,2) as mm
+from @tmp a order by cust,gno;
