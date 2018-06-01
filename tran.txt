@@ -621,3 +621,238 @@ end catch
 select * from @tmp
 ;
 ---------------------------------------------------------------------------------------------------------
+tranvcce2transh:--tranvcce2transh
+SET QUOTED_IDENTIFIER OFF
+declare @t_accy nvarchar(10) = [1]
+declare @t_key nvarchar(10) = [2]
+declare @t_bdate nvarchar(10) = [3]
+declare @t_edate nvarchar(10) =[4]
+declare @t_custno nvarchar(10) = [5]
+declare @t_tdate nvarchar(10) = [6]
+declare @maxnoa nvarchar(50) = (select max(noa) from view_tran where datea=@t_tdate)
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+
+create table #tmp(
+	gno nvarchar(1),
+	noa nvarchar(20),
+	noq nvarchar(3),
+	rr int,
+	ctype nvarchar(20),
+	ttype nvarchar(20),
+	trandate nvarchar(10),
+	custno nvarchar(50),
+	nick nvarchar(50),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	mount float,
+	unit nvarchar(50),
+	volume float,
+	unit2 nvarchar(50),
+	weight float,
+	straddrno nvarchar(50),
+	straddr nvarchar(50),
+	endaddrno nvarchar(50),
+	endaddr nvarchar(50),
+	caseno nvarchar(50),
+	total float,
+	total2 float,
+	carno nvarchar(50),
+	driverno nvarchar(50),
+	driver nvarchar(50),
+	ordeno nvarchar(50),
+	caseno2 nvarchar(50),
+	no2 nvarchar(50),
+	memo nvarchar(max)
+)
+insert #tmp
+select '1','','','',case when isnull(tranno,'')!='' then 'B' else 'A' end,typea,time1,custno,cust,productno,product,mount,unit,volume,unit2,weight,addrno,addr,addrno2,addr2,tranno,total,total2,carno,driverno,driver,noa,noq,no2,memo
+from view_tranvcces a
+where (a.time1 between @t_bdate and @t_edate)
+and (a.custno=@t_custno or len(@t_custno)='')
+and not exists(select noa from view_trans where ordeno=a.noa and caseno2=a.noq)
+and isnull(custno,'')!=''
+
+update a
+set rr=rx
+from (select ROW_NUMBER()over(partition by custno,ctype,ttype order by custno,trandate,noa,no2)rx,rr from #tmp)a
+
+
+update a
+set noa=case when len(@maxnoa)!='0' then left(@maxnoa,9)+REPLICATE('0',3-LEN(right(@maxnoa,3)+rx)) + RTRIM(CAST(right(@maxnoa,3)+rx AS CHAR)) else @t_key+REPLACE(@t_tdate,'/','')+REPLICATE('0',3-LEN(rx)) + RTRIM(CAST(rx AS CHAR)) end,noq='001'
+from (select ROW_NUMBER()over(partition by rr order by custno,rr)rx,rr,noa,noq from #tmp where rr='1')a
+where rr='1'
+
+update #tmp
+set noa=b.noa,noq=REPLICATE('0',3-LEN(a.rr)) + RTRIM(CAST(a.rr AS CHAR))
+from #tmp a
+outer apply(select noa from #tmp where rr='1' and a.custno=custno and a.ttype=ttype and a.ctype=ctype)b
+where rr!='1'
+
+insert #tmp(gno,noa,ctype,custno,nick)
+select '0',noa,ctype,custno,nick
+from #tmp
+group by noa,ctype,custno,nick
+
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+
+Begin Transaction [Trans_Name]
+begin try
+		exec("
+			insert tran"+@t_accy+"(noa,datea,btime,etime,port,addrno,addr)
+			select noa,'"+@t_tdate+"','"+@t_bdate+"','"+@t_edate+"',ctype,custno,nick
+			from #tmp
+			where gno='0'
+
+			insert trans"+@t_accy+"(noa,noq,carteamno,caseuse,trandate,custno,nick,uccno,product,mount,unit,volume,unit2,weight,straddrno,straddr,endaddrno,endaddr,caseno,total,total2,carno,driverno,driver,ordeno,caseno2,memo)
+			select noa,noq,ctype,ttype,trandate,custno,nick,uccno,product,mount,unit,volume,unit2,weight,straddrno,straddr,endaddrno,endaddr,caseno,total,total2,carno,driverno,driver,ordeno,caseno2,memo
+			from #tmp
+			where gno='1'
+		
+		")
+		
+		set @n=(select count(*) from #tmp where gno='0')
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		insert into @tmp(msg)values(error_message()) 
+	end catch
+
+
+select * from @tmp
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+;
+-----------------------------------------------------------------------------
+tran2trdsh:--tran2trdsh
+SET QUOTED_IDENTIFIER OFF
+declare @t_accy nvarchar(10) =[1]
+declare @t_key nvarchar(10) = [2]
+declare @t_ttype nvarchar(10) = [3]
+declare @t_day nvarchar(10) = [4]
+declare @t_bdate nvarchar(10) = [5]
+declare @t_edate nvarchar(10) =[6]
+declare @maxnoa nvarchar(50) = (select max(noa) from view_tran where datea=@t_edate)
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+
+create table #tmp(
+	gno nvarchar(1),
+	noa nvarchar(20),
+	noq nvarchar(3),
+	rr int,
+	ctype nvarchar(20),
+	ttype nvarchar(20),
+	trandate nvarchar(10),
+	custno nvarchar(50),
+	nick nvarchar(50),
+	uccno nvarchar(50),
+	product nvarchar(100),
+	mount float,
+	unit nvarchar(50),
+	straddr nvarchar(50),
+	caseno nvarchar(50),
+	total float,
+	carno nvarchar(50),
+	ordeno nvarchar(50),
+	no2 nvarchar(50),
+	memo nvarchar(max),
+	tday nvarchar(50) 
+)
+if(@t_ttype='付清')
+begin
+	insert #tmp
+	select '1','','','',case when isnull(caseno,'')!='' then 'B' else 'A' end,caseuse,trandate,custno,nick,uccno,product,mount,unit,straddr+'-'+endaddr,caseno,total,carno,noa,noq,memo,''
+	from view_trans a
+	where (a.trandate between @t_bdate and @t_edate)
+	and caseuse=@t_ttype
+	and not exists(select * from view_trds where tranno=a.noa and trannoq=a.noq)
+end
+else
+begin
+	insert #tmp
+	select '1','','','',case when isnull(caseno,'')!='' then 'B' else 'A' end,caseuse,trandate,custno,a.nick,uccno,product,mount,a.unit,straddr+'-'+endaddr,caseno,total,carno,a.noa,noq,a.memo,b.getdate
+	from view_trans a 
+	left join cust b on a.custno=b.noa
+	where (a.trandate between @t_bdate and @t_edate)
+	and caseuse=@t_ttype
+	and not exists(select * from view_trds where tranno=a.noa and trannoq=a.noq)
+
+	if(len(@t_day)!=0)
+	begin
+		delete #tmp where tday!=@t_day
+	end
+end
+
+update a
+set rr=rx
+from (select ROW_NUMBER()over(partition by custno,ctype,ttype order by custno,trandate,noa,no2)rx,rr from #tmp)a
+
+
+update a
+set noa=case when len(@maxnoa)!='0' then left(@maxnoa,9)+REPLICATE('0',3-LEN(right(@maxnoa,3)+rx)) + RTRIM(CAST(right(@maxnoa,3)+rx AS CHAR)) else @t_key+REPLACE(@t_edate,'/','')+REPLICATE('0',3-LEN(rx)) + RTRIM(CAST(rx AS CHAR)) end,noq='001'
+from (select ROW_NUMBER()over(partition by rr order by custno,rr)rx,rr,noa,noq from #tmp where rr='1')a
+where rr='1'
+
+update #tmp
+set noa=b.noa,noq=REPLICATE('0',3-LEN(a.rr)) + RTRIM(CAST(a.rr AS CHAR))
+from #tmp a
+outer apply(select noa from #tmp where rr='1' and a.custno=custno and a.ttype=ttype and a.ctype=ctype)b
+where rr!='1'
+
+insert #tmp(gno,noa,ctype,custno,nick,total,mount)
+select '0',noa,ctype,custno,nick,sum(total),sum(mount)
+from #tmp
+group by noa,ctype,custno,nick
+
+declare @n int
+declare @tmp table(
+	msg nvarchar(max)
+)
+
+Begin Transaction [Trans_Name]
+begin try
+		
+		exec("
+		insert trd"+@t_accy+"(noa,datea,custno,comp,btrandate,etrandate,carteamno,mon,money,mount,total)
+		select noa,'"+@t_edate+"',custno,nick,'"+@t_bdate+"','"+@t_edate+"',ctype,left('"+@t_edate+"',6),total,mount,total
+		from #tmp
+		where gno='0'
+
+		insert trds"+@t_accy+"(noa,noq,tranno,trannoq,trandate,carno,straddr,tranmoney,caseno,product,mount,unit,total)
+		select noa,noq,ordeno,no2,trandate,carno,straddr,total,caseno,product,mount,unit,total
+		from #tmp
+		where gno='1'
+		")
+
+		set @n=(select count(*) from #tmp where gno='0')
+		Commit Transaction [Trans_Name] -- 提交所有操作所造成的變更
+		insert into @tmp(msg)values('匯出'+CAST(@n as nvarchar)+'筆資料')
+	end try
+	begin catch
+		Rollback Transaction [Trans_Name] -- 復原所有操作所造成的變更
+		insert into @tmp(msg)values(error_message()) 
+	end catch
+
+
+select * from @tmp
+
+IF OBJECT_ID('tempdb..#tmp')is not null
+	BEGIN
+		drop table #tmp
+	END
+;
